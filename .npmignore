@@ -1,0 +1,9 @@
+.gitignore
+.npmignore
+node_modules/
+dist/
+*.tsbuildinfo
+.DS_Store
+*.log
+.git/
+.github/

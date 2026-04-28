@@ -1,0 +1,63 @@
+{
+  "name": "pi-browser-harness",
+  "version": "0.1.0",
+  "description": "Browser control extension for pi — navigate, click, type, screenshot, and extract data from real Chrome via CDP",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "browser",
+    "cdp",
+    "chrome",
+    "web-automation",
+    "screenshot",
+    "scraping"
+  ],
+  "author": "Pi Browser Harness Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/browser-use/browser-harness"
+  },
+  "bugs": {
+    "url": "https://github.com/browser-use/browser-harness/issues"
+  },
+  "homepage": "https://github.com/browser-use/browser-harness#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "src/",
+    "skills/",
+    "tsconfig.json",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "image": "https://raw.githubusercontent.com/browser-use/browser-harness/main/assets/pi-browser-harness-hero.png"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*",
+    "typescript": "^5.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "tsc --noEmit"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
