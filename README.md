@@ -118,7 +118,7 @@ google-chrome --remote-debugging-port=9222 &
 pi install npm:pi-browser-harness
 
 # From git
-pi install git:github.com/browser-use/browser-harness
+pi install git:github.com/amankumarsingh77/pi-browser-harness
 
 # Locally (for development)
 pi install ./pi-browser-harness
@@ -442,8 +442,8 @@ We welcome contributions! Here's how to get started:
 
 ```bash
 # Clone the repository
-git clone https://github.com/browser-use/browser-harness
-cd browser-harness/pi-browser-harness
+git clone https://github.com/amankumarsingh77/pi-browser-harness
+cd pi-browser-harness
 
 # Install dependencies
 npm install

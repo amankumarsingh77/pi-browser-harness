@@ -16,12 +16,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/browser-use/browser-harness"
+    "url": "https://github.com/amankumarsingh77/pi-browser-harness"
   },
   "bugs": {
-    "url": "https://github.com/browser-use/browser-harness/issues"
+    "url": "https://github.com/amankumarsingh77/pi-browser-harness/issues"
   },
-  "homepage": "https://github.com/browser-use/browser-harness#readme",
+  "homepage": "https://github.com/amankumarsingh77/pi-browser-harness#readme",
   "engines": {
     "node": ">=18.0.0"
   },
@@ -40,7 +40,7 @@
     "skills": [
       "./skills"
     ],
-    "image": "https://raw.githubusercontent.com/browser-use/browser-harness/main/assets/pi-browser-harness-hero.png"
+    "image": "https://raw.githubusercontent.com/amankumarsingh77/pi-browser-harness/main/assets/hero.png"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
