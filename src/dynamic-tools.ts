@@ -26,7 +26,7 @@ interface DynamicToolDef {
   name: string;
   label: string;
   description: string;
-  execute: (params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: ((update: unknown) => void) | undefined, ctx: unknown) => Promise<{ content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> }>;
+  execute: (params: Record<string, unknown>, signal: AbortSignal | undefined, onUpdate: ((update: unknown) => void) | undefined, ctx: unknown) => Promise<{ content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined }>;
 }
 
 // ── AsyncFunction constructor ────────────────────────────────────────────────
@@ -247,7 +247,7 @@ export function registerDynamicTools(pi: ExtensionAPI, daemon: BrowserDaemon): v
             setTimeout,
             clearTimeout,
           );
-          return result as { content: Array<{ type: "text"; text: string }>; details?: Record<string, unknown> };
+          return result as { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
         },
       };
 
@@ -267,7 +267,7 @@ export function registerDynamicTools(pi: ExtensionAPI, daemon: BrowserDaemon): v
           return tool.execute(
             (execParams ?? {}) as Record<string, unknown>,
             execSignal,
-            execOnUpdate,
+            execOnUpdate as ((update: unknown) => void) | undefined,
             execCtx,
           );
         },

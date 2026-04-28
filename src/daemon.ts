@@ -1,49 +1,127 @@
 /**
- * BrowserDaemon — manages the browser-harness daemon process lifecycle.
+ * BrowserDaemon — manages a direct CDP WebSocket connection to Chrome.
  *
  * Architecture:
- *   Node.js → Unix socket (/tmp/bu-<namespace>.sock) → daemon.py → CDP WS → Chrome
+ *   Node.js → CDP WebSocket (ws://localhost:9222/...) → Chrome
  *
- * The daemon is spawned as a child process on start() and communicates via
- * the protocol defined in protocol.ts. All CDP calls go through this class.
+ * No Python proxy, no Unix socket. Direct CDP over a single persistent
+ * WebSocket with message-ID multiplexing, auto-reconnect, and event buffering.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import { access, readFile, unlink, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { connect as netConnect } from "node:net";
+import WebSocket from "ws";
 import {
-  sendRequest,
-  daemonAlive,
-  healthProbe,
-  isInternalUrl,
   type CDPEvent,
-  type DaemonRequest,
-  type DaemonResponse,
   type DaemonStatus,
   type DialogInfo,
   type PageInfo,
   type PageInfoResult,
   type RemoteConfig,
   type TabInfo,
+  isInternalUrl,
 } from "./protocol";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/** Common locations where browser-harness might be cloned */
-const BH_SEARCH_PATHS = [
-  join(homedir(), "Developer", "browser-harness"),
-  join(homedir(), "src", "browser-harness"),
-  join(homedir(), "browser-harness"),
-  join(homedir(), "dev", "browser-harness"),
-  join(homedir(), "Projects", "browser-harness"),
-];
+const CDP_CONNECT_TIMEOUT_MS = 10_000;
+const CDP_REQUEST_TIMEOUT_MS = 15_000;
+const CDP_RECONNECT_BASE_MS = 500;
+const CDP_MAX_RECONNECT_ATTEMPTS = 5;
+const PORT_PROBE_DEADLINE_MS = 30_000;
+const PORT_PROBE_INTERVAL_MS = 1_000;
 
-const DAEMON_START_TIMEOUT_MS = 30_000;
-const DAEMON_POLL_INTERVAL_MS = 200;
-const DAEMON_SHUTDOWN_TIMEOUT_MS = 5_000;
-const SESSION_ATTACH_TIMEOUT_MS = 5_000;
+/**
+ * Discover Chrome's CDP WebSocket URL by reading the per-profile
+ * `DevToolsActivePort` file written when remote debugging is enabled
+ * via chrome://inspect/#remote-debugging. Mirrors browser-harness/daemon.py.
+ */
+async function discoverWsUrl(): Promise<string> {
+  const dirs = chromeProfileDirs();
+  const tried: string[] = [];
+  for (const base of dirs) {
+    const portFile = join(base, "DevToolsActivePort");
+    let raw: string;
+    try {
+      raw = await readFile(portFile, "utf8");
+    } catch {
+      continue;
+    }
+    tried.push(base);
+    const lines = raw.trim().split("\n");
+    if (lines.length < 2) continue;
+    const port = lines[0].trim();
+    const path = lines[1].trim();
+    if (!port || !path) continue;
+
+    await waitForPort(Number(port));
+    return `ws://127.0.0.1:${port}${path}`;
+  }
+  throw new Error(
+    `DevToolsActivePort not found in ${dirs.join(", ")} — open chrome://inspect/#remote-debugging in your browser, tick the checkbox, click Allow, then retry. Or set BU_CDP_WS to a remote browser endpoint.`,
+  );
+}
+
+/** Probe TCP port until reachable or deadline expires. */
+async function waitForPort(port: number): Promise<void> {
+  const deadline = Date.now() + PORT_PROBE_DEADLINE_MS;
+  let lastErr: Error | null = null;
+  while (Date.now() < deadline) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const sock = netConnect({ host: "127.0.0.1", port });
+        const onError = (err: Error) => {
+          sock.destroy();
+          reject(err);
+        };
+        sock.setTimeout(1000, () => onError(new Error("probe timeout")));
+        sock.once("error", onError);
+        sock.once("connect", () => {
+          sock.end();
+          resolve();
+        });
+      });
+      return;
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      await new Promise((r) => setTimeout(r, PORT_PROBE_INTERVAL_MS));
+    }
+  }
+  throw new Error(
+    `Chrome's remote-debugging page is open, but DevTools is not live yet on 127.0.0.1:${port} — if Chrome opened a profile picker, choose your normal profile first, then tick the checkbox and click Allow if shown (last error: ${lastErr?.message ?? "unknown"})`,
+  );
+}
+
+// Chrome / Edge / Chromium profile directories that may contain DevToolsActivePort.
+// Mirrors browser-harness/daemon.py PROFILES.
+function chromeProfileDirs(): string[] {
+  const home = homedir();
+  return [
+    join(home, "Library/Application Support/Google/Chrome"),
+    join(home, "Library/Application Support/Microsoft Edge"),
+    join(home, "Library/Application Support/Microsoft Edge Beta"),
+    join(home, "Library/Application Support/Microsoft Edge Dev"),
+    join(home, "Library/Application Support/Microsoft Edge Canary"),
+    join(home, ".config/google-chrome"),
+    join(home, ".config/chromium"),
+    join(home, ".config/chromium-browser"),
+    join(home, ".config/microsoft-edge"),
+    join(home, ".config/microsoft-edge-beta"),
+    join(home, ".config/microsoft-edge-dev"),
+    join(home, ".var/app/org.chromium.Chromium/config/chromium"),
+    join(home, ".var/app/com.google.Chrome/config/google-chrome"),
+    join(home, ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"),
+    join(home, ".var/app/com.microsoft.Edge/config/microsoft-edge"),
+    join(home, "AppData/Local/Google/Chrome/User Data"),
+    join(home, "AppData/Local/Chromium/User Data"),
+    join(home, "AppData/Local/Microsoft/Edge/User Data"),
+    join(home, "AppData/Local/Microsoft/Edge Beta/User Data"),
+    join(home, "AppData/Local/Microsoft/Edge Dev/User Data"),
+    join(home, "AppData/Local/Microsoft/Edge SxS/User Data"),
+  ];
+}
 
 const VIRTUAL_KEY_CODES: Record<string, number> = {
   Enter: 13,
@@ -66,20 +144,23 @@ const VIRTUAL_KEY_CODES: Record<string, number> = {
 
 export class BrowserDaemon {
   readonly namespace: string;
-  readonly socketPath: string;
-  readonly pidPath: string;
-  readonly logPath: string;
 
-  private proc: ChildProcess | null = null;
+  private ws: WebSocket | null = null;
   private _sessionId: string | null = null;
-  private _pid: number | null = null;
+  private _targetId: string | null = null;
+  private _currentDialog: DialogInfo | null = null;
+  private _eventBuffer: CDPEvent[] = [];
+  private _pending = new Map<number, PendingRequest>();
+  private _nextId = 1;
+  private _connectResolve: ((v: void) => void) | null = null;
+  private _connectReject: ((err: Error) => void) | null = null;
+  private _connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reconnectAttempts = 0;
+  private _stopping = false;
   private remote: RemoteConfig | null = null;
 
   constructor(namespace = "default", remote?: RemoteConfig) {
     this.namespace = namespace;
-    this.socketPath = `/tmp/bu-${namespace}.sock`;
-    this.pidPath = `/tmp/bu-${namespace}.pid`;
-    this.logPath = `/tmp/bu-${namespace}.log`;
     this.remote = remote ?? null;
   }
 
@@ -89,17 +170,13 @@ export class BrowserDaemon {
     return this._sessionId;
   }
 
-  get pid(): number | null {
-    return this._pid;
-  }
-
   getStatus(): DaemonStatus {
     return {
-      alive: this._sessionId !== null,
+      alive: this._sessionId !== null && this.ws?.readyState === WebSocket.OPEN,
       sessionId: this._sessionId,
-      pid: this._pid,
+      pid: null,
       namespace: this.namespace,
-      socketPath: this.socketPath,
+      socketPath: "",
       remoteBrowserId: this.remote?.browserId,
     };
   }
@@ -107,153 +184,92 @@ export class BrowserDaemon {
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   /**
-   * Start the daemon process and wait for it to become ready.
-   * Idempotent — returns immediately if already alive and healthy.
+   * Connect to Chrome via CDP WebSocket.
+   * Idempotent — returns immediately if already connected and healthy.
    */
   async start(): Promise<void> {
-    // Already healthy?
-    if (await healthProbe(this.socketPath)) {
-      await this.refreshSessionId();
-      return;
+    if (this._sessionId && this.ws?.readyState === WebSocket.OPEN) {
+      return; // Already connected
     }
 
-    // Stale socket but daemon alive? Stop it first.
-    if (await daemonAlive(this.socketPath)) {
-      await this.stop();
-    }
-
-    const bhDir = await findBrowserHarnessDir();
-    const env = this.buildEnv();
-
-    this.proc = spawn("uv", ["run", "daemon.py"], {
-      cwd: bhDir,
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "ignore", "ignore"],
-      detached: true,
-    });
-    this.proc.unref();
-
-    if (this.proc.pid) {
-      this._pid = this.proc.pid;
-    }
-
-    // Poll until socket accepts connections
-    const deadline = Date.now() + DAEMON_START_TIMEOUT_MS;
-    let lastError = "";
-
-    while (Date.now() < deadline) {
-      if (this.proc.exitCode !== null) {
-        lastError = await this.readLogTail();
-        throw new Error(
-          `Browser daemon exited (code ${this.proc.exitCode}): ${lastError || "unknown error"}`,
-        );
-      }
-
-      if (await daemonAlive(this.socketPath)) {
-        // Verify CDP is healthy (not just socket)
-        if (await healthProbe(this.socketPath)) {
-          await this.refreshSessionId();
-          return;
-        }
-        // Socket alive but CDP not ready — keep polling
-      }
-
-      await sleep(DAEMON_POLL_INTERVAL_MS);
-    }
-
-    lastError = await this.readLogTail();
-    // Check if Chrome needs remote debugging setup
-    if (this.needsChromeSetup(lastError)) {
-      throw new Error(
-        `Chrome remote debugging not enabled. Start Chrome with --remote-debugging-port=9222, then retry.\n\nDaemon log: ${lastError}`,
-      );
-    }
-
-    throw new Error(
-      `Daemon "${this.namespace}" failed to start after ${DAEMON_START_TIMEOUT_MS / 1000}s. ` +
-        `Log: ${lastError || "no log output"}`,
-    );
-  }
-
-  /**
-   * Gracefully stop the daemon: send shutdown, wait for exit, force-kill if needed.
-   */
-  async stop(): Promise<void> {
-    // Send shutdown via socket
-    try {
-      await sendRequest(this.socketPath, { meta: "shutdown" }, 3000);
-    } catch {
-      // Socket may already be dead — that's fine
-    }
-
-    // Wait for process to exit
-    if (this.proc && this.proc.exitCode === null) {
-      const deadline = Date.now() + DAEMON_SHUTDOWN_TIMEOUT_MS;
-      while (Date.now() < deadline) {
-        if (this.proc.exitCode !== null) break;
-        await sleep(100);
-      }
-
-      // Force kill if still alive
-      if (this.proc.exitCode === null) {
-        try {
-          this.proc.kill("SIGTERM");
-        } catch {
-          // already dead
-        }
-      }
-    }
-
-    // Clean up files
-    for (const f of [this.socketPath, this.pidPath]) {
-      try {
-        await unlink(f);
-      } catch {
-        // file doesn't exist
-      }
-    }
-
-    this.proc = null;
-    this._sessionId = null;
-    this._pid = null;
-  }
-
-  /**
-   * Ensure daemon is alive and healthy. Restarts if stale.
-   * Call before every tool execution.
-   */
-  async ensureAlive(): Promise<void> {
-    if (!(await healthProbe(this.socketPath))) {
-      await this.stop();
-      await this.start();
-    }
-  }
-
-  // ── CDP Communication ────────────────────────────────────────────────────
-
-  /**
-   * Send a raw request to the daemon and get the response.
-   */
-  async send(request: DaemonRequest): Promise<DaemonResponse> {
-    await this.ensureAlive();
+    this._stopping = false;
+    this._reconnectAttempts = 0;
 
     try {
-      const response = await sendRequest(this.socketPath, request);
-      return response;
+      await this.connect();
     } catch (err) {
-      // Socket died mid-request — restart and retry once
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes("ENOENT") || message.includes("ECONNREFUSED") || message.includes("EPIPE")) {
-        await this.stop();
-        await this.start();
-        return sendRequest(this.socketPath, request);
+      const msg = err instanceof Error ? err.message : String(err);
+      if (this.needsChromeSetup(msg)) {
+        throw new Error(
+          `Chrome remote debugging not enabled. Open chrome://inspect/#remote-debugging and tick the Allow checkbox, then retry.\n\nDetails: ${msg}`,
+        );
       }
       throw err;
     }
   }
 
   /**
-   * Convenience: send a CDP method and return the result.
+   * Gracefully disconnect from Chrome.
+   */
+  async stop(): Promise<void> {
+    this._stopping = true;
+
+    // Reject any pending connect
+    if (this._connectReject) {
+      this._connectReject(new Error("Daemon stopped"));
+      this._connectReject = null;
+    }
+    if (this._connectTimer) {
+      clearTimeout(this._connectTimer);
+      this._connectTimer = null;
+    }
+
+    // Reject all pending requests
+    for (const [id, req] of this._pending) {
+      req.reject(new Error("Daemon stopped"));
+      this._pending.delete(id);
+    }
+
+    // Close the WebSocket
+    if (this.ws) {
+      try {
+        this.ws.close(1000, "Shutdown");
+      } catch {
+        // best-effort
+      }
+      this.ws = null;
+    }
+
+    this._sessionId = null;
+    this._targetId = null;
+    this._currentDialog = null;
+    this._eventBuffer = [];
+  }
+
+  /**
+   * Ensure daemon is alive and healthy. Reconnects if stale.
+   * Call before every tool execution.
+   */
+  async ensureAlive(): Promise<void> {
+    const isOpen = this.ws?.readyState === WebSocket.OPEN;
+    if (isOpen && this._sessionId) {
+      // Quick health check with a lightweight CDP call
+      try {
+        await this.cdp("Target.getTargets", {});
+        return;
+      } catch {
+        // Connection is stale — reconnect
+      }
+    }
+
+    await this.stop();
+    await this.start();
+  }
+
+  // ── CDP Communication ────────────────────────────────────────────────────
+
+  /**
+   * Send a CDP method and return the result.
    * Handles session management — Target.* methods skip session,
    * others use explicit sessionId or the daemon's default session.
    */
@@ -262,50 +278,33 @@ export class BrowserDaemon {
     params?: Record<string, unknown>,
     sessionId?: string | null,
   ): Promise<unknown> {
-    // Browser-level Target.* calls must NOT use a session
-    const sid = method.startsWith("Target.") ? null : (sessionId ?? this._sessionId);
+    // Browser-level Target.* calls must NOT use a session.
+    // Everything else uses the explicit sessionId (any session attached
+    // with flatten:true on this connection is reachable via the top-level
+    // sessionId field — that's what flat-protocol mode means).
+    const effectiveSid = method.startsWith("Target.") ? null : (sessionId ?? this._sessionId);
 
-    const response = await this.send({
-      method,
-      params: params ?? {},
-      session_id: sid,
-    });
-
-    if (response.error) {
-      // Auto-recover from stale session
-      if (
-        response.error.includes("Session with given id not found") &&
-        sid === this._sessionId
-      ) {
+    try {
+      return await this.sendRawCdp(method, params ?? {}, effectiveSid);
+    } catch (err) {
+      // Auto-recover from stale default session — retry once
+      if (err instanceof SessionNotFoundError && effectiveSid === this._sessionId) {
         await this.attachFirstPage();
-        const retry = await this.send({
-          method,
-          params: params ?? {},
-          session_id: this._sessionId,
-        });
-        if (retry.error) {
-          throw new Error(`CDP error after session recovery (${method}): ${retry.error}`);
-        }
-        return retry.result;
+        return this.sendRawCdp(method, params ?? {}, this._sessionId);
       }
-      throw new Error(`CDP error (${method}): ${response.error}`);
+      throw err;
     }
-
-    return response.result;
   }
 
   // ── High-level Browser Helpers ────────────────────────────────────────────
 
   /** Get page state or dialog info */
   async getPageInfo(): Promise<PageInfoResult> {
-    // Check for JS dialog first
-    try {
-      const dialogResp = await sendRequest(this.socketPath, { meta: "pending_dialog" });
-      if (dialogResp.dialog) {
-        return { dialog: dialogResp.dialog };
-      }
-    } catch {
-      // ignore — dialog check is best-effort
+    // Check for buffered dialog first
+    if (this._currentDialog) {
+      const dialog = this._currentDialog;
+      this._currentDialog = null; // consume it
+      return { dialog };
     }
 
     const js = `JSON.stringify({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})`;
@@ -340,9 +339,14 @@ export class BrowserDaemon {
     return tabs;
   }
 
-  /** Get current tab info */
+  /** Get current tab info — uses the targetId we attached to. */
   async currentTab(): Promise<TabInfo> {
-    const result = (await this.cdp("Target.getTargetInfo")) as {
+    if (!this._targetId) {
+      throw new Error("No tab attached. Call newTab/switchTab first.");
+    }
+    const result = (await this.cdp("Target.getTargetInfo", {
+      targetId: this._targetId,
+    })) as {
       targetInfo: { targetId: string; url: string; title: string };
     };
     const t = result.targetInfo;
@@ -370,12 +374,17 @@ export class BrowserDaemon {
       flatten: true,
     })) as { sessionId: string };
 
-    // Tell the daemon to use this as default session
     this._sessionId = result.sessionId;
-    await sendRequest(this.socketPath, {
-      meta: "set_session",
-      session_id: result.sessionId,
-    });
+    this._targetId = targetId;
+
+    // Enable core domains for the new session
+    for (const domain of ["Page", "DOM", "Runtime", "Network"]) {
+      try {
+        await this.cdp(`${domain}.enable`);
+      } catch {
+        // best-effort
+      }
+    }
 
     // Mark the tab with a green circle for user visibility
     try {
@@ -394,7 +403,7 @@ export class BrowserDaemon {
       expression = `(function(){${expression}})()`;
     }
 
-    const sid = targetId || null; // explicit target or daemon default
+    const sid = targetId || null;
     const result = (await this.cdp(
       "Runtime.evaluate",
       {
@@ -411,10 +420,11 @@ export class BrowserDaemon {
     return result.result?.value;
   }
 
-  /** Drain buffered CDP events from the daemon */
+  /** Drain buffered CDP events from the internal buffer */
   async drainEvents(): Promise<CDPEvent[]> {
-    const resp = await sendRequest(this.socketPath, { meta: "drain_events" });
-    return resp.events ?? [];
+    const events = this._eventBuffer;
+    this._eventBuffer = [];
+    return events;
   }
 
   /** Get virtual key code for a key name or character */
@@ -422,16 +432,206 @@ export class BrowserDaemon {
     return VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
   }
 
-  /** Get the key code string for CDP (uses the key name or the key itself) */
+  /** Get the key code string for CDP */
   getKeyCode(key: string): string {
     return key.length === 1 && !VIRTUAL_KEY_CODES[key] ? key : key;
   }
 
-  // ── Internal Helpers ──────────────────────────────────────────────────────
+  // ── Internal: WebSocket Connection ────────────────────────────────────────
+
+  private async connect(): Promise<void> {
+    const timeoutMs = CDP_CONNECT_TIMEOUT_MS;
+    const wsUrl = this.remote?.cdpUrl
+      ? this.remote.cdpUrl
+      : process.env.BU_CDP_WS
+        ? process.env.BU_CDP_WS
+        : await discoverWsUrl();
+
+    if (!this.remote) {
+      this.remote = {
+        cdpUrl: wsUrl,
+        browserId: wsUrl.split("/").pop() || "unknown",
+      };
+    }
+
+    await this.openWebSocket(wsUrl, timeoutMs);
+    await this.attachFirstPage();
+  }
+
+  private openWebSocket(url: string, timeoutMs: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this._connectResolve = resolve;
+      this._connectReject = reject;
+
+      this._connectTimer = setTimeout(() => {
+        this._connectTimer = null;
+        this._connectReject = null;
+        if (this.ws) {
+          try { this.ws.close(); } catch { /* ignore */ }
+          this.ws = null;
+        }
+        reject(new Error(`CDP WebSocket connection timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      try {
+        this.ws = new WebSocket(url);
+      } catch (err) {
+        clearTimeout(this._connectTimer!);
+        this._connectTimer = null;
+        reject(err);
+        return;
+      }
+
+      this.ws.onopen = () => {
+        if (this._connectTimer) {
+          clearTimeout(this._connectTimer);
+          this._connectTimer = null;
+        }
+        this._connectResolve = null;
+        this._connectReject = null;
+        this._reconnectAttempts = 0;
+        resolve();
+      };
+
+      this.ws.onmessage = (event: WebSocket.MessageEvent) => {
+        const data = event.data;
+        this.handleMessage(typeof data === "string" ? data : data.toString());
+      };
+
+      this.ws.onerror = (_event: WebSocket.ErrorEvent) => {
+        // Only reject during the connect phase; otherwise it means a disconnect
+        if (this._connectReject) {
+          const err = new Error("CDP WebSocket error during connection");
+          this._connectReject(err);
+          this._connectReject = null;
+          if (this._connectTimer) {
+            clearTimeout(this._connectTimer);
+            this._connectTimer = null;
+          }
+        }
+      };
+
+      this.ws.onclose = (_event: WebSocket.CloseEvent) => {
+        // If we're shutting down intentionally, don't reconnect
+        if (this._stopping) return;
+
+        // Auto-reconnect with backoff
+        if (this._reconnectAttempts < CDP_MAX_RECONNECT_ATTEMPTS) {
+          this._sessionId = null;
+          const delay = Math.min(
+            CDP_RECONNECT_BASE_MS * 2 ** this._reconnectAttempts,
+            15_000,
+          );
+          this._reconnectAttempts++;
+          setTimeout(() => {
+            if (!this._stopping) {
+              this.start().catch(() => {
+                // Reconnection ultimately failed — tools will report errors
+              });
+            }
+          }, delay);
+        }
+      };
+    });
+  }
+
+  // ── Internal: Message Handling ────────────────────────────────────────────
+
+  private handleMessage(data: string): void {
+    let msg: CDPMessage;
+    try {
+      msg = JSON.parse(data);
+    } catch {
+      return; // Corrupt frame, ignore
+    }
+
+    // CDP events have no `id` — they have a `method` field
+    if (msg.id === undefined) {
+      // Dialog detection
+      if (msg.method === "Page.javascriptDialogOpening") {
+        this._currentDialog = {
+          type: (msg.params?.type as DialogInfo["type"]) || "alert",
+          message: (msg.params?.message as string) || "",
+          defaultPrompt: msg.params?.defaultPrompt as string | undefined,
+        };
+        return;
+      }
+
+      // Dialog closed — clear the stored dialog
+      if (msg.method === "Page.javascriptDialogClosed") {
+        this._currentDialog = null;
+        return;
+      }
+
+      // Buffer other events for drainEvents()
+      this._eventBuffer.push({
+        method: msg.method!,
+        params: msg.params as unknown,
+        session_id: msg.sessionId as string | undefined,
+      });
+      return;
+    }
+
+    // It's a response to a pending request
+    const pending = this._pending.get(msg.id);
+    if (!pending) return; // Stale response, ignore
+
+    this._pending.delete(msg.id);
+    clearTimeout(pending.timer);
+
+    if (msg.error) {
+      // Handle stale session recovery
+      const errMsg = msg.error.message || String(msg.error);
+      if (
+        errMsg.includes("Session with given id not found") &&
+        pending.sessionId === this._sessionId
+      ) {
+        // Schedule recovery and reject — caller can retry
+        pending.reject(new SessionNotFoundError(errMsg));
+        return;
+      }
+      pending.reject(new Error(`CDP error (${pending.method}): ${errMsg}`));
+      return;
+    }
+
+    pending.resolve(msg.result);
+  }
+
+  /** Send a CDP command directly to the browser session */
+  private sendRawCdp(
+    method: string,
+    params: Record<string, unknown>,
+    sessionId: string | null,
+  ): Promise<unknown> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("Browser not connected. Is Chrome running?"));
+    }
+
+    const id = this._nextId++;
+    const payload: Record<string, unknown> = { id, method, params };
+    if (sessionId) payload.sessionId = sessionId;
+    const msg = JSON.stringify(payload);
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this._pending.delete(id);
+        reject(new Error(`CDP timeout after ${CDP_REQUEST_TIMEOUT_MS}ms: ${method}`));
+      }, CDP_REQUEST_TIMEOUT_MS);
+
+      this._pending.set(id, { resolve, reject, timer, method, sessionId });
+      try {
+        this.ws!.send(msg);
+      } catch (err) {
+        clearTimeout(timer);
+        this._pending.delete(id);
+        reject(err);
+      }
+    });
+  }
 
   /** Attach to the first real page target. Creates about:blank if none exist. */
   private async attachFirstPage(): Promise<string> {
-    const result = (await this.cdp("Target.getTargets")) as {
+    const result = (await this.sendRawCdp("Target.getTargets", {}, null)) as {
       targetInfos: Array<{ targetId: string; type: string; url: string }>;
     };
 
@@ -440,112 +640,91 @@ export class BrowserDaemon {
     );
 
     if (pages.length === 0) {
-      const created = (await this.cdp("Target.createTarget", {
-        url: "about:blank",
-      })) as { targetId: string };
+      const created = (await this.sendRawCdp(
+        "Target.createTarget",
+        { url: "about:blank" },
+        null,
+      )) as { targetId: string };
       pages.push({ targetId: created.targetId, type: "page", url: "about:blank" });
     }
 
-    const attachResult = (await this.cdp("Target.attachToTarget", {
-      targetId: pages[0].targetId,
-      flatten: true,
-    })) as { sessionId: string };
+    const attachResult = (await this.sendRawCdp(
+      "Target.attachToTarget",
+      { targetId: pages[0].targetId, flatten: true },
+      null,
+    )) as { sessionId: string };
 
     this._sessionId = attachResult.sessionId;
+    this._targetId = pages[0].targetId;
 
     // Enable core domains
     for (const domain of ["Page", "DOM", "Runtime", "Network"]) {
       try {
-        await this.cdp(`${domain}.enable`);
+        await this.sendRawCdp(`${domain}.enable`, {}, this._sessionId);
       } catch {
         // best-effort
       }
     }
 
+    // Mark tab
+    try {
+      await this.sendRawCdp(
+        "Runtime.evaluate",
+        {
+          expression: `if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
+        },
+        this._sessionId,
+      );
+    } catch {
+      // best-effort
+    }
+
     return attachResult.sessionId;
   }
 
-  /** Refresh session ID from the daemon's current session */
-  private async refreshSessionId(): Promise<void> {
-    try {
-      const resp = await sendRequest(this.socketPath, { meta: "session" });
-      if (resp.session_id) {
-        this._sessionId = resp.session_id;
-      }
-    } catch {
-      // will be set on first attach
-    }
+  /** Auto-recover from a stale session error by re-attaching */
+  async recoverSession(): Promise<void> {
+    await this.attachFirstPage();
   }
 
-  /** Build environment variables for the daemon process */
-  private buildEnv(): Record<string, string> {
-    const env: Record<string, string> = {
-      BU_NAME: this.namespace,
-    };
+  // ── Error diagnostics ────────────────────────────────────────────────────
 
-    if (this.remote) {
-      env.BU_CDP_WS = this.remote.cdpUrl;
-      env.BU_BROWSER_ID = this.remote.browserId;
-    }
-
-    return env;
-  }
-
-  /** Read the last line of the daemon log */
-  private async readLogTail(): Promise<string> {
-    try {
-      const content = await readFile(this.logPath, "utf-8");
-      const lines = content.trim().split("\n");
-      return lines[lines.length - 1] || "";
-    } catch {
-      return "";
-    }
-  }
-
-  /** Check if the error message suggests Chrome needs remote debugging setup */
   private needsChromeSetup(errorMsg: string): boolean {
     const lower = errorMsg.toLowerCase();
     return (
-      lower.includes("devtoolsactiveport not found") ||
-      lower.includes("enable chrome://inspect") ||
-      lower.includes("not live yet") ||
-      (lower.includes("ws handshake failed") &&
+      lower.includes("devtoolsactiveport") ||
+      lower.includes("cannot reach chrome") ||
+      lower.includes("ecode") && lower.includes("econnrefused") ||
+      (lower.includes("ws handshake") &&
         (lower.includes("403") || lower.includes("timed out")))
     );
   }
 }
 
-// ── Utility ──────────────────────────────────────────────────────────────────
+// ── Internal Types ───────────────────────────────────────────────────────────
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  method: string;
+  sessionId: string | null;
 }
 
-/**
- * Find the browser-harness repository directory.
- * Searches common locations and falls back to cwd.
- */
-async function findBrowserHarnessDir(): Promise<string> {
-  // Check common locations
-  for (const dir of BH_SEARCH_PATHS) {
-    if (
-      existsSync(join(dir, "daemon.py")) &&
-      existsSync(join(dir, "helpers.py"))
-    ) {
-      return dir;
-    }
-  }
+interface CDPMessage {
+  id?: number;
+  method?: string;
+  params?: Record<string, unknown>;
+  result?: unknown;
+  error?: { message: string; code?: number };
+  sessionId?: string;
+}
 
-  // Check cwd
-  const cwd = process.cwd();
-  if (existsSync(join(cwd, "daemon.py")) && existsSync(join(cwd, "helpers.py"))) {
-    return cwd;
-  }
+// ── Error Classes ────────────────────────────────────────────────────────────
 
-  throw new Error(
-    "browser-harness not found. Clone it first:\n" +
-      "  git clone https://github.com/browser-use/browser-harness ~/Developer/browser-harness\n" +
-      "  cd ~/Developer/browser-harness && uv sync\n\n" +
-      `Searched: ${BH_SEARCH_PATHS.join(", ")}`,
-  );
+class SessionNotFoundError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = "SessionNotFoundError";
+  }
 }

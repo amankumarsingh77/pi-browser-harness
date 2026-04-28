@@ -57,7 +57,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
   // Commands
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerCommand("browser-status", {
-    description: "Show browser daemon status and current page",
+    description: "Show browser connection status and current page",
     handler: async (_args, ctx) => {
       if (!daemon) {
         ctx.ui.notify("Browser daemon not started. Run /browser-setup first.", "warning");
@@ -66,15 +66,12 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
 
       const status = daemon.getStatus();
       const lines = [
-        `Browser Daemon: ${status.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
-        `Namespace: ${status.namespace}`,
-        `Socket: ${status.socketPath}`,
+        `Browser: ${status.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
         `Session: ${status.sessionId || "none"}`,
-        `PID: ${status.pid || "none"}`,
       ];
 
       if (status.remoteBrowserId) {
-        lines.push(`Remote Browser: ${status.remoteBrowserId}`);
+        lines.push(`Browser ID: ${status.remoteBrowserId}`);
       }
 
       // Try to get current page info

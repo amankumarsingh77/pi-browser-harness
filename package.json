@@ -23,7 +23,7 @@
   },
   "homepage": "https://github.com/amankumarsingh77/pi-browser-harness#readme",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "src/",
@@ -50,6 +50,7 @@
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*",
+    "@types/ws": "^8.18.1",
     "typebox": "*",
     "typescript": "^5.0.0"
   },
@@ -59,5 +60,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   }
 }

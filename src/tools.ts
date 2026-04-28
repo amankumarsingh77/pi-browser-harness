@@ -140,6 +140,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         if ("dialog" in info) {
           return {
             content: [{ type: "text" as const, text: `Navigated to ${params.url}\nTarget: ${targetId}\n⚠️  A dialog is open: ${info.dialog.type} — "${info.dialog.message}"\nUse browser_handle_dialog to dismiss or accept it.` }],
+            details: undefined,
           };
         }
 
@@ -149,11 +150,13 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
             type: "text" as const,
             text: `${prefix}Navigated to: ${info.url}\nTitle: ${info.title}\nViewport: ${info.width}x${info.height}\nTarget: ${targetId}`,
           }],
+          details: undefined,
         };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Navigation failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -187,6 +190,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
               type: "text" as const,
               text: `⚠️  DIALOG OPEN: ${info.dialog.type}\nMessage: ${info.dialog.message}${info.dialog.defaultPrompt ? `\nDefault: ${info.dialog.defaultPrompt}` : ""}\n\nUse browser_handle_dialog to accept or dismiss.`,
             }],
+            details: undefined,
           };
         }
 
@@ -195,11 +199,13 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
             type: "text" as const,
             text: `URL: ${info.url}\nTitle: ${info.title}\nViewport: ${info.width}x${info.height}\nScroll: (${info.scrollX}, ${info.scrollY})\nPage size: ${info.pageWidth}x${info.pageHeight}`,
           }],
+          details: undefined,
         };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -225,15 +231,16 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           currentIndex: number;
         };
         if (history.currentIndex <= 0) {
-          return { content: [{ type: "text" as const, text: "Already at the beginning of history." }] };
+          return { content: [{ type: "text" as const, text: "Already at the beginning of history." }], details: undefined };
         }
         const targetEntry = history.entries[history.currentIndex - 1];
         await daemon.cdp("Page.navigateToHistoryEntry", { entryId: targetEntry.id });
-        return { content: [{ type: "text" as const, text: `Navigated back to: ${targetEntry.url}` }] };
+        return { content: [{ type: "text" as const, text: `Navigated back to: ${targetEntry.url}` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -259,15 +266,16 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           currentIndex: number;
         };
         if (history.currentIndex >= history.entries.length - 1) {
-          return { content: [{ type: "text" as const, text: "Already at the end of history." }] };
+          return { content: [{ type: "text" as const, text: "Already at the end of history." }], details: undefined };
         }
         const targetEntry = history.entries[history.currentIndex + 1];
         await daemon.cdp("Page.navigateToHistoryEntry", { entryId: targetEntry.id });
-        return { content: [{ type: "text" as const, text: `Navigated forward to: ${targetEntry.url}` }] };
+        return { content: [{ type: "text" as const, text: `Navigated forward to: ${targetEntry.url}` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -291,13 +299,14 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         await daemon.cdp("Page.reload");
         const info = await daemon.getPageInfo();
         if ("dialog" in info) {
-          return { content: [{ type: "text" as const, text: `Reloaded. ⚠️ Dialog open: ${info.dialog.type}` }] };
+          return { content: [{ type: "text" as const, text: `Reloaded. ⚠️ Dialog open: ${info.dialog.type}` }], details: undefined };
         }
-        return { content: [{ type: "text" as const, text: `Reloaded: ${info.title} (${info.url})` }] };
+        return { content: [{ type: "text" as const, text: `Reloaded: ${info.title} (${info.url})` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -341,11 +350,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           button: params.button || "left",
           clickCount: params.clicks || 1,
         });
-        return { content: [{ type: "text" as const, text: `Clicked at (${params.x}, ${params.y})` }] };
+        return { content: [{ type: "text" as const, text: `Clicked at (${params.x}, ${params.y})` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Click failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -374,11 +384,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
       try {
         await daemon.ensureAlive();
         await daemon.cdp("Input.insertText", { text: params.text });
-        return { content: [{ type: "text" as const, text: `Typed: "${params.text}"` }] };
+        return { content: [{ type: "text" as const, text: `Typed: "${params.text}"` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Type failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -448,11 +459,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           nativeVirtualKeyCode: vk,
         });
 
-        return { content: [{ type: "text" as const, text: `Pressed: "${k}"${mod ? ` (modifiers: ${mod})` : ""}` }] };
+        return { content: [{ type: "text" as const, text: `Pressed: "${k}"${mod ? ` (modifiers: ${mod})` : ""}` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Key press failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -508,11 +520,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           deltaY: dy,
         });
 
-        return { content: [{ type: "text" as const, text: `Scrolled by (${dx}, ${dy}) at (${cx}, ${cy})` }] };
+        return { content: [{ type: "text" as const, text: `Scrolled by (${dx}, ${dy}) at (${cx}, ${cy})` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Scroll failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -549,6 +562,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Screenshot failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -592,6 +606,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -637,11 +652,13 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         const tab = await daemon.currentTab();
         return {
           content: [{ type: "text" as const, text: `Current tab: ${tab.title || "(no title)"}\nURL: ${tab.url}\nID: ${tab.targetId}` }],
+          details: undefined,
         };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -668,11 +685,13 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         const tab = await daemon.currentTab();
         return {
           content: [{ type: "text" as const, text: `Switched to: ${tab.title || "(no title)"}\nURL: ${tab.url}` }],
+          details: undefined,
         };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Switch failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -700,11 +719,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         const msg = params.url
           ? `New tab created and navigated to: ${params.url}\nTarget: ${targetId}`
           : `New tab created: about:blank\nTarget: ${targetId}`;
-        return { content: [{ type: "text" as const, text: msg }] };
+        return { content: [{ type: "text" as const, text: msg }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -742,6 +762,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `JS execution failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -840,6 +861,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `HTTP request failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -896,7 +918,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
     async execute(_id, params) {
       const sec = params.seconds || 1;
       await new Promise((r) => setTimeout(r, sec * 1000));
-      return { content: [{ type: "text" as const, text: `Waited ${sec}s.` }] };
+      return { content: [{ type: "text" as const, text: `Waited ${sec}s.` }], details: undefined };
     },
   });
 
@@ -926,7 +948,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         while (Date.now() < deadline) {
           const state = await daemon.evaluateJS("document.readyState");
           if (state === "complete") {
-            return { content: [{ type: "text" as const, text: "Page loaded (readyState: complete)." }] };
+            return { content: [{ type: "text" as const, text: "Page loaded (readyState: complete)." }], details: undefined };
           }
           await new Promise((r) => setTimeout(r, 300));
         }
@@ -934,11 +956,13 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Page load timed out after ${timeout}s. Current state unknown.` }],
+          details: undefined,
         };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Wait failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -975,11 +999,12 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           await daemon.cdp("Page.handleJavaScriptDialog", { accept: false });
         }
 
-        return { content: [{ type: "text" as const, text: `Dialog ${params.action}ed.` }] };
+        return { content: [{ type: "text" as const, text: `Dialog ${params.action}ed.` }], details: undefined };
       } catch (err) {
         return {
           isError: true,
           content: [{ type: "text" as const, text: `Dialog handling failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
         };
       }
     },
@@ -1032,6 +1057,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
             targetId: "",
             ok: false as const,
             error: err instanceof Error ? err.message : String(err),
+            details: undefined,
           };
         }
       });
@@ -1067,6 +1093,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
               ...tab,
               ok: false as const,
               error: err instanceof Error ? err.message : String(err),
+              details: undefined,
             };
           } finally {
             completed++;
@@ -1079,6 +1106,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
                   text: `Opening URLs… ${completed}/${okCount} navigated`,
                 },
               ],
+              details: undefined,
             });
           }
         });
