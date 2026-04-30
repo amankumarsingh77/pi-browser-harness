@@ -157,6 +157,7 @@ export class BrowserDaemon {
   private _connectTimer: ReturnType<typeof setTimeout> | null = null;
   private _reconnectAttempts = 0;
   private _stopping = false;
+  private _consentObserved = false;
   private remote: RemoteConfig | null = null;
 
   constructor(namespace = "default", remote?: RemoteConfig) {
@@ -244,6 +245,7 @@ export class BrowserDaemon {
     this._targetId = null;
     this._currentDialog = null;
     this._eventBuffer = [];
+    this._consentObserved = false;
   }
 
   /**
@@ -253,12 +255,23 @@ export class BrowserDaemon {
   async ensureAlive(): Promise<void> {
     const isOpen = this.ws?.readyState === WebSocket.OPEN;
     if (isOpen && this._sessionId) {
-      // Quick health check with a lightweight CDP call
+      // Two-stage health check. The first probe uses a short timeout so we
+      // don't spend 15s waiting on a ws that's been silenced by Chrome's
+      // consent dialog. A short-timeout failure is not proof the ws is
+      // dead — give it one more chance with the full timeout before
+      // tearing down. Tearing down here is what causes the popup storm:
+      // every reconnect re-prompts the user for remote-debugging consent.
       try {
-        await this.cdp("Target.getTargets", {});
+        await this.sendRawCdp("Target.getTargets", {}, null, 2_000);
         return;
       } catch {
-        // Connection is stale — reconnect
+        // probe 1 failed — could be transient, could be consent-pending
+      }
+      try {
+        await this.sendRawCdp("Target.getTargets", {}, null);
+        return;
+      } catch {
+        // genuinely stale — fall through to reconnect
       }
     }
 
@@ -489,7 +502,11 @@ export class BrowserDaemon {
         }
         this._connectResolve = null;
         this._connectReject = null;
-        this._reconnectAttempts = 0;
+        // NOTE: do not clear _reconnectAttempts here. Chrome accepts the
+        // WS upgrade before the user clicks Allow on the remote-debugging
+        // consent dialog, so a successful onopen does not prove the
+        // connection is usable. We only consider the connection healthy
+        // once a CDP roundtrip completes — see attachFirstPage.
         resolve();
       };
 
@@ -515,9 +532,21 @@ export class BrowserDaemon {
         // If we're shutting down intentionally, don't reconnect
         if (this._stopping) return;
 
+        // If we never saw a successful CDP roundtrip on this connection,
+        // the close almost certainly means the user denied (or hasn't yet
+        // accepted) Chrome's "Allow remote debugging?" prompt. Reconnecting
+        // would just spawn another popup. Bail out and let the next tool
+        // call surface a clear error.
+        if (!this._consentObserved) {
+          this._sessionId = null;
+          return;
+        }
+
         // Auto-reconnect with backoff
         if (this._reconnectAttempts < CDP_MAX_RECONNECT_ATTEMPTS) {
           this._sessionId = null;
+          // Reset for the new connection — it must re-prove itself.
+          this._consentObserved = false;
           const delay = Math.min(
             CDP_RECONNECT_BASE_MS * 2 ** this._reconnectAttempts,
             15_000,
@@ -602,6 +631,7 @@ export class BrowserDaemon {
     method: string,
     params: Record<string, unknown>,
     sessionId: string | null,
+    timeoutMs: number = CDP_REQUEST_TIMEOUT_MS,
   ): Promise<unknown> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("Browser not connected. Is Chrome running?"));
@@ -615,8 +645,8 @@ export class BrowserDaemon {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this._pending.delete(id);
-        reject(new Error(`CDP timeout after ${CDP_REQUEST_TIMEOUT_MS}ms: ${method}`));
-      }, CDP_REQUEST_TIMEOUT_MS);
+        reject(new Error(`CDP timeout after ${timeoutMs}ms: ${method}`));
+      }, timeoutMs);
 
       this._pending.set(id, { resolve, reject, timer, method, sessionId });
       try {
@@ -634,6 +664,13 @@ export class BrowserDaemon {
     const result = (await this.sendRawCdp("Target.getTargets", {}, null)) as {
       targetInfos: Array<{ targetId: string; type: string; url: string }>;
     };
+
+    // First CDP roundtrip succeeded — consent has been granted. Only now
+    // is it safe to reset the reconnect counter; otherwise a ws that opens
+    // but is silently held by Chrome's consent dialog would let us loop
+    // forever stacking popups on top of each other.
+    this._consentObserved = true;
+    this._reconnectAttempts = 0;
 
     const pages = result.targetInfos.filter(
       (t) => t.type === "page" && !isInternalUrl(t.url),
