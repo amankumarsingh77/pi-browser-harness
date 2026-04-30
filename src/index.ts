@@ -26,7 +26,6 @@ import { registerRenderers } from "./renderers";
 import { registerSetupCommand } from "./setup";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { cleanupTempDirs, registerTools } from "./tools";
-import { registerDynamicTools } from "./dynamic-tools";
 
 export default function browserHarnessExtension(pi: ExtensionAPI) {
   // ── Resolve namespace ──────────────────────────────────────────────────────
@@ -137,7 +136,6 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
     // Register tools (once)
     if (!toolsRegistered && daemon) {
       registerTools(pi, daemon);
-      registerDynamicTools(pi, daemon);
       toolsRegistered = true;
     }
 

@@ -60,6 +60,9 @@ and cross-origin content. No selectors needed.
 - `browser_wait_for_load` — wait for document.readyState === 'complete'
 - `browser_handle_dialog` — accept or dismiss JS dialogs (alert/confirm/prompt)
 
+### Extending
+- `browser_run_script` — execute a temporary script file with daemon access
+
 ## Pattern Reference
 
 ### Navigation
@@ -97,49 +100,46 @@ browser_screenshot() → visually inspect the page
 browser_execute_js("document.querySelector('.content').innerText") → extract text
 ```
 
-## Self-Extending Harness
+## Temporary Scripts
 
-The harness can write its own tools when you need a capability that doesn't exist yet.
-This is the same philosophy as browser-harness: "The agent writes what's missing, mid-task."
+When the built-in tools aren't enough, write a temporary script to disk and execute it
+with `browser_run_script`. Scripts run in the harness process with direct access to
+the browser daemon and full Node.js APIs — no dynamic tool registration needed.
 
 ```
   ● agent: needs to scrape 47 paginated search result pages
   │
-  ● calls list_dynamic_tools() → empty
+  ● write("/tmp/scrape-pages.js", "...script using daemon.cdp() and daemon.evaluateJS()...")
   │
-  ● calls register_tool({ name: "scrape_paginated", implementation: "..." })
+  ● browser_run_script("/tmp/scrape-pages.js", { urls: [...] })
   │
-  ✓ next turn: scrape_paginated() is available and callable
+  ✓ script executes and returns results
 ```
 
-**Tool lifecycle:**
-- `list_dynamic_tools` — see what's already been registered
-- `register_tool` — inject a new tool (available next turn, no reload)
-- `remove_tool` — retire a tool you no longer need
+The script is written to disk, so it's auditable and re-runnable.
 
-**When to extend:**
+**When to use scripts:**
 - You're about to do the same 3+ step sequence more than once
 - You need a capability the built-in tools don't provide (e.g., bulk CSV export, structured extraction, pagination)
 - You discover a domain-specific pattern that should be reusable
 - The alternative is a fragile multi-turn loop of screenshots + clicks
 
-**What NOT to do with dynamic tools:**
-- Don't register tools for one-off actions. Use the built-in browser_* tools directly.
-- Don't duplicate existing tools. Call list_dynamic_tools first.
-- Don't try to call browser_* tools from within a dynamic tool implementation. Sequence them as separate tool calls.
+**What NOT to do:**
+- Don't write scripts for one-off actions — use the built-in browser_* tools directly.
+- Don't try to call browser_* tools from within a script — sequence them as separate tool calls.
 
-**Implementation bindings available inside dynamic tools:**
-- `params` — the tool's arguments object
+**Script bindings:**
+- `params` — the arguments passed to browser_run_script
 - `daemon` — browser daemon (daemon.cdp(), daemon.evaluateJS(), daemon.getPageInfo(), etc.)
-- `require` — Node.js require() (use 'node:fs/promises', 'node:path', 'node:crypto', etc.)
+- `require` — Node.js require() (use 'fs', 'path', 'crypto', etc.)
 - `signal` — AbortSignal for cancellation
 - `onUpdate` — progress callback: onUpdate({ content: [{ type: 'text', text: '...' }] })
 - `ctx` — ExtensionContext (ctx.cwd, ctx.signal, etc.)
 - `console`, `fetch`, `JSON`, `Buffer`, `setTimeout`, `clearTimeout`
 
-**Example — a dynamic tool that extracts structured data:**
+**Example — a script that extracts structured data:**
 ```javascript
-// register_tool implementation:
+// /tmp/extract-products.js
 const info = await daemon.getPageInfo();
 if ("dialog" in info) throw new Error("Dialog is blocking: " + info.dialog.message);
 const data = await daemon.evaluateJS(`
@@ -201,16 +201,13 @@ browser_execute_js("!!document.querySelector('.loaded-content')")
 
 ```
 pi agent → pi-browser-harness (TypeScript)
-               │ Unix socket
+               │ CDP WebSocket
                ▼
-        /tmp/bu-<namespace>.sock
-               │
-               ▼
-        daemon.py → CDP WebSocket → Chrome
+            Chrome
 
-Dynamic tools (registered at runtime):
-  list_dynamic_tools / register_tool / remove_tool
-      │
-      ▼
-  pi.registerTool() → available next turn, no reload
+Temporary scripts:
+  write("/tmp/script.js") → browser_run_script("/tmp/script.js")
+      │                              │
+      ▼                              ▼
+  script on disk (auditable)    executed in harness process with daemon access
 ```

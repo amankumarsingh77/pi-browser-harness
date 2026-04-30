@@ -15,11 +15,15 @@ import {
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "typebox";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { BrowserDaemon } from "./daemon";
 import type { TabInfo } from "./protocol";
+
+// ── AsyncFunction constructor ────────────────────────────────────────────────
+
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (...args: string[]) => (...args: unknown[]) => Promise<unknown>;
 
 // ── Key code map ─────────────────────────────────────────────────────────────
 
@@ -1223,6 +1227,132 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         0,
         0,
       );
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // browser_run_script
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_run_script",
+    label: "Browser Run Script",
+    description:
+      "Execute a temporary JavaScript script file with access to the browser daemon " +
+      "and Node.js APIs. Use this when the built-in browser_* tools are insufficient " +
+      "for a multi-step workflow — write a script to disk, then run it with this tool. " +
+      "The script receives these bindings in scope:\n" +
+      "  params    — the arguments passed to this tool\n" +
+      "  daemon    — the browser daemon (daemon.cdp(), daemon.evaluateJS(), daemon.getPageInfo(), etc.)\n" +
+      "  require   — Node.js require() for builtins and installed packages\n" +
+      "  signal    — AbortSignal for cancellation\n" +
+      "  onUpdate  — progress callback: onUpdate({ content: [{ type: 'text', text: '...' }] })\n" +
+      "  ctx       — ExtensionContext with cwd, sessionManager, ui, signal, etc.\n" +
+      "  console, fetch, JSON, Buffer, setTimeout, clearTimeout\n\n" +
+      "The script MUST return { content: [{ type: 'text', text: '...' }], details?: {...} }.\n" +
+      "For errors, throw: throw new Error('something went wrong').",
+    promptSnippet: "Run a temporary script with browser daemon access (write script to disk first)",
+    promptGuidelines: [
+      "Use write to create a temporary script file, then browser_run_script to execute it — no dynamic tool registration needed.",
+      "Scripts are written to disk, making them auditable and re-runnable. The user can inspect them.",
+      "The script has access to the browser daemon via `daemon` — use daemon.cdp(), daemon.evaluateJS(), daemon.getPageInfo(), etc.",
+      "For pure data processing or file operations, use require() to access Node.js modules like fs, path, crypto.",
+      "If the script only needs built-in browser_* tools, break those into separate tool calls before or after — do not try to invoke them from within the script.",
+    ],
+    parameters: Type.Object({
+      path: Type.String({ description: "Path to the temporary script file (.js or .mjs) to execute" }),
+      params: Type.Optional(Type.Object({}, { additionalProperties: true, description: "Optional parameters to pass to the script as `params`" })),
+    }),
+    async execute(_id, p, signal, onUpdate, ctx) {
+      const { path: scriptPath, params: scriptParams } = p as {
+        path: string;
+        params?: Record<string, unknown>;
+      };
+
+      // ── Read the script from disk ────────────────────────────────────
+      let source: string;
+      try {
+        source = await readFile(scriptPath, "utf8");
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{
+            type: "text" as const,
+            text: `Failed to read script: ${msg}\n\nPath: ${scriptPath}\nCheck that the file exists and is readable.`,
+          }],
+          details: { error: "read_failed", message: msg },
+        };
+      }
+
+      if (source.trim().length === 0) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Script is empty: ${scriptPath}` }],
+          details: { error: "empty_script" },
+        };
+      }
+
+      // ── Compile ─────────────────────────────────────────────────────
+      let executeFn: (...args: unknown[]) => Promise<unknown>;
+      try {
+        const wrapped = `"use strict";\n${source}`;
+        executeFn = new AsyncFunction(
+          "params", "daemon", "require", "signal", "onUpdate", "ctx",
+          "console", "fetch", "JSON", "Buffer", "setTimeout", "clearTimeout",
+          wrapped,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{
+            type: "text" as const,
+            text: `Syntax error in script: ${msg}\n\nFile: ${scriptPath}\nFix the JavaScript syntax and try again.`,
+          }],
+          details: { error: "syntax_error", message: msg },
+        };
+      }
+
+      // ── Execute ─────────────────────────────────────────────────────
+      try {
+        const result = await executeFn(
+          scriptParams ?? {},
+          daemon,
+          require,
+          signal,
+          onUpdate ?? ((_update: unknown) => {}),
+          ctx ?? { cwd: process.cwd() },
+          console,
+          fetch,
+          JSON,
+          Buffer,
+          setTimeout,
+          clearTimeout,
+        );
+
+        if (!result || typeof result !== "object" || !Array.isArray((result as any).content)) {
+          return {
+            isError: true,
+            content: [{
+              type: "text" as const,
+              text: `Script must return { content: [{ type: 'text', text: '...' }], details?: {...} }.\nGot: ${JSON.stringify(result)}\n\nFile: ${scriptPath}`,
+            }],
+            details: { error: "invalid_return" },
+          };
+        }
+
+        return result as { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> | undefined };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{
+            type: "text" as const,
+            text: `Script execution failed: ${msg}\n\nFile: ${scriptPath}\nCheck for runtime errors, undefined variables, or broken require() calls.`,
+          }],
+          details: { error: "execution_failed", message: msg },
+        };
+      }
     },
   });
 }

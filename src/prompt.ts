@@ -39,6 +39,29 @@ to interact with pages visually, and other tools alongside them.
 | browser_wait | Wait N seconds |
 | browser_wait_for_load | Wait for document.readyState === 'complete' |
 | browser_handle_dialog | Accept or dismiss a JS dialog |
+| browser_run_script | Execute a temporary script file with daemon access (write script to disk, then run) |
+
+### Temporary Scripts
+
+When the built-in tools aren't enough for a multi-step workflow, write a temporary
+script to disk and execute it with browser_run_script. The script runs in the
+harness process with direct access to the browser daemon and Node.js APIs.
+
+\`\`\`
+write("/tmp/scrape-pages.js", \`
+  const results = [];
+  for (const url of params.urls) {
+    await daemon.cdp("Page.navigate", { url });
+    await new Promise(r => setTimeout(r, 2000));
+    const data = await daemon.evaluateJS("document.title");
+    results.push({ url, title: data });
+  }
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+\`)
+browser_run_script("/tmp/scrape-pages.js", { urls: [...] })
+\`\`\`
+
+Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON, Buffer, setTimeout, clearTimeout.
 
 ### Common Patterns
 
@@ -73,6 +96,11 @@ browser_list_tabs() → see all open tabs with targetIds
 browser_switch_tab(targetId: "...") → switch to a tab
 browser_screenshot() → visually inspect the page
 browser_execute_js("document.querySelector('.main').innerText") → extract content
+\`\`\`
+
+**Temporary Scripts (extending the harness):**
+\`\`\`
+write("/tmp/extract.js", "...script with daemon access...") → browser_run_script("/tmp/extract.js")
 \`\`\`
 `;
 }

@@ -73,9 +73,7 @@ That's it. Try:
 
 | Tool | What it does |
 |------|--------------|
-| `list_dynamic_tools` | List tools registered this session |
-| `register_tool` | Add a new tool from JS — callable next turn |
-| `remove_tool` | Retire a registered tool |
+| `browser_run_script` | Execute a temporary script file with daemon access |
 
 ---
 
@@ -152,29 +150,30 @@ browser_press_key("v", { modifiers: 4 })   // Cmd+V
 browser_press_key("T", { modifiers: 10 })  // Ctrl+Shift+T
 ```
 
-### Writing your own tool mid-task
+### Writing a temporary script
 
-When the built-ins aren't enough, `register_tool` injects a new one — available on the next turn.
+When the built-ins aren't enough, write a script to disk and run it with `browser_run_script`.
 
 ```js
-register_tool({
-  name: "scrape_results",
-  implementation: `
-    const data = await daemon.evaluateJS(\`
-      JSON.stringify(
-        Array.from(document.querySelectorAll('${params.selector}'))
-          .map(el => el.textContent.trim())
-      )
-    \`);
-    return {
-      content: [{ type: "text", text: data }],
-      details: { items: JSON.parse(data) },
-    };
-  `,
-});
+// 1. Write the script to disk
+write("/tmp/scrape-results.js", `
+  const data = await daemon.evaluateJS(\`
+    JSON.stringify(
+      Array.from(document.querySelectorAll('${params.selector}'))
+        .map(el => el.textContent.trim())
+    )
+  \`);
+  return {
+    content: [{ type: "text", text: data }],
+    details: { items: JSON.parse(data) },
+  };
+`)
+
+// 2. Execute it
+browser_run_script("/tmp/scrape-results.js", { selector: ".result" })
 ```
 
-Tool implementations receive `params`, `daemon`, `require`, `signal`, `onUpdate`, `ctx`, plus the standard JS globals.
+Scripts receive `params`, `daemon`, `require`, `signal`, `onUpdate`, `ctx`, plus the standard JS globals. The script is on disk — auditable and re-runnable.
 
 ---
 
@@ -201,7 +200,7 @@ Tool implementations receive `params`, `daemon`, `require`, `signal`, `onUpdate`
 
 ## Security
 
-This extension drives your real Chrome. The agent can see open tabs, read page content, submit forms, and act inside authenticated sessions. `register_tool` evaluates JavaScript in the pi process with full `require` access — review any dynamic tool you didn't write yourself.
+This extension drives your real Chrome. The agent can see open tabs, read page content, submit forms, and act inside authenticated sessions. `browser_run_script` evaluates JavaScript in the pi process with full `require` access — review any temporary scripts the agent writes to `/tmp/` before executing them.
 
 ---
 
