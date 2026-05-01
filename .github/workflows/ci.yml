@@ -33,4 +33,4 @@ jobs:
         run: npm run typecheck
 
       - name: Verify npm package
-        run: npm pack --dry-run
+        run: npm pack --dry-run > /dev/null
