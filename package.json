@@ -28,6 +28,7 @@
   "files": [
     "src/",
     "skills/",
+    "assets/",
     "tsconfig.json",
     "LICENSE",
     "README.md",

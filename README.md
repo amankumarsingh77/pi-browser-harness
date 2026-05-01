@@ -7,8 +7,11 @@ Full browser control for pi agents. Navigate, click, type, screenshot, and extra
 ## Quick Start
 
 ```bash
-# 1. Install (from this repo, until published to npm)
-pi install git:github.com/amankumarsingh77/pi-browser-harness
+# 1. Install
+pi install npm:pi-browser-harness
+
+# Or install from GitHub:
+# pi install git:github.com/amankumarsingh77/pi-browser-harness
 
 # 2. Enable Chrome remote debugging
 #    Open chrome://inspect/#remote-debugging in Chrome,
