@@ -270,53 +270,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_viewport_resize
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_viewport_resize",
-    label: "Browser Viewport Resize",
-    description:
-      "Resize the browser viewport. Useful for responsive testing or when a page " +
-      "requires a specific viewport width. Adjusts both the visible viewport and " +
-      "the device pixel ratio.",
-    promptSnippet: "Resize the browser viewport (width, height, deviceScaleFactor)",
-    promptGuidelines: [
-      "Use browser_viewport_resize for responsive testing or when a page needs specific dimensions.",
-      "width and height are in CSS pixels (not device pixels).",
-      "deviceScaleFactor defaults to 1. Use 2 for HiDPI/Retina emulation.",
-      "Resizing may cause layout shifts — take a screenshot afterward to confirm.",
-    ],
-    parameters: Type.Object({
-      width: Type.Number({ description: "Viewport width in CSS pixels" }),
-      height: Type.Number({ description: "Viewport height in CSS pixels" }),
-      deviceScaleFactor: Type.Optional(Type.Number({ description: "Device pixel ratio. Default: 1" })),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-        await daemon.setViewportSize(
-          params.width,
-          params.height,
-          params.deviceScaleFactor,
-        );
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Viewport resized to ${params.width}x${params.height}${params.deviceScaleFactor ? ` @${params.deviceScaleFactor}x` : ""}.`,
-          }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Viewport resize failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_drag_and_drop
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
