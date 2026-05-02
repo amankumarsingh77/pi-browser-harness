@@ -720,48 +720,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_handle_dialog
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_handle_dialog",
-    label: "Browser Handle Dialog",
-    description:
-      "Handle a JavaScript dialog (alert, confirm, prompt, beforeunload). Use when browser_page_info reports an open dialog.",
-    promptSnippet: "Accept or dismiss a JavaScript dialog (alert/confirm/prompt)",
-    promptGuidelines: [
-      "Check browser_page_info first — if it returns a dialog, use browser_handle_dialog before any other browser actions.",
-      "JS dialogs freeze the page's JS thread, so no other interaction works until the dialog is handled.",
-      'Use action: "accept" for alerts and confirms, "dismiss" to cancel. For prompts, provide promptText.',
-    ],
-    parameters: Type.Object({
-      action: Type.String({ description: '"accept" or "dismiss"' }),
-      promptText: Type.Optional(Type.String({ description: 'Text to enter for prompt dialogs (only used with "accept")' })),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-
-        if (params.action === "accept") {
-          await daemon.cdp("Page.handleJavaScriptDialog", {
-            accept: true,
-            ...(params.promptText !== undefined ? { promptText: params.promptText } : {}),
-          });
-        } else {
-          await daemon.cdp("Page.handleJavaScriptDialog", { accept: false });
-        }
-
-        return { content: [{ type: "text" as const, text: `Dialog ${params.action}ed.` }], details: undefined };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Dialog handling failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_download
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({

@@ -5,6 +5,7 @@ import { clickTool } from "./domains/click";
 import { typeTool, pressKeyTool, dispatchKeyTool } from "./domains/keyboard";
 import { pageInfoTool, waitTool, waitForLoadTool } from "./domains/page";
 import { scrollTool } from "./domains/scroll";
+import { handleDialogTool } from "./domains/dialog";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -15,6 +16,7 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   pageInfoTool,
   waitTool,
   waitForLoadTool,
+  handleDialogTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
