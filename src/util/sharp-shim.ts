@@ -23,8 +23,8 @@ export type SharpLoad =
 export const loadSharp = async (): Promise<SharpLoad> => {
   let mod: unknown;
   try {
-    // sharp is an optional peer dependency; it may not be installed.
-    // @ts-expect-error sharp is an optional peer dependency not required at compile time
+    // sharp is an optional dependency; it may not be installed.
+    // @ts-ignore — optional peer dependency not required at compile time
     mod = await import("sharp");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
