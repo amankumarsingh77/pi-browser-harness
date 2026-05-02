@@ -14,6 +14,7 @@ import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
 import { httpGetTool, getNetworkLogTool } from "./domains/network";
+import { executeJsTool, runScriptTool } from "./domains/js";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -42,6 +43,8 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   dragAndDropTool,
   httpGetTool,
   getNetworkLogTool,
+  executeJsTool,
+  runScriptTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
