@@ -1,11 +1,10 @@
-import { writeFile } from "node:fs/promises";
 import { Type, type Static } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
 import { Coords, MouseButton } from "../schemas/common";
-import { screenshotPath } from "../util/paths";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
+import { captureWithCrosshair } from "./screenshot";
 
 const ClickArgs = Type.Object({
   ...Coords.properties,
@@ -58,16 +57,11 @@ export const clickTool = defineBrowserTool({
     const clicked = await dispatchClick(client, args);
     if (!clicked.success) return clicked;
     if (process.env["BH_DEBUG_CLICKS"]) {
-      // Plain screenshot for now; the crosshair overlay returns in Task 14
-      // (domains/screenshot.ts) once sharp-shim lands.
-      const path = screenshotPath(client.namespace, "png");
-      const shot = await client.session().call("Page.captureScreenshot", { format: "png" });
-      if (shot.success) {
-        const data = (shot.data as { data: string }).data;
-        await writeFile(path, Buffer.from(data, "base64"));
+      const debug = await captureWithCrosshair(client, { x: args.x, y: args.y });
+      if (debug.success) {
         return ok({
-          text: `Clicked at (${args.x}, ${args.y})\n[DEBUG] Screenshot: ${path}`,
-          details: { debugScreenshotPath: path, x: args.x, y: args.y },
+          text: `Clicked at (${args.x}, ${args.y})\n[DEBUG] Overlay screenshot: ${debug.data.path}`,
+          details: { debugScreenshotPath: debug.data.path, x: args.x, y: args.y },
         });
       }
     }
