@@ -32,6 +32,34 @@ export type BrowserClient = {
 const HEALTH_TTL_MS = 30_000;
 const PAGE_INFO_TTL_MS = 1_000;
 
+const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
+  if (typeof v !== "object" || v === null) {
+    return err(cdpError("invalid_response", "page info payload is not an object"));
+  }
+  const o = v as Readonly<Record<string, unknown>>;
+  const fields: ReadonlyArray<readonly [string, "string" | "number"]> = [
+    ["url", "string"], ["title", "string"],
+    ["w", "number"], ["h", "number"],
+    ["sx", "number"], ["sy", "number"],
+    ["pw", "number"], ["ph", "number"],
+  ];
+  for (const [k, t] of fields) {
+    if (typeof o[k] !== t) {
+      return err(cdpError("invalid_response", `page info field ${k} has wrong type (expected ${t})`));
+    }
+  }
+  return ok({
+    url: o["url"] as string,
+    title: o["title"] as string,
+    width: o["w"] as number,
+    height: o["h"] as number,
+    scrollX: o["sx"] as number,
+    scrollY: o["sy"] as number,
+    pageWidth: o["pw"] as number,
+    pageHeight: o["ph"] as number,
+  });
+};
+
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
   const transport = createCdpTransport();
   const session = createCdpSession(transport);
@@ -110,15 +138,16 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     const raw = await evaluateJs(expr);
     if (!raw.success) return raw;
     if (typeof raw.data !== "string") return err(cdpError("invalid_response", "page info evaluation did not return a string"));
-    const parsedRaw = JSON.parse(raw.data) as { url: string; title: string; w: number; h: number; sx: number; sy: number; pw: number; ph: number };
-    const info: PageInfo = {
-      url: parsedRaw.url, title: parsedRaw.title,
-      width: parsedRaw.w, height: parsedRaw.h,
-      scrollX: parsedRaw.sx, scrollY: parsedRaw.sy,
-      pageWidth: parsedRaw.pw, pageHeight: parsedRaw.ph,
-    };
-    pageCache = { info, at: Date.now() };
-    return ok(info);
+    let parsedRaw: unknown;
+    try {
+      parsedRaw = JSON.parse(raw.data);
+    } catch (e) {
+      return err(cdpError("invalid_response", `page info JSON.parse failed: ${e instanceof Error ? e.message : String(e)}`));
+    }
+    const info = parsePageInfoPayload(parsedRaw);
+    if (!info.success) return info;
+    pageCache = { info: info.data, at: Date.now() };
+    return ok(info.data);
   };
 
   const pageInfo = async (): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>> => {
@@ -142,7 +171,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     const r = await session.switchTo(targetId);
     if (!r.success) return r;
     pageCache = null;
-    await session.call("Runtime.evaluate", { expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title` });
+    // Best-effort: mark the tab title with a green circle so the user can
+    // see which tab the agent attached to. CSP or detached frames may
+    // block the eval; we don't surface that as a switchTab failure.
+    await session.call("Runtime.evaluate", {
+      expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
+    });
     return ok(undefined);
   };
 

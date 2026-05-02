@@ -21,6 +21,8 @@ export const createCdpSession = (transport: CdpTransport): CdpSession => {
   let dialog: DialogInfo | null = null;
   let pageInfoDirty = false;
 
+  let activeConsumer: Promise<void> = Promise.resolve();
+
   const consumeEvents = async (): Promise<void> => {
     for await (const ev of transport.events()) {
       if (ev.method === "Page.javascriptDialogOpening") {
@@ -32,25 +34,33 @@ export const createCdpSession = (transport: CdpTransport): CdpSession => {
         };
         continue;
       }
-      if (ev.method === "Page.javascriptDialogClosed") {
-        dialog = null;
-        continue;
-      }
+      // Page.javascriptDialogClosed is intentionally NOT cleared here —
+      // the dialog stays in the buffer until takeDialog() is called.
+      // This prevents fast dismiss flows from dropping a dialog the agent
+      // was about to read. (Fix for spec §7 predictability bug #2.)
       if (ev.method === "Page.frameNavigated" || ev.method === "Page.loadEventFired") {
         pageInfoDirty = true;
       }
     }
   };
 
-  void consumeEvents();
+  const restartConsumer = (): void => {
+    activeConsumer = activeConsumer.then(() => consumeEvents()).catch(() => undefined);
+  };
+
+  restartConsumer();
   transport.onClose(() => {
     sessionId = null;
     targetId = null;
-    dialog = null;
     pageInfoDirty = false;
-    void consumeEvents();
+    // Do NOT clear `dialog` here — same rationale as inside consumeEvents:
+    // the agent may have a pending takeDialog() call that should still see it.
+    restartConsumer();
   });
 
+  // TODO(perf): the four enable calls are sequential here for predictability.
+  // Switching to Promise.all over a single WS pipelines the round-trips and
+  // saves ~3× on tab-switch latency. Defer until session.ts has tests.
   const enableDomains = async (sid: string): Promise<void> => {
     for (const d of ["Page", "DOM", "Runtime", "Network"]) {
       await transport.request(`${d}.enable`, {}, { sessionId: sid });
