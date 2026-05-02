@@ -6,10 +6,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { execSync } from "node:child_process";
 import type { BrowserDaemon } from "./daemon";
+import { t } from "./i18n";
 
 export function registerSetupCommand(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   pi.registerCommand("browser-setup", {
-    description: "Connect pi to your Chrome browser",
+    description: t("setup.command"),
     handler: async (_args, ctx) => {
       await runSetup(ctx, daemon);
     },
@@ -17,24 +18,24 @@ export function registerSetupCommand(pi: ExtensionAPI, daemon: BrowserDaemon): v
 }
 
 async function runSetup(ctx: ExtensionContext, daemon: BrowserDaemon): Promise<void> {
-  ctx.ui.notify("browser setup: checking Chrome...", "info");
+  ctx.ui.notify(t("setup.checking"), "info");
 
   // Step 1: Check Chrome is running
   const chromeRunning = checkChromeRunning();
   if (!chromeRunning) {
     ctx.ui.notify(
-      "Chrome/Chromium/Edge not detected. Please start your browser and retry /browser-setup.",
+      t("setup.notDetected"),
       "error",
     );
     return;
   }
-  ctx.ui.notify("Chrome is running ✓", "info");
+  ctx.ui.notify(t("setup.running"), "info");
 
   // Step 2: Try to connect to Chrome DevTools
-  ctx.ui.notify("Connecting to Chrome DevTools...", "info");
+  ctx.ui.notify(t("setup.connecting"), "info");
   try {
     await daemon.start();
-    ctx.ui.notify("Connected to Chrome ✓", "info");
+    ctx.ui.notify(t("setup.connected"), "info");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const lower = msg.toLowerCase();
@@ -45,35 +46,26 @@ async function runSetup(ctx: ExtensionContext, daemon: BrowserDaemon): Promise<v
       lower.includes("econnrefused") ||
       lower.includes("cannot reach chrome devtools")
     ) {
-      ctx.ui.notify(
-        "Chrome remote debugging needs to be enabled.\n\n" +
-          "Open chrome://inspect/#remote-debugging in your browser, tick the\n" +
-          "\"Discover network targets\" / Allow checkbox, then run /browser-setup again.\n\n" +
-          "Or set BU_CDP_WS to a remote browser WebSocket URL.",
-        "warning",
-      );
+      ctx.ui.notify(t("setup.remoteDebugging"), "warning");
       return;
     }
 
-    ctx.ui.notify(`Connection failed: ${msg}`, "error");
+    ctx.ui.notify(t("setup.connectionFailed", { message: msg }), "error");
     return;
   }
 
   // Step 3: Verify with test navigation
-  ctx.ui.notify("Testing browser control...", "info");
+  ctx.ui.notify(t("setup.testing"), "info");
   try {
     await daemon.newTab("https://github.com");
     const info = await daemon.getPageInfo();
     if ("dialog" in info) {
       await daemon.cdp("Page.handleJavaScriptDialog", { accept: true });
     }
-    ctx.ui.notify(
-      `Browser control verified ✓\nNavigated to: ${"url" in info ? info.url : "github.com"}`,
-      "info",
-    );
+    ctx.ui.notify(t("setup.verified", { url: "url" in info ? info.url : "github.com" }), "info");
   } catch (err) {
     ctx.ui.notify(
-      `Browser connected but test navigation failed: ${err instanceof Error ? err.message : String(err)}`,
+      t("setup.testNavigationFailed", { message: err instanceof Error ? err.message : String(err) }),
       "warning",
     );
   }
