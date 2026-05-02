@@ -56,7 +56,7 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.legacy.json",
     "prepublishOnly": "tsc --noEmit"
   },
   "publishConfig": {

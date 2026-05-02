@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false,
+    "noPropertyAccessFromIndexSignature": false
+  },
+  "include": [
+    "src/daemon.ts",
+    "src/tools.ts",
+    "src/index.ts",
+    "src/protocol.ts",
+    "src/renderers.ts",
+    "src/setup.ts",
+    "src/state.ts",
+    "src/prompt.ts"
+  ]
+}

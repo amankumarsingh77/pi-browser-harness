@@ -4,15 +4,31 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/util/**/*.ts",
+    "src/cdp/**/*.ts",
+    "src/client.ts",
+    "src/domains/**/*.ts",
+    "src/schemas/**/*.ts",
+    "src/registry.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }
