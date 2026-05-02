@@ -8,6 +8,7 @@ import { scrollTool } from "./domains/scroll";
 import { handleDialogTool } from "./domains/dialog";
 import { screenshotTool } from "./domains/screenshot";
 import { navigateTool, openUrlsTool } from "./domains/navigate";
+import { goBackTool, goForwardTool, reloadTool } from "./domains/history";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -22,6 +23,9 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   screenshotTool,
   navigateTool,
   openUrlsTool,
+  goBackTool,
+  goForwardTool,
+  reloadTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
