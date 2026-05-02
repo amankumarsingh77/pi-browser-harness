@@ -26,6 +26,7 @@ import { registerRenderers } from "./renderers";
 import { registerSetupCommand } from "./setup";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { cleanupTempDirs, registerTools } from "./tools";
+import { initI18n, t } from "./i18n";
 
 export default function browserHarnessExtension(pi: ExtensionAPI) {
   // ── Resolve namespace ──────────────────────────────────────────────────────
@@ -59,18 +60,18 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
     description: "Show browser connection status and current page",
     handler: async (_args, ctx) => {
       if (!daemon) {
-        ctx.ui.notify("Browser daemon not started. Run /browser-setup first.", "warning");
+        ctx.ui.notify(t("status.notStarted"), "warning");
         return;
       }
 
       const status = daemon.getStatus();
       const lines = [
-        `Browser: ${status.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
-        `Session: ${status.sessionId || "none"}`,
+        t("status.browser", { state: status.alive ? t("status.connected") : t("status.disconnected") }),
+        t("status.session", { sessionId: status.sessionId || "none" }),
       ];
 
       if (status.remoteBrowserId) {
-        lines.push(`Browser ID: ${status.remoteBrowserId}`);
+        lines.push(t("status.browserId", { browserId: status.remoteBrowserId }));
       }
 
       // Try to get current page info
@@ -78,7 +79,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
         try {
           const info = await daemon.getPageInfo();
           if ("dialog" in info) {
-            lines.push(`\n⚠️  Dialog open: ${info.dialog.type} — "${info.dialog.message}"`);
+            lines.push(`\n${t("status.dialogOpen", { type: info.dialog.type, message: info.dialog.message })}`);
           } else {
             lines.push(`\nCurrent Page:`);
             lines.push(`  URL: ${info.url}`);
@@ -98,18 +99,18 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
     description: "Restart the browser daemon",
     handler: async (_args, ctx) => {
       if (!daemon) {
-        ctx.ui.notify("Browser daemon not started.", "warning");
+        ctx.ui.notify(t("reload.notStarted"), "warning");
         return;
       }
 
-      ctx.ui.notify("Restarting browser daemon...", "info");
+      ctx.ui.notify(t("reload.start"), "info");
       try {
         await daemon.stop();
         await daemon.start();
-        ctx.ui.notify("Browser daemon restarted ✓", "info");
+        ctx.ui.notify(t("reload.done"), "info");
       } catch (err) {
         ctx.ui.notify(
-          `Restart failed: ${err instanceof Error ? err.message : String(err)}`,
+          t("reload.failed", { message: err instanceof Error ? err.message : String(err) }),
           "error",
         );
       }
@@ -149,9 +150,9 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
 
     // Update status
     if (daemon.getStatus().alive) {
-      ctx.ui.setStatus("browser", "🟢 Browser connected");
+      ctx.ui.setStatus("browser", t("ui.connected"));
     } else {
-      ctx.ui.setStatus("browser", "🔴 Browser — run /browser-setup");
+      ctx.ui.setStatus("browser", t("ui.setupNeeded"));
     }
   });
 
