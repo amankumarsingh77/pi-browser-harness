@@ -552,6 +552,265 @@ export class BrowserDaemon {
     return events;
   }
 
+  /** Find an iframe target by URL substring. Use with evaluateJS(targetId). */
+  async findIframeTarget(urlSubstr: string): Promise<string | null> {
+    const result = (await this.cdp("Target.getTargets")) as {
+      targetInfos: Array<{ targetId: string; type: string; url: string }>;
+    };
+    for (const t of result.targetInfos) {
+      if (t.type === "iframe" && t.url?.includes(urlSubstr)) {
+        return t.targetId;
+      }
+    }
+    return null;
+  }
+
+  /** Set files on a file input element via DOM.setFileInputFiles. */
+  async uploadFile(selector: string, filePath: string): Promise<void> {
+    // First try CDP-level file input (DOM.setFileInputFiles)
+    try {
+      const doc = (await this.cdp("DOM.getDocument", { depth: -1 })) as {
+        root: { nodeId: number };
+      };
+      const qResult = (await this.cdp("DOM.querySelector", {
+        nodeId: doc.root.nodeId,
+        selector,
+      })) as { nodeId: number };
+
+      if (qResult.nodeId && qResult.nodeId !== 0) {
+        await this.cdp("DOM.setFileInputFiles", {
+          files: [filePath],
+          nodeId: qResult.nodeId,
+        });
+        // Verify the file was actually set
+        const verify = await this.evaluateJS(
+          `document.querySelector(${JSON.stringify(selector)})?.files?.length || 0`
+        );
+        if (verify && Number(verify) > 0) return;
+      }
+    } catch {
+      // CDP approach failed — fall through to JS fallback
+    }
+
+    // Fallback: try JS-based approach for broader compatibility
+    // Read file content from Node.js and inject as a File object via JS
+    try {
+      const { readFile, stat } = await import("node:fs/promises");
+      const { basename } = await import("node:path");
+      const fileBuffer = await readFile(filePath);
+      const fileStat = await stat(filePath);
+      const fileName = basename(filePath);
+      const base64 = fileBuffer.toString("base64");
+      const mimeType = fileName.endsWith(".png") ? "image/png"
+        : fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") ? "image/jpeg"
+        : fileName.endsWith(".pdf") ? "application/pdf"
+        : fileName.endsWith(".json") ? "application/json"
+        : "text/plain";
+
+      const js = `
+        (() => {
+          const input = document.querySelector(${JSON.stringify(selector)});
+          if (!input || input.type !== 'file') {
+            throw new Error('File input not found for selector: ${selector.replace(/'/g, "\\'")}');
+          }
+          const binaryStr = atob(${JSON.stringify(base64)});
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+          const file = new File([bytes], ${JSON.stringify(fileName)}, { type: ${JSON.stringify(mimeType)}, lastModified: ${fileStat.mtimeMs} });
+          const dt = new DataTransfer();
+          dt.items.add(file);
+          input.files = dt.files;
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          return input.files.length;
+        })()
+      `;
+      const fileCount = await this.evaluateJS(js);
+      if (!fileCount || Number(fileCount) === 0) {
+        throw new Error("File was not set on input (JS fallback also failed)");
+      }
+    } catch (jsErr) {
+      throw new Error(
+        `Upload failed: ${jsErr instanceof Error ? jsErr.message : String(jsErr)}`
+      );
+    }
+  }
+
+  /**
+   * Configure download behavior: set download directory and disable the
+   * save-as prompt. Afterwards, drain Browser.downloadProgress events to
+   * confirm downloads started.
+   */
+  async setDownloadBehavior(downloadPath: string): Promise<void> {
+    await this.cdp("Browser.setDownloadBehavior", {
+      behavior: "allow",
+      downloadPath,
+      eventsEnabled: true,
+    });
+  }
+
+  /**
+   * Resize the viewport via Emulation.setDeviceMetricsOverride.
+   * Adjusts the visible viewport and device pixel ratio.
+   */
+  async setViewportSize(
+    width: number,
+    height: number,
+    deviceScaleFactor?: number,
+  ): Promise<void> {
+    await this.cdp("Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: deviceScaleFactor ?? 1,
+      mobile: false,
+    });
+    this.invalidatePageInfoCache();
+  }
+
+  /**
+   * Capture screenshot with an optional debug crosshair overlay at (x, y).
+   * When debugClicks is true, overlays a red crosshair to verify click accuracy.
+   */
+  async captureScreenshotWithDebugOverlay(
+    outputPath: string,
+    clickX: number,
+    clickY: number,
+    format: "png" | "jpeg" = "png",
+    quality = 80,
+  ): Promise<string> {
+    await this.captureScreenshot(outputPath, false, format, quality);
+    try {
+      // sharp is an optional dependency — import at runtime to avoid TS static analysis
+      const sharp: any = await new Function("return import('sharp')")()
+        .then((m: any) => m.default || m)
+        .catch(() => null);
+      if (!sharp) return outputPath;
+      const dpr = (await this.evaluateJS("window.devicePixelRatio")) as number || 1;
+      const metadata = await sharp(outputPath).metadata();
+      const w = metadata.width || 0;
+      const h = metadata.height || 0;
+      const px = Math.round(clickX * dpr);
+      const py = Math.round(clickY * dpr);
+      const r = Math.round(15 * dpr);
+
+      // Create SVG overlay for the crosshair
+      const svg = `<svg width="${w}" height="${h}">
+  <circle cx="${px}" cy="${py}" r="${r}" fill="none" stroke="red" stroke-width="${Math.max(2, Math.round(3 * dpr))}" opacity="0.8"/>
+  <line x1="${px - r - Math.round(5 * dpr)}" y1="${py}" x2="${px + r + Math.round(5 * dpr)}" y2="${py}" stroke="red" stroke-width="${Math.max(1, Math.round(2 * dpr))}" opacity="0.8"/>
+  <line x1="${px}" y1="${py - r - Math.round(5 * dpr)}" x2="${px}" y2="${py + r + Math.round(5 * dpr)}" stroke="red" stroke-width="${Math.max(1, Math.round(2 * dpr))}" opacity="0.8"/>
+</svg>`;
+      await sharp(outputPath)
+        .composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+        .toFile(outputPath + ".debug");
+      const { rename } = await import("node:fs/promises");
+      await rename(outputPath + ".debug", outputPath);
+    } catch {
+      // sharp not installed — overlay skipped
+    }
+    return outputPath;
+  }
+
+  /**
+   * Perform a drag-and-drop sequence via Input.dispatchDragEvent.
+   * Moves from (startX, startY) to (endX, endY) with optional DataTransfer.
+   */
+  async dragAndDrop(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    dataTransfer?: Record<string, string>,
+  ): Promise<void> {
+    // CDP expects data.items for DataTransfer content
+    const data = dataTransfer
+      ? {
+          items: Object.entries(dataTransfer).map(([mimeType, data]) => ({
+            mimeType,
+            data: Buffer.from(data).toString("base64"),
+          })),
+          dragOperationsMask: 1, // 1 = Copy
+        }
+      : { items: [], dragOperationsMask: 1 };
+
+    // mousePressed to initiate drag
+    await this.cdp("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: startX,
+      y: startY,
+      button: "left",
+      clickCount: 1,
+    });
+
+    // dragEnter at start
+    await this.cdp("Input.dispatchDragEvent", {
+      type: "dragEnter",
+      x: startX,
+      y: startY,
+      data,
+      modifiers: 0,
+    });
+
+    // dragOver at intermediate points + destination
+    const steps = 5;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const ix = startX + (endX - startX) * t;
+      const iy = startY + (endY - startY) * t;
+      await this.cdp("Input.dispatchDragEvent", {
+        type: "dragOver",
+        x: Math.round(ix),
+        y: Math.round(iy),
+        data,
+        modifiers: 0,
+      });
+    }
+
+    // drop at end position
+    await this.cdp("Input.dispatchDragEvent", {
+      type: "drop",
+      x: endX,
+      y: endY,
+      data,
+      modifiers: 0,
+    });
+
+    // mouseReleased
+    await this.cdp("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: endX,
+      y: endY,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+
+  /** Print the current page to PDF. Returns the file path. */
+  async printToPDF(outputPath: string): Promise<string> {
+    const result = (await this.cdp("Page.printToPDF", {
+      printBackground: true,
+      preferCSSPageSize: true,
+    })) as { data: string };
+    const buf = Buffer.from(result.data, "base64");
+    await writeFile(outputPath, buf);
+    return outputPath;
+  }
+
+  /**
+   * Get buffered network events (Network.requestWillBeSent, Network.responseReceived).
+   * Filters to the specified event types and optionally limits the count.
+   */
+  async getNetworkLog(
+    eventTypes: string[] = [
+      "Network.requestWillBeSent",
+      "Network.responseReceived",
+    ],
+    limit = 50,
+  ): Promise<CDPEvent[]> {
+    const events = await this.drainEvents();
+    return events
+      .filter((e) => eventTypes.includes(e.method))
+      .slice(-limit);
+  }
+
   /** Get virtual key code for a key name or character */
   getVirtualKeyCode(key: string): number {
     return VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);

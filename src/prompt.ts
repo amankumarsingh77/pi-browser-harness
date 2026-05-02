@@ -102,5 +102,17 @@ browser_execute_js("document.querySelector('.main').innerText") → extract cont
 \`\`\`
 write("/tmp/extract.js", "...script with daemon access...") → browser_run_script("/tmp/extract.js")
 \`\`\`
+
+### Additional Tools
+
+| Tool | Purpose |
+|------|---------|
+| browser_upload_file | Upload a file to a file input (bypasses file picker) |
+| browser_dispatch_key | Dispatch a DOM KeyboardEvent on a specific element (for React/Vue inputs) |
+| browser_download | Configure download directory and disable save-as prompts |
+| browser_viewport_resize | Resize the viewport for responsive testing |
+| browser_drag_and_drop | Perform drag-and-drop from one coordinate to another |
+| browser_print_to_pdf | Print the current page to a PDF file |
+| browser_get_network_log | Get buffered network request/response events |
 `;
 }

@@ -181,6 +181,8 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
     promptGuidelines: [
       "Use browser_page_info to quickly check what page you're on and whether a JS dialog is blocking interaction.",
       "If browser_page_info returns a dialog, use browser_handle_dialog before any other browser actions.",
+      "JS dialogs freeze the page's JS thread, so no other interaction works until the dialog is handled.",
+      "browser_page_info auto-detects alert, confirm, prompt, and beforeunload dialogs.",
     ],
     parameters: Type.Object({}),
     async execute() {
@@ -330,6 +332,8 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
       "Capture a browser_screenshot BEFORE clicking to find the right coordinates.",
       "Capture another browser_screenshot AFTER clicking to verify the action worked.",
       "Compositor-level clicks pass through iframes, shadow DOM, and cross-origin content — no selector needed.",
+      "If a click doesn't register, try setting BH_DEBUG_CLICKS=1 to get annotated screenshots showing exact click positions.",
+      "For React/Vue components that don't respond to clicks, try browser_dispatch_key to send DOM-level events.",
     ],
     parameters: Type.Object({
       x: Type.Number({ description: "X coordinate in CSS pixels from left edge of viewport" }),
@@ -354,6 +358,28 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           button: params.button || "left",
           clickCount: params.clicks || 1,
         });
+
+        // Debug click overlay (when BH_DEBUG_CLICKS is set)
+        if (process.env.BH_DEBUG_CLICKS) {
+          try {
+            const debugPath = nextScreenshotPath();
+            await daemon.captureScreenshotWithDebugOverlay(
+              debugPath,
+              params.x,
+              params.y,
+            );
+            return {
+              content: [{
+                type: "text" as const,
+                text: `Clicked at (${params.x}, ${params.y})\n[DEBUG] Overlay screenshot: ${debugPath}`,
+              }],
+              details: { debugScreenshotPath: debugPath },
+            };
+          } catch {
+            // Overlay failed — still report the click
+          }
+        }
+
         return { content: [{ type: "text" as const, text: `Clicked at (${params.x}, ${params.y})` }], details: undefined };
       } catch (err) {
         return {
@@ -487,6 +513,7 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
       "Use browser_scroll to scroll pages. Default deltaY=-300 scrolls down.",
       "Positive deltaY scrolls up, negative scrolls down.",
       "Capture browser_screenshot after scrolling to see the new viewport content.",
+      "If mouseWheel scroll doesn't work on a specific element, try browser_execute_js to scroll a container directly: e.scrollTop += 300 or e.scrollIntoView().",
     ],
     parameters: Type.Object({
       deltaY: Type.Optional(Type.Number({ description: "Vertical scroll delta in pixels. Negative = down, positive = up. Default: -300" })),
@@ -516,6 +543,14 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           }
         }
 
+        // Establish mouse position before wheel — Chrome requires a prior
+        // mouseMoved for mouseWheel to hit the correct element.
+        await daemon.cdp("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: cx,
+          y: cy,
+        });
+
         await daemon.cdp("Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x: cx,
@@ -536,6 +571,45 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // browser_upload_file
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_upload_file",
+    label: "Browser Upload File",
+    description:
+      "Set files on a file input element via CDP DOM.setFileInputFiles. " +
+      "Use this to upload files to forms without clicking the file picker dialog. " +
+      "The path must be an absolute file path accessible from the machine running Chrome.",
+    promptSnippet: "Upload a file to a file input element (bypasses file picker)",
+    promptGuidelines: [
+      "Use browser_upload_file to set files on <input type='file'> elements — much faster than clicking the file picker.",
+      "The selector must match a file input element (<input type='file'>).",
+      "The filePath must be an absolute path on the machine where Chrome is running.",
+      "To create a temp file first, use write or bash to create the file, then upload it.",
+    ],
+    parameters: Type.Object({
+      selector: Type.String({ description: "CSS selector for the file input element" }),
+      filePath: Type.String({ description: "Absolute path to the file to upload" }),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+        await daemon.uploadFile(params.selector, params.filePath);
+        return {
+          content: [{ type: "text" as const, text: `Set file "${params.filePath}" on "${params.selector}".` }],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Upload failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // browser_screenshot
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
@@ -549,11 +623,14 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
       "After every browser_click, browser_type, browser_scroll, or browser_navigate, capture a screenshot to VERIFY the action worked.",
       "Screenshots are the fastest way to find click targets, notice hidden blockers, and decide next steps.",
       "Never assume an action worked. Always re-screenshot to confirm.",
+      "For HiDPI/Retina screens, use maxDim (e.g. 2000) to keep images within LLM pixel limits.",
+      "Use format: 'jpeg' with quality: 80 for 2-5x smaller files on complex pages — faster transfers and lower context cost.",
     ],
     parameters: Type.Object({
       fullPage: Type.Optional(Type.Boolean({ description: "Capture the full scrollable page (not just viewport). Default: false" })),
       format: Type.Optional(Type.String({ description: "Image format: 'png' or 'jpeg'. Default: 'png'" })),
       quality: Type.Optional(Type.Number({ description: "JPEG quality 1-100. Default: 80. Ignored for PNG." })),
+      maxDim: Type.Optional(Type.Number({ description: "If set, auto-resize the screenshot so neither dimension exceeds this (e.g. 2000 for LLM pixel limits). Requires sharp." })),
     }),
     async execute(_id, params) {
       try {
@@ -562,9 +639,39 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         const format = (params.format === "jpeg" ? "jpeg" : "png") as "png" | "jpeg";
         const quality = typeof params.quality === "number" ? params.quality : 80;
         await daemon.captureScreenshot(path, params.fullPage === true, format, quality);
+
+        // Auto-resize if maxDim is specified and sharp is available
+        let resizeNote = "";
+        const maxDim = typeof params.maxDim === "number" ? params.maxDim : undefined;
+        if (maxDim) {
+          try {
+            // sharp is an optional dependency — import at runtime
+            const sharp: any = await new Function("return import('sharp')")()
+              .then((m: any) => m.default || m)
+              .catch(() => null);
+            if (!sharp) { resizeNote = " (maxDim ignored: install sharp for auto-resize)"; }
+            else {
+            const metadata = await sharp(path).metadata();
+            const w = metadata.width || 0;
+            const h = metadata.height || 0;
+            if (Math.max(w, h) > maxDim) {
+              await sharp(path)
+                .resize(maxDim, maxDim, { fit: "inside", withoutEnlargement: true })
+                .toFile(path + ".resized");
+              const { rename } = await import("node:fs/promises");
+              await rename(path + ".resized", path);
+              resizeNote = ` (resized from ${w}x${h} to fit ${maxDim}px)`;
+            }
+            }
+          } catch {
+            // sharp not installed — skip resize
+            resizeNote = " (maxDim ignored: install sharp for auto-resize)";
+          }
+        }
+
         const fmtLabel = format === "jpeg" ? ` (JPEG q${quality})` : "";
         return {
-          content: [{ type: "text" as const, text: `Screenshot saved: ${path}${params.fullPage ? " (full page)" : ""}${fmtLabel}` }],
+          content: [{ type: "text" as const, text: `Screenshot saved: ${path}${params.fullPage ? " (full page)" : ""}${fmtLabel}${resizeNote}` }],
           details: { path, format, quality },
         };
       } catch (err) {
@@ -752,6 +859,8 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
       "Use browser_execute_js for extracting structured data from the page (text, attributes, JSON from embedded scripts).",
       "Use browser_execute_js for DOM inspection when coordinates from screenshots aren't sufficient.",
       "For bulk data extraction, prefer browser_http_get for API calls — it's 10-50x faster than browser DOM scraping.",
+      "To execute JS inside an iframe, first find the iframe target via browser_list_tabs (includeChrome: true to see iframe targets), then pass targetId to browser_execute_js.",
+      "Compositor clicks (browser_click) already pass through iframes — only use iframe JS when you need to read/change iframe DOM.",
     ],
     parameters: Type.Object({
       expression: Type.String({ description: "JavaScript expression to evaluate. 'return' statements are auto-wrapped in IIFE." }),
@@ -911,6 +1020,53 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // browser_dispatch_key
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_dispatch_key",
+    label: "Browser Dispatch Key",
+    description:
+      "Dispatch a DOM KeyboardEvent on a matched element. Use this when a site " +
+      "reacts to synthetic DOM key events more reliably than raw CDP input events " +
+      "(e.g., React/Vue comboboxes, autocomplete widgets, custom form inputs).",
+    promptSnippet: "Dispatch a DOM KeyboardEvent on a specific element (for framework inputs)",
+    promptGuidelines: [
+      "Use browser_dispatch_key when browser_press_key doesn't work — some React/Vue components only listen for DOM-level events.",
+      "The selector must match a single element that can receive focus.",
+      "Common keys: 'Enter' (13), 'Tab' (9), 'Escape' (27), 'Backspace' (8), ' ' (32).",
+      "Try browser_press_key first. Only fall back to browser_dispatch_key if the page ignores raw CDP input.",
+    ],
+    parameters: Type.Object({
+      selector: Type.String({ description: "CSS selector for the target element" }),
+      key: Type.String({ description: "Key to dispatch (e.g. 'Enter', 'Tab', 'Escape', 'a', ' ')" }),
+      event: Type.Optional(Type.String({ description: "DOM event type: 'keydown', 'keypress', or 'keyup'. Default: 'keypress'" })),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+
+        const key = params.key;
+        const eventType = params.event || "keypress";
+        const keyCode = daemon.getVirtualKeyCode(key);
+
+        const expression = `(()=>{const e=document.querySelector(${JSON.stringify(params.selector)});if(e){e.focus();e.dispatchEvent(new KeyboardEvent(${JSON.stringify(eventType)},{key:${JSON.stringify(key)},code:${JSON.stringify(key)},keyCode:${keyCode},which:${keyCode},bubbles:true}))}else{throw new Error('No element found for selector: ${params.selector.replace(/'/g, "\\'")}')}})()`;
+
+        const result = await daemon.evaluateJS(expression);
+        return {
+          content: [{ type: "text" as const, text: `Dispatched ${eventType} "${key}" (keyCode: ${keyCode}) on "${params.selector}".` }],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Dispatch key failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // browser_wait
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
@@ -1020,8 +1176,307 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_open_urls
+  // browser_download
   // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_download",
+    label: "Browser Download",
+    description:
+      "Configure the download directory and disable the save-as prompt for this tab. " +
+      "Call before triggering downloads to control where files are saved. " +
+      "After the download is triggered, call again with eventsOnly: true to check for download progress events.",
+    promptSnippet: "Configure browser download behavior (directory, no prompts)",
+    promptGuidelines: [
+      "Use browser_download BEFORE clicking a download link or triggering a file save.",
+      "Set downloadPath to an absolute directory path (e.g. /tmp/downloads).",
+      "This disables the browser's save-as prompt, so files save automatically.",
+      "To check if a download started, call again with eventsOnly: true and look for Browser.downloadProgress events.",
+    ],
+    parameters: Type.Object({
+      downloadPath: Type.Optional(Type.String({ description: "Absolute path to the download directory. Default: /tmp/browser-downloads" })),
+      eventsOnly: Type.Optional(Type.Boolean({ description: "If true, only check for recent download progress events. Default: false" })),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+
+        if (params.eventsOnly) {
+          // Drain events and filter for download progress
+          const events = await daemon.drainEvents();
+          const downloads = events.filter(
+            (e) =>
+              e.method === "Browser.downloadProgress" ||
+              e.method === "Browser.downloadWillBegin",
+          );
+          if (downloads.length === 0) {
+            return {
+              content: [{ type: "text" as const, text: "No recent download events found." }],
+              details: undefined,
+            };
+          }
+          const lines = downloads.map((e) => {
+            const p = e.params as Record<string, unknown>;
+            return [
+              `Event: ${e.method}`,
+              `  URL: ${p.url || "?"}`,
+              `  State: ${p.state || "?"}`,
+              p.receivedBytes !== undefined
+                ? `  Received: ${p.receivedBytes} / ${p.totalBytes || "?"}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n");
+          });
+          return {
+            content: [{ type: "text" as const, text: lines.join("\n\n") }],
+            details: undefined,
+          };
+        }
+
+        const dlPath = params.downloadPath || "/tmp/browser-downloads";
+        await daemon.setDownloadBehavior(dlPath);
+        return {
+          content: [{ type: "text" as const, text: `Downloads will save to: ${dlPath} (save-as prompt disabled).` }],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Download config failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // browser_viewport_resize
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_viewport_resize",
+    label: "Browser Viewport Resize",
+    description:
+      "Resize the browser viewport. Useful for responsive testing or when a page " +
+      "requires a specific viewport width. Adjusts both the visible viewport and " +
+      "the device pixel ratio.",
+    promptSnippet: "Resize the browser viewport (width, height, deviceScaleFactor)",
+    promptGuidelines: [
+      "Use browser_viewport_resize for responsive testing or when a page needs specific dimensions.",
+      "width and height are in CSS pixels (not device pixels).",
+      "deviceScaleFactor defaults to 1. Use 2 for HiDPI/Retina emulation.",
+      "Resizing may cause layout shifts — take a screenshot afterward to confirm.",
+    ],
+    parameters: Type.Object({
+      width: Type.Number({ description: "Viewport width in CSS pixels" }),
+      height: Type.Number({ description: "Viewport height in CSS pixels" }),
+      deviceScaleFactor: Type.Optional(Type.Number({ description: "Device pixel ratio. Default: 1" })),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+        await daemon.setViewportSize(
+          params.width,
+          params.height,
+          params.deviceScaleFactor,
+        );
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Viewport resized to ${params.width}x${params.height}${params.deviceScaleFactor ? ` @${params.deviceScaleFactor}x` : ""}.`,
+          }],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Viewport resize failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // browser_drag_and_drop
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_drag_and_drop",
+    label: "Browser Drag And Drop",
+    description:
+      "Perform a drag-and-drop operation from one viewport coordinate to another. " +
+      "Use for kanban boards, file uploads via drag, reorderable lists, and " +
+      "other drag-based UIs.",
+    promptSnippet: "Drag from (startX, startY) and drop at (endX, endY)",
+    promptGuidelines: [
+      "Use browser_drag_and_drop for drag-based interactions like moving cards, reordering items, or drag-to-upload.",
+      "Capture a screenshot BEFORE to find the start and end coordinates.",
+      "Capture a screenshot AFTER to verify the drag-and-drop worked.",
+      "If the target site expects DOM-level drag events (not just compositor events), try browser_upload_file instead for file uploads.",
+    ],
+    parameters: Type.Object({
+      startX: Type.Number({ description: "X coordinate to start dragging from" }),
+      startY: Type.Number({ description: "Y coordinate to start dragging from" }),
+      endX: Type.Number({ description: "X coordinate to drop at" }),
+      endY: Type.Number({ description: "Y coordinate to drop at" }),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+        await daemon.dragAndDrop(
+          params.startX,
+          params.startY,
+          params.endX,
+          params.endY,
+        );
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Dragged from (${params.startX}, ${params.startY}) to (${params.endX}, ${params.endY}).`,
+          }],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Drag-and-drop failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // browser_print_to_pdf
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_print_to_pdf",
+    label: "Browser Print to PDF",
+    description:
+      "Print the current page to a PDF file via Page.printToPDF. " +
+      "Saves the PDF to the specified path. Includes background colors and respects CSS page size.",
+    promptSnippet: "Print the current page to a PDF file",
+    promptGuidelines: [
+      "Use browser_print_to_pdf to save a page as PDF for archiving, sharing, or offline reading.",
+      "The output path should be an absolute file path (e.g. /tmp/page.pdf).",
+      "The page must be fully loaded before printing — use browser_wait_for_load first.",
+    ],
+    parameters: Type.Object({
+      outputPath: Type.Optional(Type.String({ description: "Absolute path for the PDF file. Default: /tmp/browser-print-<timestamp>.pdf" })),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+        const outputPath =
+          params.outputPath ||
+          join(tmpdir(), `browser-print-${Date.now()}.pdf`);
+        await daemon.printToPDF(outputPath);
+        return {
+          content: [{ type: "text" as const, text: `PDF saved: ${outputPath}` }],
+          details: { path: outputPath },
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Print to PDF failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+    renderCall(_, theme) {
+      return new Text(`📄 Printing to PDF...`, 0, 0);
+    },
+    renderResult(result, _options, theme) {
+      const path = (result.details as { path?: string })?.path;
+      return new Text(
+        path
+          ? theme.fg("accent", `📄 PDF: ${path}`)
+          : `📄 PDF saved`,
+        0,
+        0,
+      );
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // browser_get_network_log
+  // ═══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "browser_get_network_log",
+    label: "Browser Get Network Log",
+    description:
+      "Get buffered network events (Network.requestWillBeSent, Network.responseReceived) " +
+      "from the current page. Useful for inspecting XHR/fetch calls the page makes, " +
+      "finding API endpoints, or debugging network issues.",
+    promptSnippet: "Get buffered network request/response events",
+    promptGuidelines: [
+      "Use browser_get_network_log to find API endpoints the page calls — often 10x faster than DOM scraping.",
+      "Network events are buffered since the last call to this tool — call it after performing actions that trigger XHR/fetch.",
+      "Filter by eventType to focus on specific events: 'Network.requestWillBeSent' (URLs, headers) or 'Network.responseReceived' (status, response headers).",
+      "Combine with browser_http_get to replay captured API calls.",
+    ],
+    parameters: Type.Object({
+      eventTypes: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Network event types to filter. Default: ['Network.requestWillBeSent', 'Network.responseReceived']",
+        }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "Max events to return. Default: 50" })),
+    }),
+    async execute(_id, params) {
+      try {
+        await daemon.ensureAlive();
+        const events = await daemon.getNetworkLog(
+          params.eventTypes,
+          params.limit,
+        );
+
+        if (events.length === 0) {
+          return {
+            content: [{ type: "text" as const, text: "No buffered network events. Perform actions that trigger XHR/fetch calls first." }],
+            details: undefined,
+          };
+        }
+
+        const lines = events.map((e) => {
+          const p = e.params as Record<string, unknown>;
+          if (e.method === "Network.requestWillBeSent") {
+            const req = (p.request as Record<string, unknown>) || {};
+            return [
+              `→ ${req.method || "GET"} ${req.url || p.documentURL || "?"}`,
+              `  Type: ${p.type || "?"}`,
+            ].join("\n");
+          }
+          if (e.method === "Network.responseReceived") {
+            const resp = (p.response as Record<string, unknown>) || {};
+            return [
+              `← ${resp.status || "?"} ${resp.statusText || ""} ${resp.url || p.url || "?"}`,
+              `  MIME: ${resp.mimeType || "?"}`,
+            ].join("\n");
+          }
+          return `${e.method}: ${JSON.stringify(p).slice(0, 200)}`;
+        });
+
+        const raw = `${events.length} network event(s):\n\n${lines.join("\n\n")}`;
+        const { text, fullOutputPath } = await applyTruncation(raw, "net");
+
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { count: events.length, fullOutputPath },
+        };
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: `Network log failed: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+    },
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // browser_open_urls
+  // ═══════════════════════════════════════════════════════════════════════
   pi.registerTool({
     name: "browser_open_urls",
     label: "Browser Open URLs",
