@@ -22,17 +22,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": [
-    "src/util/**/*.ts",
-    "src/cdp/**/*.ts",
-    "src/client.ts",
-    "src/domains/**/*.ts",
-    "src/schemas/**/*.ts",
-    "src/registry.ts",
-    "src/index.ts",
-    "src/setup.ts",
-    "src/state.ts",
-    "src/prompt.ts"
-  ],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }
