@@ -38,16 +38,17 @@ const profileDirs = (): ReadonlyArray<string> => {
 const probePort = (port: number): Promise<Result<void, CdpError>> =>
   new Promise((resolve) => {
     const sock = netConnect({ host: "127.0.0.1", port });
+    let settled = false;
     const finish = (r: Result<void, CdpError>): void => {
+      if (settled) return;
+      settled = true;
+      sock.setTimeout(0);
       sock.destroy();
       resolve(r);
     };
     sock.setTimeout(1000, () => finish(err(cdpError("discovery_failed", "probe timeout"))));
     sock.once("error", (e) => finish(err(cdpError("discovery_failed", e.message))));
-    sock.once("connect", () => {
-      sock.end();
-      resolve(ok(undefined));
-    });
+    sock.once("connect", () => finish(ok(undefined)));
   });
 
 const waitForPort = async (port: number): Promise<Result<void, CdpError>> => {
@@ -72,8 +73,11 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
     let raw: string;
     try {
       raw = await readFile(portFile, "utf8");
-    } catch {
-      continue;
+    } catch (e) {
+      // Node fs errors carry .code; see ErrnoException
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === undefined) continue;
+      return err(cdpError("discovery_failed", `failed to read ${portFile}: ${e instanceof Error ? e.message : String(e)}`));
     }
     const lines = raw.trim().split("\n");
     if (lines.length < 2) continue;
