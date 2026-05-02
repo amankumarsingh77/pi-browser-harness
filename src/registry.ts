@@ -1,9 +1,10 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "./client";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "./util/tool";
+import { clickTool } from "./domains/click";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
-  // Domain tools registered as they're migrated, one per domain file.
+  clickTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {

@@ -21,8 +21,10 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { BrowserDaemon } from "./daemon";
+import { type BrowserClient, createBrowserClient } from "./client";
 import { getBrowserSystemPrompt } from "./prompt";
 import { registerRenderers } from "./renderers";
+import { registerAllTools } from "./registry";
 import { registerSetupCommand } from "./setup";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { cleanupTempDirs, registerTools } from "./tools";
@@ -35,6 +37,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
   // ── State ──────────────────────────────────────────────────────────────────
   let state: BrowserState = defaultState(namespace);
   let daemon: BrowserDaemon | null = null;
+  let client: BrowserClient | null = null;
 
   // ── Tool initialization flag ───────────────────────────────────────────────
   let toolsRegistered = false;
@@ -133,9 +136,13 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
       // Don't block — user can run /browser-setup later
     }
 
+    client = createBrowserClient({ namespace: state.namespace });
+    try { await client.start(); } catch { /* surfaced via tool errors */ }
+
     // Register tools (once)
     if (!toolsRegistered && daemon) {
       registerTools(pi, daemon);
+      if (client) registerAllTools(pi, client);
       toolsRegistered = true;
     }
 
@@ -169,6 +176,11 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
         // best-effort
       }
       daemon = null;
+    }
+
+    if (client) {
+      try { await client.stop(); } catch { /* best-effort */ }
+      client = null;
     }
 
     toolsRegistered = false;

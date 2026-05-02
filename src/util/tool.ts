@@ -56,9 +56,14 @@ export type BrowserToolDefinition<S extends TSchema> = {
   readonly ensureAlive?: boolean;
 };
 
-// Type-erased entry for arrays. AnyBrowserToolDefinition lets the registry
-// hold a heterogeneous list without losing the per-tool Static<S> binding.
-export type AnyBrowserToolDefinition = BrowserToolDefinition<TSchema>;
+// Type-erased entry for the registry's heterogeneous TOOLS array.
+// renderCall accepts `never` so any concrete args type satisfies it via
+// function-parameter contravariance (a handler that takes SpecificT is
+// assignable to one that takes never, because never is a subtype of everything).
+export type AnyBrowserToolDefinition = Omit<BrowserToolDefinition<TSchema>, "renderCall" | "renderResult"> & {
+  readonly renderCall?: (args: never, theme: Theme) => Component;
+  readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
+};
 
 export const defineBrowserTool = <S extends TSchema>(
   def: BrowserToolDefinition<S>,
@@ -94,11 +99,15 @@ const toToolResult = (
   };
 };
 
-export const registerBrowserTool = <S extends TSchema>(
+export const registerBrowserTool = (
   pi: ExtensionAPI,
   client: BrowserClient,
-  def: BrowserToolDefinition<S>,
+  def: AnyBrowserToolDefinition,
 ): void => {
+  // AnyBrowserToolDefinition is type-erased; we recover the schema-typed surface
+  // by casting def to the generic form. The cast is safe because defineBrowserTool
+  // ensures the handler, parameters, and renderCall were all created with the same S.
+  type S = TSchema;
   const td: ToolDefinition<S> = {
     name: def.name,
     label: def.label,
@@ -110,7 +119,9 @@ export const registerBrowserTool = <S extends TSchema>(
       ? {
           renderCall: (args: Static<S>, theme: Theme, _ctx: Parameters<NonNullable<ToolDefinition<S>["renderCall"]>>[2]) =>
             // Non-null assertion safe: this branch only runs when renderCall was provided.
-            def.renderCall!(args, theme),
+            // Cast from never->Component to unknown->Component: safe because at runtime
+            // args is always the concrete Static<S> value the tool was defined with.
+            (def.renderCall as (args: unknown, theme: Theme) => Component)(args, theme),
         }
       : {}),
     ...(def.renderResult
