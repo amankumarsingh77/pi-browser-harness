@@ -115,7 +115,13 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     persistState(pi, state);
     if (client) {
-      try { await client.stop(); } catch { /* best-effort */ }
+      try {
+        await client.stop();
+      } catch (e) {
+        // Shutdown is best-effort, but a stuck stop() points at a transport
+        // bug worth surfacing for debugging.
+        console.warn("[pi-browser-harness] client.stop() failed during shutdown:", e);
+      }
       client = null;
     }
     toolsRegistered = false;

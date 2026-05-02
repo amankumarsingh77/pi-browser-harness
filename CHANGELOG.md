@@ -6,7 +6,7 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ### Internal rewrite
 
-- Per-domain module split: every tool now lives in its own `src/domains/<name>.ts` file. The 1140-line `daemon.ts` and 2277-line `tools.ts` are gone; the largest single file is now `src/client.ts` at ~180 LOC.
+- Per-domain module split: every tool now lives in its own `src/domains/<name>.ts` file. The 1140-line `daemon.ts` and 2277-line `tools.ts` are gone; the three largest files are now `src/cdp/transport.ts` (~220 LOC), `src/client.ts` (~220 LOC), and `src/domains/js.ts` (~200 LOC).
 - New transport/session/client split: `BrowserDaemon` class replaced with `createBrowserClient()` factory composing a `CdpTransport` (factory) and `CdpSession` (factory).
 - All tool handlers now return `Result<T, E>`; one `defineBrowserTool` helper converts to pi's `ToolDefinition` and supplies a uniform `details` shape: `{ ok: true, ... }` on success, `{ ok: false, kind, message, ... }` on error.
 - Strict TypeScript flags enabled (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noPropertyAccessFromIndexSignature`, `noUnusedLocals`, `noUnusedParameters`). Zero `any` in the codebase. All boundary `as` casts documented.

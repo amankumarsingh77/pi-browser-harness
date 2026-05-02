@@ -156,6 +156,9 @@ export const createCdpTransport = (): CdpTransport => {
           clearTimeout(timer);
           ws = null;
           cleanup("WebSocket closed");
+          // If onopen already settled the connect promise, this settle is a no-op
+          // (guarded by `settled`). cleanup() above still runs unconditionally so
+          // pending requests are rejected and the event queue is rotated.
           settle(err(cdpError("transport_closed", "CDP WebSocket closed")));
         };
       });

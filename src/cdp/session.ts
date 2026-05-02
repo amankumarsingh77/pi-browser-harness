@@ -45,7 +45,13 @@ export const createCdpSession = (transport: CdpTransport): CdpSession => {
   };
 
   const restartConsumer = (): void => {
-    activeConsumer = activeConsumer.then(() => consumeEvents()).catch(() => undefined);
+    activeConsumer = activeConsumer.then(() => consumeEvents()).catch((e: unknown) => {
+      // The .then() chain calls consumeEvents() which iterates the transport's
+      // events() AsyncIterable. The iterable resolves cleanly on close (returns
+      // {done:true}); any rejection here is an unexpected bug in the event
+      // handler, not a normal termination. Surface it on stderr so it's not lost.
+      console.warn("[pi-browser-harness] CDP event consumer crashed:", e);
+    });
   };
 
   restartConsumer();
