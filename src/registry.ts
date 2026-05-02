@@ -13,6 +13,7 @@ import { listTabsTool, currentTabTool, switchTabTool, newTabTool } from "./domai
 import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
+import { httpGetTool, getNetworkLogTool } from "./domains/network";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -39,6 +40,8 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   printToPdfTool,
   viewportResizeTool,
   dragAndDropTool,
+  httpGetTool,
+  getNetworkLogTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
