@@ -8,5 +8,3 @@ export const SPECIAL_KEYS: ReadonlyArray<string> = Object.keys(VIRTUAL_KEY_CODES
 
 export const virtualKeyCode = (key: string): number =>
   VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
-
-export const keyCode = (key: string): string => key;
