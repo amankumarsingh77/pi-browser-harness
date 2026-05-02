@@ -9,6 +9,7 @@ import { handleDialogTool } from "./domains/dialog";
 import { screenshotTool } from "./domains/screenshot";
 import { navigateTool, openUrlsTool } from "./domains/navigate";
 import { goBackTool, goForwardTool, reloadTool } from "./domains/history";
+import { listTabsTool, currentTabTool, switchTabTool, newTabTool } from "./domains/tabs";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -26,6 +27,10 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   goBackTool,
   goForwardTool,
   reloadTool,
+  listTabsTool,
+  currentTabTool,
+  switchTabTool,
+  newTabTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
