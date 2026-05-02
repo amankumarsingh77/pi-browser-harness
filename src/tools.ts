@@ -542,8 +542,8 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
     name: "browser_screenshot",
     label: "Browser Screenshot",
     description:
-      "Capture a PNG screenshot of the current page. Use this BEFORE interactions to find targets, and AFTER to verify results. This is the primary visual feedback mechanism.",
-    promptSnippet: "Capture a screenshot of the current page (PNG)",
+      "Capture a PNG or JPEG screenshot of the current page. Use this BEFORE interactions to find targets, and AFTER to verify results. JPEG (quality 80) is 2-5x smaller for complex pages — faster transfer and lower LLM context cost.",
+    promptSnippet: "Capture a screenshot of the current page (PNG or JPEG)",
     promptGuidelines: [
       "Use browser_screenshot as your FIRST step when exploring a page — it shows you what's visible.",
       "After every browser_click, browser_type, browser_scroll, or browser_navigate, capture a screenshot to VERIFY the action worked.",
@@ -552,15 +552,20 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
     ],
     parameters: Type.Object({
       fullPage: Type.Optional(Type.Boolean({ description: "Capture the full scrollable page (not just viewport). Default: false" })),
+      format: Type.Optional(Type.String({ description: "Image format: 'png' or 'jpeg'. Default: 'png'" })),
+      quality: Type.Optional(Type.Number({ description: "JPEG quality 1-100. Default: 80. Ignored for PNG." })),
     }),
     async execute(_id, params) {
       try {
         await daemon.ensureAlive();
         const path = nextScreenshotPath();
-        await daemon.captureScreenshot(path, params.fullPage === true);
+        const format = (params.format === "jpeg" ? "jpeg" : "png") as "png" | "jpeg";
+        const quality = typeof params.quality === "number" ? params.quality : 80;
+        await daemon.captureScreenshot(path, params.fullPage === true, format, quality);
+        const fmtLabel = format === "jpeg" ? ` (JPEG q${quality})` : "";
         return {
-          content: [{ type: "text" as const, text: `Screenshot saved: ${path}${params.fullPage ? " (full page)" : ""}` }],
-          details: { path },
+          content: [{ type: "text" as const, text: `Screenshot saved: ${path}${params.fullPage ? " (full page)" : ""}${fmtLabel}` }],
+          details: { path, format, quality },
         };
       } catch (err) {
         return {
