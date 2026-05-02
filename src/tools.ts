@@ -170,54 +170,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_page_info
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_page_info",
-    label: "Browser Page Info",
-    description:
-      "Get current page state: URL, title, viewport size, scroll position, page dimensions. If a JS dialog (alert/confirm/prompt) is open, returns dialog info instead.",
-    promptSnippet: "Get current page URL, title, viewport, and scroll position",
-    promptGuidelines: [
-      "Use browser_page_info to quickly check what page you're on and whether a JS dialog is blocking interaction.",
-      "If browser_page_info returns a dialog, use browser_handle_dialog before any other browser actions.",
-      "JS dialogs freeze the page's JS thread, so no other interaction works until the dialog is handled.",
-      "browser_page_info auto-detects alert, confirm, prompt, and beforeunload dialogs.",
-    ],
-    parameters: Type.Object({}),
-    async execute() {
-      try {
-        await daemon.ensureAlive();
-        const info = await daemon.getPageInfo();
-
-        if ("dialog" in info) {
-          return {
-            content: [{
-              type: "text" as const,
-              text: `⚠️  DIALOG OPEN: ${info.dialog.type}\nMessage: ${info.dialog.message}${info.dialog.defaultPrompt ? `\nDefault: ${info.dialog.defaultPrompt}` : ""}\n\nUse browser_handle_dialog to accept or dismiss.`,
-            }],
-            details: undefined,
-          };
-        }
-
-        return {
-          content: [{
-            type: "text" as const,
-            text: `URL: ${info.url}\nTitle: ${info.title}\nViewport: ${info.width}x${info.height}\nScroll: (${info.scrollX}, ${info.scrollY})\nPage size: ${info.pageWidth}x${info.pageHeight}`,
-          }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_go_back
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
@@ -764,73 +716,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
         0,
         0,
       );
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // browser_wait
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_wait",
-    label: "Browser Wait",
-    description: "Wait for a specified number of seconds.",
-    promptSnippet: "Wait for N seconds (default 1s)",
-    promptGuidelines: [
-      "Use browser_wait for simple delays. Prefer browser_wait_for_load after navigation.",
-    ],
-    parameters: Type.Object({
-      seconds: Type.Optional(Type.Number({ description: "Seconds to wait. Default: 1" })),
-    }),
-    async execute(_id, params) {
-      const sec = params.seconds || 1;
-      await new Promise((r) => setTimeout(r, sec * 1000));
-      return { content: [{ type: "text" as const, text: `Waited ${sec}s.` }], details: undefined };
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // browser_wait_for_load
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_wait_for_load",
-    label: "Browser Wait For Load",
-    description:
-      "Wait for the page to finish loading (document.readyState === 'complete'). Returns false on timeout. Note: SPAs may need additional waiting after this.",
-    promptSnippet: "Wait for document.readyState === 'complete'",
-    promptGuidelines: [
-      "Use browser_wait_for_load after browser_navigate or browser_new_tab.",
-      "This checks document.readyState only. Single-page apps may still be loading data after this returns true.",
-      "For SPAs, use browser_execute_js to check for specific elements after browser_wait_for_load.",
-    ],
-    parameters: Type.Object({
-      timeout: Type.Optional(Type.Number({ description: "Max seconds to wait. Default: 15" })),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-        const timeout = params.timeout || 15;
-        const deadline = Date.now() + timeout * 1000;
-
-        while (Date.now() < deadline) {
-          const state = await daemon.evaluateJS("document.readyState");
-          if (state === "complete") {
-            return { content: [{ type: "text" as const, text: "Page loaded (readyState: complete)." }], details: undefined };
-          }
-          await new Promise((r) => setTimeout(r, 300));
-        }
-
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Page load timed out after ${timeout}s. Current state unknown.` }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Wait failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
     },
   });
 
