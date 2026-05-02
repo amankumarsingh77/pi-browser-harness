@@ -130,7 +130,18 @@ The script is written to disk, so it's auditable and re-runnable.
 
 **Script bindings:**
 - `params` — the arguments passed to browser_run_script
-- `daemon` — browser daemon (daemon.cdp(), daemon.evaluateJS(), daemon.getPageInfo(), etc.)
+- `daemon` — browser daemon with these methods:
+  - `daemon.evaluateJs(expression)` — run JS in the current page
+  - `daemon.pageInfo()` — get current page info or dialog
+  - `daemon.listTabs()` — returns `{ success, data: [{ targetId, url, title }] }`
+  - `daemon.switchTab(targetId)` — switch to a tab by full targetId
+  - `daemon.newTab(url?)` — open and switch to a new tab
+  - `daemon.current()` — returns `{ targetId, url?, title? }`
+  - `daemon.session(targetId)` — returns a session object for raw CDP:
+    - `session.call(method, params?)` — CDP command on the page target
+    - `session.callOnTarget(method, params, sessionId)` — CDP on a specific session
+    - `session.callBrowser(method, params?)` — CDP on the browser target
+    - `session.takeDialog()` — get/dismiss pending dialog
 - `require` — Node.js require() (use 'fs', 'path', 'crypto', etc.)
 - `signal` — AbortSignal for cancellation
 - `onUpdate` — progress callback: onUpdate({ content: [{ type: 'text', text: '...' }] })
@@ -140,9 +151,9 @@ The script is written to disk, so it's auditable and re-runnable.
 **Example — a script that extracts structured data:**
 ```javascript
 // /tmp/extract-products.js
-const info = await daemon.getPageInfo();
-if ("dialog" in info) throw new Error("Dialog is blocking: " + info.dialog.message);
-const data = await daemon.evaluateJS(`
+const info = await daemon.pageInfo();
+if (info && "dialog" in info) throw new Error("Dialog is blocking: " + info.dialog.message);
+const data = await daemon.evaluateJs(`
   JSON.stringify(Array.from(document.querySelectorAll('${params.rowSelector}')).map(el => ({
     title: el.querySelector('${params.titleSelector}')?.textContent?.trim(),
     price: el.querySelector('${params.priceSelector}')?.textContent?.trim(),
@@ -196,6 +207,8 @@ browser_execute_js("!!document.querySelector('.loaded-content')")
 - **Stale session**: Run `/browser-reload-daemon` to restart the daemon
 - **Dialog blocking**: Run browser_page_info to detect it, then browser_handle_dialog
 - **Status check**: Run `/browser-status` to see daemon health and current page
+- **Screenshot maxDim not working**: Install sharp (`npm install sharp`) for auto-resize support
+- **Google navigation fails**: Google's anti-bot detection may reject CDP navigation; use `browser_http_get` to fetch search results instead
 
 ## Architecture
 

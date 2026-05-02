@@ -61,7 +61,7 @@ export const getNetworkLogTool = defineBrowserTool({
   label: "Browser Get Network Log",
   description:
     "Read buffered Network.* CDP events. NOTE: in v0.3 the event stream is consumed internally by the session manager; this tool is a placeholder. Use browser_execute_js with PerformanceObserver as a workaround.",
-  promptSnippet: "Get buffered network events (DEPRECATED in v0.3 — see description)",
+  promptSnippet: "Get buffered network events (DEPRECATED in v0.3 — use browser_execute_js with PerformanceObserver instead)",
   promptGuidelines: [
     "v0.3 routes CDP events through an internal AsyncIterable; a synchronous drain API isn't exposed yet.",
     "For now, use browser_execute_js with PerformanceObserver, performance.getEntries(), or fetch interceptors.",

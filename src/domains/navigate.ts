@@ -22,6 +22,7 @@ export const navigateTool = defineBrowserTool({
     "Use browser_navigate to go to URLs.",
     "Use browser_wait_for_load after browser_navigate to wait for the page to finish loading.",
     "For extracting data from a page you already navigated to, use browser_execute_js or browser_http_get (faster for APIs).",
+    "Note: Google and some sites with strict anti-bot detection may reject CDP navigation. Use browser_http_get for search results.",
   ],
   parameters: NavigateArgs,
   renderCall: (a) => new Text(`🌐 Navigate to ${a.url}`, 0, 0),

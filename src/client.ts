@@ -108,12 +108,26 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     }
     if (Date.now() - lastHealth < HEALTH_TTL_MS) return ok(undefined);
     const probe = await transport.request("Target.getTargets", {}, { sessionId: null, timeoutMs: 2_000 });
-    if (probe.success) {
-      lastHealth = Date.now();
-      return ok(undefined);
+    if (!probe.success) {
+      await stop();
+      return start();
     }
-    await stop();
-    return start();
+    lastHealth = Date.now();
+    // Verify the page session is still responsive (handles the case where the
+    // browser transport is alive but the page target crashed, e.g. localhost died).
+    const jsProbe = await session.call("Runtime.evaluate", {
+      expression: "1", returnByValue: true,
+    }, { timeoutMs: 2_000 });
+    if (!jsProbe.success && jsProbe.error.kind === "session_not_found") {
+      const reattached = await session.attachFirstPage();
+      if (reattached.success) {
+        pageCache = null;
+        return ok(undefined);
+      }
+      await stop();
+      return start();
+    }
+    return ok(undefined);
   };
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {

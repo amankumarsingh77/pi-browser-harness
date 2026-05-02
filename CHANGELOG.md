@@ -2,6 +2,24 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.3.1 — 2026-05-02
+
+### Bug fixes
+
+- **`browser_list_tabs`** now shows full 32-character targetIds instead of truncated `BE9DD1DC…` prefixes. The `browser_list_tabs` → `browser_switch_tab` round-trip is repaired.
+- **`browser_switch_tab`** now supports prefix matching: pass a unique hex prefix (≥8 chars) and it resolves to the full targetId automatically. Ambiguous prefixes return a clear error listing all matching tabs.
+- **`browser_download`** auto-creates the download directory with `mkdir -p` if it doesn't exist. Previously it required a pre-existing writable directory.
+- **`ensureAlive()`** now probes the page session with `Runtime.evaluate("1")` after the transport health check. If the page target has crashed (e.g. localhost server died), it reattaches automatically instead of returning a cryptic `session_not_found` error on the next tool call.
+
+### Docs & metadata
+
+- **`browser_dispatch_key`** prompt guidelines now explicitly note it dispatches a synthetic DOM `KeyboardEvent` and does NOT type text. Point users to `browser_type` / `browser_press_key` for actual text input.
+- **`browser_navigate`** prompt guidelines now warn that Google and strict-anti-bot sites may reject CDP navigation. `browser_http_get` is the recommended workaround.
+- **`browser_get_network_log`** prompt snippet updated with explicit workaround (`browser_execute_js` with `PerformanceObserver`).
+- **`sharp`** added to `optionalDependencies` so `npm install` attempts it (enables `browser_screenshot` `maxDim` auto-resize).
+- **`SKILL.md`** script bindings section updated to document the actual daemon API: `daemon.evaluateJs()`, `daemon.pageInfo()`, `daemon.listTabs()`, `daemon.session().call()`. Example script updated to match.
+- **`SKILL.md`** troubleshooting section now covers `sharp`/`maxDim` and Google anti-bot navigation.
+
 ## 0.3.0 — 2026-05-02
 
 ### Internal rewrite

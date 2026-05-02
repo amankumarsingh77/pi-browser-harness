@@ -12,14 +12,15 @@ export const listTabsTool = defineBrowserTool({
   description: "List all open browser tabs (page targets).",
   promptSnippet: "List browser tabs",
   promptGuidelines: [
-    "Use to find a targetId for browser_switch_tab.",
+    "Use to find a full targetId for browser_switch_tab.",
     "Internal tabs (chrome://) included by default; pass includeInternal=false to exclude them.",
+    "Each tab shows its full 32-char hex targetId — use the exact value with browser_switch_tab.",
   ],
   parameters: ListTabsArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.listTabs(args.includeInternal ?? true);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-    const lines = r.data.map((t, i) => `  [${i}] ${t.targetId.slice(0, 8)}… ${t.url}\n      ${t.title}`);
+    const lines = r.data.map((t, i) => `  [${i}] ${t.targetId} ${t.url}\n      ${t.title}`);
     return ok({
       text: `Tabs (${r.data.length}):\n${lines.join("\n")}`,
       details: { tabs: r.data },
@@ -56,12 +57,43 @@ export const switchTabTool = defineBrowserTool({
   label: "Browser Switch Tab",
   description: "Switch to and attach to a different tab by targetId.",
   promptSnippet: "Switch tabs",
-  promptGuidelines: ["Get a targetId via browser_list_tabs first."],
+  promptGuidelines: [
+    "Get a targetId via browser_list_tabs first.",
+    "Accepts exact targetId or a unique prefix of at least 8 hex characters.",
+  ],
   parameters: SwitchTabArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.switchTab(args.targetId);
+    // Try exact match first
+    let r = await client.switchTab(args.targetId);
+    if (r.success) {
+      return ok({ text: `Switched to ${args.targetId}`, details: { targetId: args.targetId } });
+    }
+    // If exact match failed and input looks like a short prefix (≥8 hex chars), try prefix resolution
+    const isHexPrefix = /^[0-9A-Fa-f]{8,}$/.test(args.targetId);
+    if (!isHexPrefix) {
+      return err({ kind: "cdp_error", message: r.error.message });
+    }
+    const tabs = await client.listTabs(true);
+    if (!tabs.success) return err({ kind: "cdp_error", message: r.error.message });
+    const matches = tabs.data.filter((t) => t.targetId.startsWith(args.targetId));
+    if (matches.length === 0) {
+      return err({ kind: "cdp_error", message: `No tab found with prefix "${args.targetId}"` });
+    }
+    if (matches.length > 1) {
+      const ids = matches.map((t) => t.targetId).join(", ");
+      return err({
+        kind: "invalid_state",
+        message: `Ambiguous prefix "${args.targetId}" matches ${matches.length} tabs: ${ids}`,
+        details: { matches: matches.map((t) => ({ targetId: t.targetId, url: t.url })) },
+      });
+    }
+    const resolved = matches[0]!.targetId;
+    r = await client.switchTab(resolved);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-    return ok({ text: `Switched to ${args.targetId}`, details: { targetId: args.targetId } });
+    return ok({
+      text: `Switched to ${resolved} (resolved from prefix "${args.targetId}")`,
+      details: { targetId: resolved, resolvedPrefix: args.targetId },
+    });
   },
 });
 

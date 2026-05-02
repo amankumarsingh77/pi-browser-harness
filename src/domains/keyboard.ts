@@ -91,6 +91,7 @@ export const dispatchKeyTool = defineBrowserTool({
     "Dispatch a DOM KeyboardEvent on a specific element via JS injection. Use for React/Vue components that listen to synthetic events more reliably than CDP input.",
   promptSnippet: "Dispatch a DOM KeyboardEvent on a specific element",
   promptGuidelines: [
+    "Dispatches a synthetic DOM KeyboardEvent — for React/Vue synthetic event listeners. Does NOT insert text into inputs (use browser_type or browser_press_key for actual typing).",
     "Try browser_press_key first; only use browser_dispatch_key when the page ignores raw CDP key events.",
     "The selector must match exactly one or more elements; zero matches is reported as an error.",
     "eventType defaults to 'keydown'.",

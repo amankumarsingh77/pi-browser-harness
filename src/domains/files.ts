@@ -1,4 +1,4 @@
-import { access, constants, stat, readFile, writeFile } from "node:fs/promises";
+import { mkdir, access, constants, stat, readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import type { BrowserClient } from "../client";
@@ -135,6 +135,14 @@ export const downloadTool = defineBrowserTool({
   ],
   parameters: DownloadArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+    try {
+      await mkdir(args.downloadPath, { recursive: true });
+    } catch (e) {
+      return err({
+        kind: "io_error",
+        message: `Cannot create download directory: ${args.downloadPath} (${e instanceof Error ? e.message : String(e)})`,
+      });
+    }
     try {
       const s = await stat(args.downloadPath);
       if (!s.isDirectory()) {
