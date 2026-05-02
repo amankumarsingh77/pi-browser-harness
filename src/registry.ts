@@ -10,6 +10,7 @@ import { screenshotTool } from "./domains/screenshot";
 import { navigateTool, openUrlsTool } from "./domains/navigate";
 import { goBackTool, goForwardTool, reloadTool } from "./domains/history";
 import { listTabsTool, currentTabTool, switchTabTool, newTabTool } from "./domains/tabs";
+import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -31,6 +32,9 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   currentTabTool,
   switchTabTool,
   newTabTool,
+  uploadFileTool,
+  downloadTool,
+  printToPdfTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {

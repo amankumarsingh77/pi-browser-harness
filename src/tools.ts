@@ -97,47 +97,6 @@ async function applyTruncation(
 
 export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
 // ═══════════════════════════════════════════════════════════════════════════
-  // browser_upload_file
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_upload_file",
-    label: "Browser Upload File",
-    description:
-      "Set files on a file input element via CDP DOM.setFileInputFiles. " +
-      "Use this to upload files to forms without clicking the file picker dialog. " +
-      "The path must be an absolute file path accessible from the machine running Chrome.",
-    promptSnippet: "Upload a file to a file input element (bypasses file picker)",
-    promptGuidelines: [
-      "Use browser_upload_file to set files on <input type='file'> elements — much faster than clicking the file picker.",
-      "The selector must match a file input element (<input type='file'>).",
-      "The filePath must be an absolute path on the machine where Chrome is running.",
-      "To create a temp file first, use write or bash to create the file, then upload it.",
-    ],
-    parameters: Type.Object({
-      selector: Type.String({ description: "CSS selector for the file input element" }),
-      filePath: Type.String({ description: "Absolute path to the file to upload" }),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-        await daemon.uploadFile(params.selector, params.filePath);
-        return {
-          content: [{ type: "text" as const, text: `Set file "${params.filePath}" on "${params.selector}".` }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Upload failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_execute_js
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
@@ -311,80 +270,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_download
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_download",
-    label: "Browser Download",
-    description:
-      "Configure the download directory and disable the save-as prompt for this tab. " +
-      "Call before triggering downloads to control where files are saved. " +
-      "After the download is triggered, call again with eventsOnly: true to check for download progress events.",
-    promptSnippet: "Configure browser download behavior (directory, no prompts)",
-    promptGuidelines: [
-      "Use browser_download BEFORE clicking a download link or triggering a file save.",
-      "Set downloadPath to an absolute directory path (e.g. /tmp/downloads).",
-      "This disables the browser's save-as prompt, so files save automatically.",
-      "To check if a download started, call again with eventsOnly: true and look for Browser.downloadProgress events.",
-    ],
-    parameters: Type.Object({
-      downloadPath: Type.Optional(Type.String({ description: "Absolute path to the download directory. Default: /tmp/browser-downloads" })),
-      eventsOnly: Type.Optional(Type.Boolean({ description: "If true, only check for recent download progress events. Default: false" })),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-
-        if (params.eventsOnly) {
-          // Drain events and filter for download progress
-          const events = await daemon.drainEvents();
-          const downloads = events.filter(
-            (e) =>
-              e.method === "Browser.downloadProgress" ||
-              e.method === "Browser.downloadWillBegin",
-          );
-          if (downloads.length === 0) {
-            return {
-              content: [{ type: "text" as const, text: "No recent download events found." }],
-              details: undefined,
-            };
-          }
-          const lines = downloads.map((e) => {
-            const p = e.params as Record<string, unknown>;
-            return [
-              `Event: ${e.method}`,
-              `  URL: ${p.url || "?"}`,
-              `  State: ${p.state || "?"}`,
-              p.receivedBytes !== undefined
-                ? `  Received: ${p.receivedBytes} / ${p.totalBytes || "?"}`
-                : "",
-            ]
-              .filter(Boolean)
-              .join("\n");
-          });
-          return {
-            content: [{ type: "text" as const, text: lines.join("\n\n") }],
-            details: undefined,
-          };
-        }
-
-        const dlPath = params.downloadPath || "/tmp/browser-downloads";
-        await daemon.setDownloadBehavior(dlPath);
-        return {
-          content: [{ type: "text" as const, text: `Downloads will save to: ${dlPath} (save-as prompt disabled).` }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Download config failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_viewport_resize
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
@@ -477,58 +362,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
           details: undefined,
         };
       }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // browser_print_to_pdf
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_print_to_pdf",
-    label: "Browser Print to PDF",
-    description:
-      "Print the current page to a PDF file via Page.printToPDF. " +
-      "Saves the PDF to the specified path. Includes background colors and respects CSS page size.",
-    promptSnippet: "Print the current page to a PDF file",
-    promptGuidelines: [
-      "Use browser_print_to_pdf to save a page as PDF for archiving, sharing, or offline reading.",
-      "The output path should be an absolute file path (e.g. /tmp/page.pdf).",
-      "The page must be fully loaded before printing — use browser_wait_for_load first.",
-    ],
-    parameters: Type.Object({
-      outputPath: Type.Optional(Type.String({ description: "Absolute path for the PDF file. Default: /tmp/browser-print-<timestamp>.pdf" })),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-        const outputPath =
-          params.outputPath ||
-          join(tmpdir(), `browser-print-${Date.now()}.pdf`);
-        await daemon.printToPDF(outputPath);
-        return {
-          content: [{ type: "text" as const, text: `PDF saved: ${outputPath}` }],
-          details: { path: outputPath },
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Print to PDF failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-    renderCall(_, theme) {
-      return new Text(`📄 Printing to PDF...`, 0, 0);
-    },
-    renderResult(result, _options, theme) {
-      const path = (result.details as { path?: string })?.path;
-      return new Text(
-        path
-          ? theme.fg("accent", `📄 PDF: ${path}`)
-          : `📄 PDF saved`,
-        0,
-        0,
-      );
     },
   });
 
