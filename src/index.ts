@@ -2,8 +2,9 @@
  * pi-browser-harness — browser control extension for pi.
  *
  * Gives pi agents full control of a real Chrome browser via CDP.
- * Spawns the browser-harness daemon, registers browser_* tools,
- * and injects browser control guidance into the system prompt.
+ * Connects to the user's running Chrome (chrome://inspect/#remote-debugging),
+ * registers browser_* tools, and injects browser control guidance into the
+ * system prompt.
  *
  * Install:
  *   pi install npm:pi-browser-harness
@@ -11,42 +12,32 @@
  *
  * Commands:
  *   /browser-setup          — guided setup wizard
- *   /browser-status         — show daemon status and current page
- *   /browser-reload-daemon  — restart the daemon
+ *   /browser-status         — show client status and current page
+ *   /browser-reload-daemon  — restart the browser client
  *
  * Flags:
- *   --browser-namespace <name>  — override BU_NAME (default: auto)
+ *   --browser-namespace <name>   — override namespace (default: auto)
  *   --browser-debug-clicks       — enable debug click overlay
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { BrowserDaemon } from "./daemon";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserClient, createBrowserClient } from "./client";
 import { getBrowserSystemPrompt } from "./prompt";
-import { registerRenderers } from "./renderers";
-import { registerAllTools } from "./registry";
 import { registerSetupCommand } from "./setup";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
-import { cleanupTempDirs, registerTools } from "./tools";
+import { registerAllTools } from "./registry";
+import { cleanupTempDirs } from "./util/truncate";
 
-export default function browserHarnessExtension(pi: ExtensionAPI) {
-  // ── Resolve namespace ──────────────────────────────────────────────────────
+export default function browserHarnessExtension(pi: ExtensionAPI): void {
   const flagNs = pi.getFlag("browser-namespace") as string | undefined;
-  const namespace = flagNs || `pi-${Math.random().toString(36).slice(2, 10)}`;
+  const namespace = flagNs ?? `pi-${Math.random().toString(36).slice(2, 10)}`;
 
-  // ── State ──────────────────────────────────────────────────────────────────
   let state: BrowserState = defaultState(namespace);
-  let daemon: BrowserDaemon | null = null;
   let client: BrowserClient | null = null;
-
-  // ── Tool initialization flag ───────────────────────────────────────────────
   let toolsRegistered = false;
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Flags
-  // ═══════════════════════════════════════════════════════════════════════════
   pi.registerFlag("browser-namespace", {
-    description: "Browser daemon namespace (BU_NAME). Default: auto-generated",
+    description: "Browser daemon namespace. Default: auto-generated",
     type: "string",
   });
   pi.registerFlag("browser-debug-clicks", {
@@ -55,181 +46,95 @@ export default function browserHarnessExtension(pi: ExtensionAPI) {
     default: false,
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Commands
-  // ═══════════════════════════════════════════════════════════════════════════
   pi.registerCommand("browser-status", {
     description: "Show browser connection status and current page",
     handler: async (_args, ctx) => {
-      if (!daemon) {
-        ctx.ui.notify("Browser daemon not started. Run /browser-setup first.", "warning");
+      if (!client) {
+        ctx.ui.notify("Browser client not started. Run /browser-setup first.", "warning");
         return;
       }
-
-      const status = daemon.getStatus();
+      const s = client.status();
       const lines = [
-        `Browser: ${status.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
-        `Session: ${status.sessionId || "none"}`,
+        `Browser: ${s.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
+        `Session: ${s.sessionId ?? "none"}`,
       ];
-
-      if (status.remoteBrowserId) {
-        lines.push(`Browser ID: ${status.remoteBrowserId}`);
-      }
-
-      // Try to get current page info
-      if (status.alive) {
-        try {
-          const info = await daemon.getPageInfo();
-          if ("dialog" in info) {
-            lines.push(`\n⚠️  Dialog open: ${info.dialog.type} — "${info.dialog.message}"`);
+      if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
+      if (s.alive) {
+        const info = await client.pageInfo();
+        if (info.success) {
+          if ("dialog" in info.data) {
+            lines.push(`\n⚠️  Dialog open: ${info.data.dialog.type} — "${info.data.dialog.message}"`);
           } else {
-            lines.push(`\nCurrent Page:`);
-            lines.push(`  URL: ${info.url}`);
-            lines.push(`  Title: ${info.title}`);
-            lines.push(`  Viewport: ${info.width}x${info.height}`);
+            lines.push(
+              `\nCurrent Page:`,
+              `  URL: ${info.data.url}`,
+              `  Title: ${info.data.title}`,
+              `  Viewport: ${info.data.width}x${info.data.height}`,
+            );
           }
-        } catch {
-          lines.push("\n(Could not read page info)");
         }
       }
-
       ctx.ui.notify(lines.join("\n"), "info");
     },
   });
 
   pi.registerCommand("browser-reload-daemon", {
-    description: "Restart the browser daemon",
+    description: "Restart the browser client",
     handler: async (_args, ctx) => {
-      if (!daemon) {
-        ctx.ui.notify("Browser daemon not started.", "warning");
+      if (!client) {
+        ctx.ui.notify("Browser client not started.", "warning");
         return;
       }
-
-      ctx.ui.notify("Restarting browser daemon...", "info");
-      try {
-        await daemon.stop();
-        await daemon.start();
-        ctx.ui.notify("Browser daemon restarted ✓", "info");
-      } catch (err) {
-        ctx.ui.notify(
-          `Restart failed: ${err instanceof Error ? err.message : String(err)}`,
-          "error",
-        );
+      ctx.ui.notify("Restarting browser client...", "info");
+      await client.stop();
+      const r = await client.start();
+      if (r.success) {
+        ctx.ui.notify("Browser client restarted ✓", "info");
+      } else {
+        ctx.ui.notify(`Restart failed: ${r.error.message}`, "error");
       }
     },
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Session lifecycle
-  // ═══════════════════════════════════════════════════════════════════════════
   pi.on("session_start", async (_event, ctx) => {
-    // Restore persisted state (preserving the current namespace from flag)
     state = restoreState(ctx, state.namespace);
-
-    // Create daemon instance
-    daemon = new BrowserDaemon(state.namespace);
-
-    // Attempt to start daemon (will fail gracefully if Chrome not connected)
-    try {
-      await daemon.start();
-    } catch {
-      // Don't block — user can run /browser-setup later
-    }
-
     client = createBrowserClient({ namespace: state.namespace });
-    try { await client.start(); } catch { /* surfaced via tool errors */ }
-
-    // Register tools (once)
-    if (!toolsRegistered && daemon) {
-      registerTools(pi, daemon);
-      if (client) registerAllTools(pi, client);
+    // failure is fine — surfaced via tool errors when the agent first tries to use the browser
+    await client.start();
+    if (!toolsRegistered) {
+      registerAllTools(pi, client);
       toolsRegistered = true;
     }
-
-    // Register renderers
-    registerRenderers(pi);
-
-    // Setup command (always available)
-    if (daemon) {
-      registerSetupCommand(pi, daemon);
-    }
-
-    // Update status
-    if (daemon.getStatus().alive) {
-      ctx.ui.setStatus("browser", "🟢 Browser connected");
-    } else {
-      ctx.ui.setStatus("browser", "🔴 Browser — run /browser-setup");
-    }
+    registerSetupCommand(pi, client);
+    ctx.ui.setStatus(
+      "browser",
+      client.status().alive ? "🟢 Browser connected" : "🔴 Browser — run /browser-setup",
+    );
   });
 
-  pi.on("session_shutdown", async (_event) => {
-    // Persist current state
-    if (state) {
-      persistState(pi, state);
-    }
-
-    // Stop daemon
-    if (daemon) {
-      try {
-        await daemon.stop();
-      } catch {
-        // best-effort
-      }
-      daemon = null;
-    }
-
+  pi.on("session_shutdown", async () => {
+    persistState(pi, state);
     if (client) {
       try { await client.stop(); } catch { /* best-effort */ }
       client = null;
     }
-
     toolsRegistered = false;
-
-    // Clean up temp files from truncated tool outputs
     await cleanupTempDirs();
   });
 
-  // Restore state on tree navigation
   pi.on("session_tree", async (_event, ctx) => {
-    state = restoreState(ctx, daemon?.namespace);
-    if (daemon) {
-      persistState(pi, state);
-    }
+    state = restoreState(ctx, client?.namespace);
+    persistState(pi, state);
   });
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // System prompt injection
-  // ═══════════════════════════════════════════════════════════════════════════
   pi.on("before_agent_start", async (event) => {
-    if (!daemon || !daemon.getStatus().alive) {
-      // Browser not connected — inject minimal note
+    if (!client || !client.status().alive) {
       return {
         systemPrompt:
           event.systemPrompt +
-          `\n\n## Browser Control\n\nBrowser tools (browser_*) are available but the browser daemon is not connected. ` +
-          `Run /browser-setup to connect to Chrome, or /browser-status to check.`,
+          `\n\n## Browser Control\n\nBrowser tools (browser_*) are available but the browser is not connected. Run /browser-setup.`,
       };
     }
-
-    return {
-      systemPrompt: event.systemPrompt + getBrowserSystemPrompt(),
-    };
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // Tool result hook: track tab history
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.on("tool_result", async (event) => {
-    if (event.toolName === "browser_new_tab" || event.toolName === "browser_navigate") {
-      // Track new tabs in history
-      const details = event.details as { targetId?: string } | undefined;
-      if (details?.targetId) {
-        state = {
-          ...state,
-          tabHistory: [details.targetId, ...state.tabHistory.filter((id) => id !== details.targetId)].slice(0, 20),
-        };
-        persistState(pi, state);
-      }
-    }
+    return { systemPrompt: event.systemPrompt + getBrowserSystemPrompt() };
   });
 }

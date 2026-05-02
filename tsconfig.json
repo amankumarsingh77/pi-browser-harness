@@ -28,7 +28,11 @@
     "src/client.ts",
     "src/domains/**/*.ts",
     "src/schemas/**/*.ts",
-    "src/registry.ts"
+    "src/registry.ts",
+    "src/index.ts",
+    "src/setup.ts",
+    "src/state.ts",
+    "src/prompt.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

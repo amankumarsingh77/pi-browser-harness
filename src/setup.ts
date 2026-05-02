@@ -5,18 +5,18 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { execSync } from "node:child_process";
-import type { BrowserDaemon } from "./daemon";
+import type { BrowserClient } from "./client";
 
-export function registerSetupCommand(pi: ExtensionAPI, daemon: BrowserDaemon): void {
+export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): void {
   pi.registerCommand("browser-setup", {
     description: "Connect pi to your Chrome browser",
     handler: async (_args, ctx) => {
-      await runSetup(ctx, daemon);
+      await runSetup(ctx, client);
     },
   });
 }
 
-async function runSetup(ctx: ExtensionContext, daemon: BrowserDaemon): Promise<void> {
+async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<void> {
   ctx.ui.notify("browser setup: checking Chrome...", "info");
 
   // Step 1: Check Chrome is running
@@ -32,11 +32,9 @@ async function runSetup(ctx: ExtensionContext, daemon: BrowserDaemon): Promise<v
 
   // Step 2: Try to connect to Chrome DevTools
   ctx.ui.notify("Connecting to Chrome DevTools...", "info");
-  try {
-    await daemon.start();
-    ctx.ui.notify("Connected to Chrome ✓", "info");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  const startResult = await client.start();
+  if (!startResult.success) {
+    const msg = startResult.error.message;
     const lower = msg.toLowerCase();
 
     if (
@@ -58,25 +56,26 @@ async function runSetup(ctx: ExtensionContext, daemon: BrowserDaemon): Promise<v
     ctx.ui.notify(`Connection failed: ${msg}`, "error");
     return;
   }
+  ctx.ui.notify("Connected to Chrome ✓", "info");
 
   // Step 3: Verify with test navigation
   ctx.ui.notify("Testing browser control...", "info");
-  try {
-    await daemon.newTab("https://github.com");
-    const info = await daemon.getPageInfo();
-    if ("dialog" in info) {
-      await daemon.cdp("Page.handleJavaScriptDialog", { accept: true });
-    }
+  const tabResult = await client.newTab("https://github.com");
+  if (!tabResult.success) {
     ctx.ui.notify(
-      `Browser control verified ✓\nNavigated to: ${"url" in info ? info.url : "github.com"}`,
-      "info",
-    );
-  } catch (err) {
-    ctx.ui.notify(
-      `Browser connected but test navigation failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Browser connected but test navigation failed: ${tabResult.error.message}`,
       "warning",
     );
+    return;
   }
+
+  const info = await client.pageInfo();
+  if (info.success && "dialog" in info.data) {
+    await client.session().call("Page.handleJavaScriptDialog", { accept: true });
+  }
+
+  const pageUrl = info.success && !("dialog" in info.data) ? info.data.url : "github.com";
+  ctx.ui.notify(`Browser control verified ✓\nNavigated to: ${pageUrl}`, "info");
 }
 
 function checkChromeRunning(): boolean {

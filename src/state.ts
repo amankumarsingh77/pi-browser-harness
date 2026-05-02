@@ -1,77 +1,45 @@
 /**
  * Session persistence for pi-browser-harness.
  *
- * Persists daemon namespace, tab history, and preferences across
- * session reloads and branch navigation.
+ * Persists the daemon namespace and (when applicable) the remote browser ID
+ * across session reloads and branch navigation.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+export type BrowserState = {
+  readonly namespace: string;
+  readonly remoteBrowserId?: string;
+};
 
-export interface BrowserState {
-  /** Daemon namespace (BU_NAME) for this session */
-  namespace: string;
-  /** Recently active tab target IDs */
-  tabHistory: string[];
-  /** Cloud browser ID (for remote sessions) */
-  remoteBrowserId?: string;
-  /** Screenshot output directory */
-  screenshotDir: string;
-  /** Whether debug click overlay is enabled */
-  debugClicks: boolean;
-}
+export const defaultState = (namespace = "default"): BrowserState => ({ namespace });
 
-// ── Defaults ─────────────────────────────────────────────────────────────────
-
-export function defaultState(namespace = "default"): BrowserState {
-  return {
-    namespace,
-    tabHistory: [],
-    screenshotDir: "",
-    debugClicks: false,
-  };
-}
-
-// ── Persist ──────────────────────────────────────────────────────────────────
-
-export function persistState(pi: ExtensionAPI, state: BrowserState): void {
+export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
   pi.appendEntry<BrowserState>("browser-harness-state", state);
-}
-
-// ── Restore ──────────────────────────────────────────────────────────────────
+};
 
 /**
  * Find the last browser-harness-state entry in the current branch
  * and return the restored state, merged with defaults.
+ *
+ * If `currentNamespace` is supplied (e.g. from the --browser-namespace flag),
+ * it overrides whatever is in the persisted entry.
  */
-export function restoreState(ctx: ExtensionContext, currentNamespace?: string): BrowserState {
+export const restoreState = (ctx: ExtensionContext, currentNamespace?: string): BrowserState => {
   const branchEntries = ctx.sessionManager.getBranch();
-  const defaults = defaultState(currentNamespace);
-
-  // Walk branch from newest to oldest to find last persisted state
+  const fallback = defaultState(currentNamespace);
   for (let i = branchEntries.length - 1; i >= 0; i--) {
     const entry = branchEntries[i];
-    if (entry.type === "custom" && entry.customType === "browser-harness-state") {
+    if (entry?.type === "custom" && entry.customType === "browser-harness-state") {
       const data = entry.data as Partial<BrowserState> | undefined;
       if (data) {
-        // Merge persisted data onto defaults, but always keep the current
-        // namespace (which comes from the --browser-namespace flag or auto-gen).
-        return { ...defaults, ...data, namespace: currentNamespace || data.namespace || defaults.namespace };
+        return {
+          ...fallback,
+          ...data,
+          namespace: currentNamespace ?? data.namespace ?? fallback.namespace,
+        };
       }
     }
   }
-
-  return defaults;
-}
-
-// ── Merge helpers ────────────────────────────────────────────────────────────
-
-export function addToTabHistory(state: BrowserState, targetId: string): BrowserState {
-  const filtered = state.tabHistory.filter((id) => id !== targetId);
-  return { ...state, tabHistory: [targetId, ...filtered].slice(0, 20) };
-}
-
-export function setRemoteBrowser(state: BrowserState, browserId: string): BrowserState {
-  return { ...state, remoteBrowserId: browserId };
-}
+  return fallback;
+};

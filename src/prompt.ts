@@ -21,12 +21,12 @@ to interact with pages visually, and other tools alongside them.
 
 | Tool | Purpose |
 |------|---------|
-| browser_screenshot | Capture a PNG screenshot of the current page |
+| browser_screenshot | Capture a PNG screenshot of the current page (result details include path and attached: false — the LLM reads the image via the saved file path) |
 | browser_click | Click at viewport coordinates |
 | browser_type | Type text into the focused element |
 | browser_press_key | Press a keyboard key (Enter, Tab, Escape, arrows, etc.) |
 | browser_scroll | Scroll the page at coordinates |
-| browser_navigate | Navigate to a URL |
+| browser_navigate | Navigate to a URL (result details.outcome.kind is "in_place" or "new_tab_created") |
 | browser_new_tab | Open a new tab, optionally navigate |
 | browser_open_urls | Open multiple URLs in new tabs (parallel) |
 | browser_go_back / browser_go_forward / browser_reload | History navigation |
@@ -37,7 +37,7 @@ to interact with pages visually, and other tools alongside them.
 | browser_execute_js | Execute JavaScript and return the result |
 | browser_http_get | Direct HTTP GET (outside browser, for APIs) |
 | browser_wait | Wait N seconds |
-| browser_wait_for_load | Wait for document.readyState === 'complete' |
+| browser_wait_for_load | Wait for document.readyState === 'complete' (returns a typed timeout error if the page doesn't reach readyState=complete in N seconds, default 15) |
 | browser_handle_dialog | Accept or dismiss a JS dialog |
 | browser_run_script | Execute a temporary script file with daemon access (write script to disk, then run) |
 
@@ -87,6 +87,7 @@ browser_http_get("https://api.example.com/data")
 \`\`\`
 browser_screenshot() → browser_scroll({ deltaY: -500 }) → browser_screenshot()
 \`\`\`
+Note: deltaY follows W3C wheel-event convention: positive=up, negative=down. Default deltaY=-300 scrolls down.
 
 **Research Workflow (search + browser):**
 \`\`\`
@@ -108,7 +109,7 @@ write("/tmp/extract.js", "...script with daemon access...") → browser_run_scri
 | Tool | Purpose |
 |------|---------|
 | browser_upload_file | Upload a file to a file input (bypasses file picker) |
-| browser_dispatch_key | Dispatch a DOM KeyboardEvent on a specific element (for React/Vue inputs) |
+| browser_dispatch_key | Dispatch a DOM KeyboardEvent on a specific element (for React/Vue inputs); returns details.matched (number of elements) |
 | browser_download | Configure download directory and disable save-as prompts |
 | browser_viewport_resize | Resize the viewport for responsive testing |
 | browser_drag_and_drop | Perform drag-and-drop from one coordinate to another |
