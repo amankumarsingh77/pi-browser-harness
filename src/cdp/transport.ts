@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError } from "./errors";
+import { isCdpRawMessage } from "./types";
 import type { CdpEvent, CdpRawMessage } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -75,12 +76,14 @@ export const createCdpTransport = (): CdpTransport => {
   let queue = makeEventQueue();
 
   const handleMessage = (raw: string): void => {
-    let msg: CdpRawMessage;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
       return;
     }
+    if (!isCdpRawMessage(parsed)) return;
+    const msg: CdpRawMessage = parsed;
     if (msg.id === undefined) {
       if (msg.method) {
         queue.push({
@@ -194,6 +197,11 @@ export const createCdpTransport = (): CdpTransport => {
       });
     },
     events(): AsyncIterable<CdpEvent> {
+      // Single-consumer: each connection's event stream may be iterated by
+      // exactly one for-await loop. Calling events() multiple times returns
+      // the same iterable; the second consumer will silently steal events
+      // from the first. After a reconnect, the previous iterator is ended
+      // and callers must re-call events() to receive new events.
       return queue.iter;
     },
     state(): "open" | "closed" | "connecting" {

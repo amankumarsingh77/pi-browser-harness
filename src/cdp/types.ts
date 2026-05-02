@@ -49,3 +49,24 @@ const INTERNAL_PREFIXES: ReadonlyArray<string> = [
 
 export const isInternalUrl = (url: string): boolean =>
   INTERNAL_PREFIXES.some((p) => url.startsWith(p));
+
+const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+export const isCdpRawMessage = (v: unknown): v is CdpRawMessage => {
+  if (!isObject(v)) return false;
+  const id = v["id"];
+  if (id !== undefined && typeof id !== "number") return false;
+  const method = v["method"];
+  if (method !== undefined && typeof method !== "string") return false;
+  const sessionId = v["sessionId"];
+  if (sessionId !== undefined && typeof sessionId !== "string") return false;
+  const errVal = v["error"];
+  if (errVal !== undefined) {
+    if (!isObject(errVal)) return false;
+    if (typeof errVal["message"] !== "string") return false;
+    const code = errVal["code"];
+    if (code !== undefined && typeof code !== "number") return false;
+  }
+  return true;
+};
