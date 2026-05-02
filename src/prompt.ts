@@ -21,7 +21,7 @@ to interact with pages visually, and other tools alongside them.
 
 | Tool | Purpose |
 |------|---------|
-| browser_screenshot | Capture a PNG screenshot of the current page (result details include path and attached: false — the LLM reads the image via the saved file path) |
+| browser_screenshot | Capture a PNG or JPEG screenshot of the current page (rendered inline in the TUI; the LLM reads the image via the saved file path) |
 | browser_click | Click at viewport coordinates |
 | browser_type | Type text into the focused element |
 | browser_press_key | Press a keyboard key (Enter, Tab, Escape, arrows, etc.) |

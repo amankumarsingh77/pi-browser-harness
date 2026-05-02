@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { writeFile, rename } from "node:fs/promises";
 import { Type } from "typebox";
+import { Image, type ImageTheme, Text } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
@@ -81,6 +83,29 @@ export const screenshotTool = defineBrowserTool({
       text: `Screenshot saved: ${cap.data.path}${note}`,
       details: { path: cap.data.path, format: cap.data.format, attached: false },
     });
+  },
+
+  renderResult(result, _expanded, theme) {
+    const details = result.details as { path?: string; format?: string } | undefined;
+    const filePath = details?.path;
+    if (!filePath) {
+      return new Text(theme.fg("error", "Screenshot path missing"), 0, 0);
+    }
+    try {
+      const buf = readFileSync(filePath);
+      const b64 = buf.toString("base64");
+      const mimeType = details?.format === "jpeg" ? "image/jpeg" : "image/png";
+      const imageTheme: ImageTheme = {
+        fallbackColor: (str: string) => theme.fg("dim", str),
+      };
+      return new Image(b64, mimeType, imageTheme, {
+        maxWidthCells: 80,
+        maxHeightCells: 24,
+        filename: filePath,
+      });
+    } catch {
+      return new Text(theme.fg("warning", `Screenshot saved: ${filePath}`), 0, 0);
+    }
   },
 });
 

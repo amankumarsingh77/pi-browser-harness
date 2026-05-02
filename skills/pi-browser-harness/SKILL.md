@@ -32,6 +32,60 @@ browser_screenshot() → browser_click(x, y) → browser_screenshot()
 Compositor-level clicks (`Input.dispatchMouseEvent`) work through iframes, shadow DOM,
 and cross-origin content. No selectors needed.
 
+## Parallelization
+
+**Always parallelize when possible.** Never sequence independent operations.
+
+### What can run in parallel
+
+- **Opening result pages:** Use `browser_open_urls` to open multiple URLs in parallel tabs
+  instead of navigating one at a time. After opening, use `browser_list_tabs` to
+  see the new tabs and `browser_switch_tab` to visit each one.
+
+- **API calls:** `browser_http_get` calls are independent of browser state — fire
+  multiple GETs in parallel to fetch APIs, static pages, or search results.
+
+- **JS extraction across tabs:** Once tabs are loaded, extract data from each tab
+  with `browser_execute_js` — these can run in parallel across different tabs.
+
+- **Screenshots across tabs:** After opening multiple pages, capture screenshots
+  of each tab in parallel. Each `browser_screenshot` targets the currently active
+  tab, so switch tabs first, then screenshot.
+
+- **Read + browser tools:** Use `read` and `browser_*` tools in the same turn —
+  reading files or previous results is independent of browser actions.
+
+### What must be sequential
+
+- **Page interactions:** Clicks, typing, scrolling, and form submissions on the
+  same page depend on prior state and must be sequential.
+
+- **Tab switching then acting:** `browser_switch_tab` must complete before acting
+  on the switched-to tab.
+
+### Pattern: Parallel research across tabs
+
+```
+# Step 1: Open all result pages at once
+browser_open_urls(["url1", "url2", "url3"])
+
+# Step 2: Wait for them to load, then extract in parallel
+browser_list_tabs()  # get targetIds
+
+# Step 3: Extract data from each tab (parallel)
+browser_switch_tab(targetId1) → browser_screenshot()   # These are sequential per tab
+browser_switch_tab(targetId2) → browser_execute_js(...) # but you batch switch+act
+```
+
+### Pattern: Parallel API + browser
+
+```
+# Fire API calls while interacting with a page
+browser_http_get("https://api.example.com/data")  # parallel
+browser_click(x, y)                                 # parallel (different target)
+browser_type("search term")                         # parallel (different target)
+```
+
 ## Available Tools
 
 ### Navigation
@@ -49,7 +103,7 @@ and cross-origin content. No selectors needed.
 - `browser_scroll` — scroll the page at coordinates
 
 ### Visual
-- `browser_screenshot` — capture PNG screenshot
+- `browser_screenshot` — capture PNG or JPEG screenshot (rendered inline in the TUI)
 
 ### Data Extraction
 - `browser_execute_js` — execute JavaScript and return result
