@@ -12,6 +12,7 @@ import { goBackTool, goForwardTool, reloadTool } from "./domains/history";
 import { listTabsTool, currentTabTool, switchTabTool, newTabTool } from "./domains/tabs";
 import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
+import { dragAndDropTool } from "./domains/drag";
 
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
@@ -37,6 +38,7 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   downloadTool,
   printToPdfTool,
   viewportResizeTool,
+  dragAndDropTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {

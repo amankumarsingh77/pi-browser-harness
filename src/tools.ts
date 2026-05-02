@@ -270,55 +270,6 @@ export function registerTools(pi: ExtensionAPI, daemon: BrowserDaemon): void {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // browser_drag_and_drop
-  // ═══════════════════════════════════════════════════════════════════════════
-  pi.registerTool({
-    name: "browser_drag_and_drop",
-    label: "Browser Drag And Drop",
-    description:
-      "Perform a drag-and-drop operation from one viewport coordinate to another. " +
-      "Use for kanban boards, file uploads via drag, reorderable lists, and " +
-      "other drag-based UIs.",
-    promptSnippet: "Drag from (startX, startY) and drop at (endX, endY)",
-    promptGuidelines: [
-      "Use browser_drag_and_drop for drag-based interactions like moving cards, reordering items, or drag-to-upload.",
-      "Capture a screenshot BEFORE to find the start and end coordinates.",
-      "Capture a screenshot AFTER to verify the drag-and-drop worked.",
-      "If the target site expects DOM-level drag events (not just compositor events), try browser_upload_file instead for file uploads.",
-    ],
-    parameters: Type.Object({
-      startX: Type.Number({ description: "X coordinate to start dragging from" }),
-      startY: Type.Number({ description: "Y coordinate to start dragging from" }),
-      endX: Type.Number({ description: "X coordinate to drop at" }),
-      endY: Type.Number({ description: "Y coordinate to drop at" }),
-    }),
-    async execute(_id, params) {
-      try {
-        await daemon.ensureAlive();
-        await daemon.dragAndDrop(
-          params.startX,
-          params.startY,
-          params.endX,
-          params.endY,
-        );
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Dragged from (${params.startX}, ${params.startY}) to (${params.endX}, ${params.endY}).`,
-          }],
-          details: undefined,
-        };
-      } catch (err) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: `Drag-and-drop failed: ${err instanceof Error ? err.message : String(err)}` }],
-          details: undefined,
-        };
-      }
-    },
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // browser_get_network_log
   // ═══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
