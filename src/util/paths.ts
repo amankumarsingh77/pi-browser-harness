@@ -2,8 +2,20 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export const screenshotPath = (namespace: string, ext: "png" | "jpeg" = "png"): string =>
-  join(tmpdir(), `pi-browser-screenshot-${namespace}-${randomUUID()}.${ext}`);
+const NAMESPACE_RE = /^[a-zA-Z0-9_-]+$/;
 
-export const pdfPath = (namespace: string): string =>
-  join(tmpdir(), `pi-browser-pdf-${namespace}-${randomUUID()}.pdf`);
+const requireValidNamespace = (namespace: string): void => {
+  if (!NAMESPACE_RE.test(namespace)) {
+    throw new Error(`Invalid namespace (must match ${NAMESPACE_RE}): ${JSON.stringify(namespace)}`);
+  }
+};
+
+export const screenshotPath = (namespace: string, ext: "png" | "jpeg" = "png"): string => {
+  requireValidNamespace(namespace);
+  return join(tmpdir(), `pi-browser-screenshot-${namespace}-${randomUUID()}.${ext}`);
+};
+
+export const pdfPath = (namespace: string): string => {
+  requireValidNamespace(namespace);
+  return join(tmpdir(), `pi-browser-pdf-${namespace}-${randomUUID()}.pdf`);
+};
