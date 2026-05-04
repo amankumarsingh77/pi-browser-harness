@@ -34,34 +34,23 @@ and cross-origin content. No selectors needed.
 
 ## Parallelization
 
-**Always parallelize when possible.** Never sequence independent operations.
+**Always parallelize when possible.** The harness automatically serializes mutation tools so they never race on shared state. Emit independent tools in the same turn for better performance.
 
 ### What can run in parallel
 
-- **Opening result pages:** Use `browser_open_urls` to open multiple URLs in parallel tabs
-  instead of navigating one at a time. After opening, use `browser_list_tabs` to
-  see the new tabs and `browser_switch_tab` to visit each one.
+- **Observation tools** (`browser_screenshot`, `browser_page_info`, `browser_execute_js`, `browser_list_tabs`, `browser_current_tab`, `browser_http_get`, `browser_print_to_pdf`) can run in parallel with each other and with mutation tools.
 
-- **API calls:** `browser_http_get` calls are independent of browser state — fire
-  multiple GETs in parallel to fetch APIs, static pages, or search results.
+- **Opening result pages:** Use `browser_open_urls` to open multiple URLs in parallel tabs. After opening, use `browser_list_tabs` to see the new tabs and `browser_switch_tab` to visit each one.
 
-- **JS extraction across tabs:** Once tabs are loaded, extract data from each tab
-  with `browser_execute_js` — these can run in parallel across different tabs.
+- **API calls:** `browser_http_get` calls are independent of browser state — fire multiple GETs in parallel.
 
-- **Screenshots across tabs:** After opening multiple pages, capture screenshots
-  of each tab in parallel. Each `browser_screenshot` targets the currently active
-  tab, so switch tabs first, then screenshot.
+- **Read + browser tools:** Use `read` and `browser_*` tools in the same turn — reading files or previous results is independent of browser actions.
 
-- **Read + browser tools:** Use `read` and `browser_*` tools in the same turn —
-  reading files or previous results is independent of browser actions.
+### What must be sequential (harness enforces this)
 
-### What must be sequential
+- **Mutation tools** (`click`, `type`, `scroll`, `navigate`, `switch_tab`, `press_key`, `drag_and_drop`, `upload_file`, `go_back`, `go_forward`, `reload`, `handle_dialog`, `viewport_resize`, `wait_for_load`, `download`) are automatically queued through a mutex. Even if you emit them in parallel, they execute serially in FIFO order. You do not need to worry about race conditions.
 
-- **Page interactions:** Clicks, typing, scrolling, and form submissions on the
-  same page depend on prior state and must be sequential.
-
-- **Tab switching then acting:** `browser_switch_tab` must complete before acting
-  on the switched-to tab.
+- **Tab switching then acting:** `browser_switch_tab` must complete before acting on the switched-to tab. This is enforced automatically.
 
 ### Pattern: Parallel research across tabs
 
@@ -77,13 +66,14 @@ browser_switch_tab(targetId1) → browser_screenshot()   # These are sequential 
 browser_switch_tab(targetId2) → browser_execute_js(...) # but you batch switch+act
 ```
 
-### Pattern: Parallel API + browser
+### Pattern: Parallel observation + mutation
 
 ```
-# Fire API calls while interacting with a page
-browser_http_get("https://api.example.com/data")  # parallel
-browser_click(x, y)                                 # parallel (different target)
-browser_type("search term")                         # parallel (different target)
+# Fire observation tools while a mutation is in progress
+browser_click(x, y)                           # mutation (queued)
+browser_screenshot()                            # observation (runs immediately in parallel)
+browser_page_info()                             # observation (runs immediately in parallel)
+browser_http_get("https://api.example.com")    # external (runs immediately in parallel)
 ```
 
 ## Available Tools
@@ -140,8 +130,9 @@ browser_http_get("https://api.example.com/data")
 
 ### Scrolling
 ```
-browser_screenshot() → browser_scroll({ deltaY: -500 }) → browser_screenshot()
+browser_screenshot() → browser_scroll({ deltaY: 500 }) → browser_screenshot()
 ```
+Note: deltaY follows W3C wheel-event convention: positive=down, negative=up. Default deltaY=300 scrolls down.
 
 ### Research (search engine + browser_open_urls)
 ```

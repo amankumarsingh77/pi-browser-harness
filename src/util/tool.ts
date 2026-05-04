@@ -53,6 +53,10 @@ export type BrowserToolDefinition<S extends TSchema> = {
   readonly handler: ToolHandler<S>;
   readonly renderCall?: (args: Static<S>, theme: Theme) => Component;
   readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
+  /** If true, the tool acquires the client's mutation mutex before executing.
+   *  This ensures that two serialized tools never run concurrently,
+   *  preventing race conditions on shared CDP session/page state. */
+  readonly serialized?: boolean;
   readonly ensureAlive?: boolean;
 };
 
@@ -146,23 +150,43 @@ export const registerBrowserTool = (
           );
         }
       }
-      const result = await def.handler(args, {
-        client,
-        signal,
-        onUpdate: (u) => {
-          if (onUpdate) {
-            // AgentToolUpdateCallback expects AgentToolResult<TDetails>; we use unknown for TDetails.
-            const update: AgentToolResult<OkDetails> = {
-              content: [{ type: "text", text: u.text }],
-              details: { ok: true, ...(u.details ?? {}) },
-            };
-            // Cast needed: onUpdate is AgentToolUpdateCallback<unknown> (generic TDetails).
-            (onUpdate as AgentToolUpdateCallback<OkDetails>)(update);
-          }
-        },
-        extensionCtx,
-      });
-      return toToolResult(result, def.name);
+      // Serialized tools acquire the client's mutation mutex so that only one
+      // mutation tool runs at a time. Observation tools skip this and run freely
+      // in parallel. AbortSignal is checked after acquiring the lock so that a
+      // cancelled task doesn't hold the mutex forever.
+      let release: (() => void) | undefined;
+      if (def.serialized) {
+        const acquire = await client.mutationMutex().acquire();
+        release = acquire;
+        if (signal?.aborted) {
+          release();
+          return toToolResult(
+            { success: false, error: { kind: "invalid_state", message: "Tool execution aborted before entering serialized lane" } },
+            def.name,
+          );
+        }
+      }
+      try {
+        const result = await def.handler(args, {
+          client,
+          signal,
+          onUpdate: (u) => {
+            if (onUpdate) {
+              // AgentToolUpdateCallback expects AgentToolResult<TDetails>; we use unknown for TDetails.
+              const update: AgentToolResult<OkDetails> = {
+                content: [{ type: "text", text: u.text }],
+                details: { ok: true, ...(u.details ?? {}) },
+              };
+              // Cast needed: onUpdate is AgentToolUpdateCallback<unknown> (generic TDetails).
+              (onUpdate as AgentToolUpdateCallback<OkDetails>)(update);
+            }
+          },
+          extensionCtx,
+        });
+        return toToolResult(result, def.name);
+      } finally {
+        release?.();
+      }
     },
   };
   pi.registerTool(td);

@@ -1,5 +1,6 @@
 import { type Result, err, ok } from "./util/result";
 import { safeJs } from "./util/js-template";
+import { type Mutex, createMutex } from "./util/mutex";
 import { discoverWsUrl } from "./cdp/discovery";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/transport";
@@ -27,6 +28,9 @@ export type BrowserClient = {
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   session(): CdpSession;
   transport(): CdpTransport;
+  /** Returns the shared async mutex that serialized browser tools must acquire
+   *  before performing mutations. Observation tools should not use this. */
+  mutationMutex(): Mutex;
 };
 
 const HEALTH_TTL_MS = 30_000;
@@ -63,6 +67,7 @@ const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
   const transport = createCdpTransport();
   const session = createCdpSession(transport);
+  const mutationMutex = createMutex();
   let lastHealth = 0;
   let pageCache: { readonly info: PageInfo; readonly at: number } | null = null;
   let remote: BrowserClientOptions["remote"] | null = opts.remote ?? null;
@@ -228,5 +233,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     current: () => session.current(),
     session: () => session,
     transport: () => transport,
+    mutationMutex: () => mutationMutex,
   };
 };

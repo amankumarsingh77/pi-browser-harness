@@ -5,3 +5,5 @@ benchmark/
 .DS_Store
 *.log
 docs/
+scripts/
+data/

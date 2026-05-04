@@ -7,8 +7,8 @@ const ScrollArgs = Type.Object({
   y: Type.Optional(Type.Number({ description: "Y coordinate where to scroll. Default: viewport center" })),
   deltaX: Type.Optional(Type.Number({ default: 0, description: "Horizontal scroll delta (CSS pixels). Positive = right." })),
   deltaY: Type.Optional(Type.Number({
-    default: -300,
-    description: "Vertical scroll delta (CSS pixels). Positive = up (matches W3C wheel events). Default: -300 (scroll down).",
+    default: 300,
+    description: "Vertical scroll delta (CSS pixels). Positive = down, negative = up (W3C wheel-event convention). Default: 300 (scroll down).",
   })),
 });
 
@@ -16,10 +16,10 @@ export const scrollTool = defineBrowserTool({
   name: "browser_scroll",
   label: "Browser Scroll",
   description:
-    "Scroll the page at given coordinates. deltaY follows W3C wheel-event convention: positive = scroll up, negative = scroll down. Default scrolls down (deltaY = -300).",
-  promptSnippet: "Scroll the page (deltaY positive=up, negative=down)",
+    "Scroll the page at given coordinates. deltaY follows W3C wheel-event convention: positive = scroll down, negative = scroll up. Default scrolls down (deltaY = 300).",
+  promptSnippet: "Scroll the page (deltaY positive=down, negative=up)",
   promptGuidelines: [
-    "Default behavior scrolls down 300px (deltaY=-300). Pass a positive deltaY to scroll up.",
+    "Default behavior scrolls down 300px (deltaY=300). Pass a negative deltaY to scroll up.",
     "Pass x/y to target a specific scrollable region (e.g., a div with overflow); otherwise scrolls the page at viewport center.",
   ],
   parameters: ScrollArgs,
@@ -35,14 +35,21 @@ export const scrollTool = defineBrowserTool({
     const cx = args.x ?? Math.round(info.data.width / 2);
     const cy = args.y ?? Math.round(info.data.height / 2);
     const dx = args.deltaX ?? 0;
-    const dy = args.deltaY ?? -300;
+    const dy = args.deltaY ?? 300;
+    // The page target must be focused or Input events are dropped silently
+    // (mouseWheel hangs; synthesizeScrollGesture returns ok but no scroll).
+    // Page.bringToFront makes the target the active one in the browser.
+    const front = await client.session().call("Page.bringToFront", {});
+    if (!front.success) return err({ kind: "cdp_error", message: front.error.message });
     // Establish compositor mouse position before mouseWheel; without this,
-    // CDP sometimes drops the wheel event with a timeout. Fix preserved
-    // from v0.2.0.
-    const moved = await client.session().call("Input.dispatchMouseEvent", { type: "mouseMoved", x: cx, y: cy });
+    // CDP sometimes drops the wheel event with a timeout.
+    const moved = await client.session().call("Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,
+    });
     if (!moved.success) return err({ kind: "cdp_error", message: moved.error.message });
     const wheel = await client.session().call("Input.dispatchMouseEvent", {
       type: "mouseWheel", x: cx, y: cy, deltaX: dx, deltaY: dy,
+      button: "none", buttons: 0, pointerType: "mouse",
     });
     if (!wheel.success) return err({ kind: "cdp_error", message: wheel.error.message });
     return ok({

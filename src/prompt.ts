@@ -63,6 +63,16 @@ browser_run_script("/tmp/scrape-pages.js", { urls: [...] })
 
 Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON, Buffer, setTimeout, clearTimeout.
 
+### Parallel Execution
+
+Observation tools (browser_screenshot, browser_page_info, browser_execute_js, browser_list_tabs, browser_http_get, etc.) can run in parallel with each other and with mutation tools. The harness automatically serializes mutation tools (click, type, scroll, navigate, switch_tab, etc.) so they never race on shared state. When operations are independent, emit them in the same turn for better performance.
+
+**Examples of safe parallel calls:**
+\`\`\`
+browser_screenshot() + browser_page_info() + browser_execute_js("document.title")
+browser_http_get("https://api.example.com/data") + browser_click(x, y)
+\`\`\`
+
 ### Common Patterns
 
 **Navigation:**
@@ -85,9 +95,9 @@ browser_http_get("https://api.example.com/data")
 
 **Scrolling:**
 \`\`\`
-browser_screenshot() → browser_scroll({ deltaY: -500 }) → browser_screenshot()
+browser_screenshot() → browser_scroll({ deltaY: 500 }) → browser_screenshot()
 \`\`\`
-Note: deltaY follows W3C wheel-event convention: positive=up, negative=down. Default deltaY=-300 scrolls down.
+Note: deltaY follows W3C wheel-event convention: positive=down, negative=up. Default deltaY=300 scrolls down.
 
 **Research Workflow (search + browser):**
 \`\`\`
