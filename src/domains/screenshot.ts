@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { writeFile, rename } from "node:fs/promises";
 import { Type } from "typebox";
-import { Image, type ImageTheme, Text } from "@mariozechner/pi-tui";
+import { Image, type ImageTheme, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
@@ -98,11 +98,22 @@ export const screenshotTool = defineBrowserTool({
       const imageTheme: ImageTheme = {
         fallbackColor: (str: string) => theme.fg("dim", str),
       };
-      return new Image(b64, mimeType, imageTheme, {
+      const image = new Image(b64, mimeType, imageTheme, {
         maxWidthCells: 80,
         maxHeightCells: 24,
         filename: filePath,
       });
+      // Image's text fallback (when terminal lacks inline-image support) does
+      // not respect the rendered width, so a long file path can blow past the
+      // terminal width and crash the host TUI. Wrap the component to truncate
+      // each rendered line to fit.
+      return {
+        invalidate: () => image.invalidate(),
+        render: (width: number) =>
+          image.render(width).map((line) =>
+            visibleWidth(line) > width ? truncateToWidth(line, width) : line,
+          ),
+      };
     } catch {
       return new Text(theme.fg("warning", `Screenshot saved: ${filePath}`), 0, 0);
     }
