@@ -4,3 +4,4 @@ benchmark/
 *.tsbuildinfo
 .DS_Store
 *.log
+docs/

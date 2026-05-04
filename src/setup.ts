@@ -23,7 +23,7 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
   const chromeRunning = checkChromeRunning();
   if (!chromeRunning) {
     ctx.ui.notify(
-      "Chrome/Chromium/Edge not detected. Please start your browser and retry /browser-setup.",
+      "No browser instance running. Please open your browser and then run /browser-setup.",
       "error",
     );
     return;
@@ -80,11 +80,29 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
 
 function checkChromeRunning(): boolean {
   try {
-    if (process.platform === "darwin" || process.platform === "linux") {
+    if (process.platform === "darwin") {
+      // Exact line matching — excludes "Google Chrome Helper" etc.
+      // that linger after the user quits the browser.
       const out = execSync("ps -A -o comm=", { timeout: 5000 }).toString().toLowerCase();
-      return ["google chrome", "chrome", "chromium", "microsoft edge", "msedge"].some(
-        (n) => out.includes(n),
-      );
+      const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+      const browserProcesses = ["google chrome", "chromium", "microsoft edge"];
+      return lines.some((l) => {
+        if (l.includes("helper") || l.includes("renderer")) return false;
+        return browserProcesses.includes(l);
+      });
+    } else if (process.platform === "linux") {
+      // Use args to distinguish the main browser process from sub-processes
+      // (GPU, renderer, utility, etc.) which carry --type= flags.
+      const out = execSync("ps -A -o comm=,args=", { timeout: 5000 }).toString().toLowerCase();
+      const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+      const browserComms = ["chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge", "google-chrome"];
+      return lines.some((line) => {
+        const parts = line.split(/\s+/);
+        const comm = parts[0] ?? "";
+        if (!comm || !browserComms.includes(comm)) return false;
+        const isSubprocess = line.includes("--type=") && !line.includes("--type=browser");
+        return !isSubprocess;
+      });
     } else if (process.platform === "win32") {
       const out = execSync("tasklist", { timeout: 5000 }).toString().toLowerCase();
       return ["chrome.exe", "msedge.exe"].some((n) => out.includes(n));
