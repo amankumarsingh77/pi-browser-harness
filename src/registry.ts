@@ -13,7 +13,8 @@ import { listTabsTool, currentTabTool, switchTabTool, newTabTool, closeTabTool }
 import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
-import { httpGetTool, getNetworkLogTool } from "./domains/network";
+import { httpGetTool, networkRequestsTool } from "./domains/network";
+import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
 
 // Mutation tools that modify page / browser state are marked `serialized: true`
@@ -46,7 +47,8 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   { ...viewportResizeTool, serialized: true },
   { ...dragAndDropTool, serialized: true },
   httpGetTool,
-  getNetworkLogTool,
+  networkRequestsTool,
+  snapshotTool,
   executeJsTool,
   runScriptTool,
 ];

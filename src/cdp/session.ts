@@ -3,6 +3,7 @@ import type { CdpError } from "./errors";
 import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./transport";
+import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
@@ -13,6 +14,7 @@ export type CdpSession = {
   callBrowser(method: string, params?: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
   takeDialog(): DialogInfo | null;
   drainPageInfoInvalidations(): boolean;
+  drainNetworkBuffer(filter: NetworkFilter): DrainResult;
 };
 
 export const createCdpSession = (
@@ -23,6 +25,7 @@ export const createCdpSession = (
   let targetId: string | null = null;
   let dialog: DialogInfo | null = null;
   let pageInfoDirty = false;
+  const networkBuffer = createNetworkBuffer();
 
   let activeConsumer: Promise<void> = Promise.resolve();
 
@@ -48,6 +51,10 @@ export const createCdpSession = (
         const params = ev.params as { targetId?: string } | undefined;
         if (params?.targetId) ownership.remove(params.targetId);
       }
+      if (ev.method === "Network.requestWillBeSent") networkBuffer.ingestRequestWillBeSent(ev.params);
+      else if (ev.method === "Network.responseReceived") networkBuffer.ingestResponseReceived(ev.params);
+      else if (ev.method === "Network.loadingFinished") networkBuffer.ingestLoadingFinished(ev.params);
+      else if (ev.method === "Network.loadingFailed") networkBuffer.ingestLoadingFailed(ev.params);
     }
   };
 
@@ -75,7 +82,7 @@ export const createCdpSession = (
   // Switching to Promise.all over a single WS pipelines the round-trips and
   // saves ~3× on tab-switch latency. Defer until session.ts has tests.
   const enableDomains = async (sid: string): Promise<void> => {
-    for (const d of ["Page", "DOM", "Runtime", "Network"]) {
+    for (const d of ["Page", "DOM", "Runtime", "Network", "Accessibility"]) {
       await transport.request(`${d}.enable`, {}, { sessionId: sid });
     }
   };
@@ -143,6 +150,9 @@ export const createCdpSession = (
       sessionId = a.sessionId;
       targetId = tid;
       pageInfoDirty = true;
+      // Buffer is page-scoped: on switch, the network history of the previous
+      // tab is no longer relevant to what the agent is now looking at.
+      networkBuffer.clear();
       await enableDomains(a.sessionId);
       return ok(undefined);
     },
@@ -167,6 +177,9 @@ export const createCdpSession = (
       const dirty = pageInfoDirty;
       pageInfoDirty = false;
       return dirty;
+    },
+    drainNetworkBuffer(filter) {
+      return networkBuffer.drain(filter);
     },
   };
 };

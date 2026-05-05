@@ -75,7 +75,7 @@ export const openUrlsTool = defineBrowserTool({
   promptSnippet: "Open multiple URLs in new tabs (parallel)",
   promptGuidelines: [
     "Use after web_search to open citations in parallel.",
-    "After opening, use browser_list_tabs / browser_switch_tab / browser_screenshot to interact.",
+    "After opening, use browser_list_tabs / browser_switch_tab to navigate, then browser_snapshot to inspect each tab.",
     "Use browser_wait_for_load on a tab before extracting data from SPAs.",
   ],
   parameters: OpenUrlsArgs,

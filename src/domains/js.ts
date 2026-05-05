@@ -3,9 +3,19 @@ import { resolve, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { Type } from "typebox";
+import { Markdown, Text } from "@mariozechner/pi-tui";
+import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
+
+const COMPACT_PREVIEW_BYTES = 120;
+
+const formatBytes = (n: number): string => {
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+};
 
 // AsyncFunction constructor — the documented Node.js mechanism for compiling
 // arbitrary user-supplied source. Equivalent to `new Function` but produces an
@@ -29,11 +39,15 @@ export const executeJsTool = defineBrowserTool({
   name: "browser_execute_js",
   label: "Browser Execute JS",
   description:
-    "Run JavaScript in the page (or a specific iframe target). `return X` gets auto-wrapped in an IIFE for convenience. Always use safeJs / JSON.stringify when interpolating untrusted strings into source.",
-  promptSnippet: "Execute JS in the page (or iframe)",
+    "Surgical reads from the DOM. The cheapest, most precise way to extract a specific element's text, attribute, value, or geometry. Prefer over browser_screenshot for ANY data extraction or coordinate lookup. `return X` is auto-wrapped in an IIFE. Always use safeJs / JSON.stringify when interpolating untrusted strings.",
+  promptSnippet: "Execute JS in the page — surgical DOM reads (preferred over screenshot)",
   promptGuidelines: [
+    "DEFAULT for extracting a specific value: `document.querySelector('.price').innerText`, `input.value`, `el.getAttribute('aria-label')`, etc.",
+    "For click coordinates not already in browser_snapshot: `JSON.stringify(document.querySelector('SELECTOR').getBoundingClientRect())` — beats a screenshot every time.",
+    "For 'is this element visible / enabled / checked / focused', a one-liner here beats a screenshot every time.",
+    "DO NOT call browser_screenshot to read a value or check element state. Use this tool.",
     "`return foo` is auto-wrapped in an IIFE — both `foo` and `(() => foo)()` work.",
-    "For iframes, get a targetId via browser_execute_js with `Object.values(document.querySelectorAll('iframe'))` then call browser_execute_js with targetId.",
+    "For iframes, first run `Object.values(document.querySelectorAll('iframe'))` to find the iframe, then pass its targetId.",
     "Result must be JSON-serializable (Runtime.evaluate returnByValue=true).",
   ],
   parameters: ExecuteJsArgs,
@@ -42,12 +56,57 @@ export const executeJsTool = defineBrowserTool({
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
     const valueStr = r.data === undefined ? "undefined" : JSON.stringify(r.data);
     const truncated = await applyTruncation(valueStr, "js");
+    // If the value is JSON, pretty-print for the expanded TUI view. Falls back
+    // to the raw string if parse fails (e.g. value is "undefined" sentinel).
+    let pretty: string | undefined;
+    try {
+      const parsed = JSON.parse(valueStr);
+      pretty = JSON.stringify(parsed, null, 2);
+    } catch {
+      pretty = undefined;
+    }
     return ok({
       text: truncated.text,
-      details: truncated.fullOutputPath !== undefined
-        ? { valueLength: valueStr.length, fullOutputPath: truncated.fullOutputPath }
-        : { valueLength: valueStr.length },
+      details: {
+        valueLength: valueStr.length,
+        // Full value for the expanded renderer. Capped at 200 KB so a giant
+        // dump doesn't bloat the conversation transcript on disk.
+        full: valueStr.length > 200_000 ? valueStr.slice(0, 200_000) : valueStr,
+        ...(pretty !== undefined ? { pretty: pretty.length > 200_000 ? pretty.slice(0, 200_000) : pretty } : {}),
+        ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
+      },
     });
+  },
+
+  renderResult(result, expanded, theme) {
+    const details = result.details as
+      | { valueLength?: number; full?: string; pretty?: string; fullOutputPath?: string }
+      | undefined;
+    if (!details) return new Text(theme.fg("error", "execute_js: no details"), 0, 0);
+
+    const len = details.valueLength ?? 0;
+    const full = details.full ?? "";
+    const isJson = details.pretty !== undefined;
+
+    if (!expanded) {
+      const preview = full.length > COMPACT_PREVIEW_BYTES ? full.slice(0, COMPACT_PREVIEW_BYTES) + "…" : full;
+      const md = [
+        `**${formatBytes(len)}** ${isJson ? "JSON" : "value"}`,
+        "```",
+        preview,
+        "```",
+        keyHint("app.tools.expand", "to expand"),
+      ].join("\n");
+      return new Markdown(md, 0, 0, getMarkdownTheme());
+    }
+
+    const body = details.pretty ?? full;
+    const fence = isJson ? "```json" : "```";
+    const tail = details.fullOutputPath
+      ? `\n\nFull value at \`${details.fullOutputPath}\` · ${keyHint("app.tools.expand", "to collapse")}`
+      : `\n\n${keyHint("app.tools.expand", "to collapse")}`;
+    const md = [`**${formatBytes(len)}** ${isJson ? "JSON" : "value"}`, fence, body, "```", tail].join("\n");
+    return new Markdown(md, 0, 0, getMarkdownTheme());
   },
 });
 

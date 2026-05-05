@@ -63,12 +63,15 @@ const resizeIfNeeded = async (
 export const screenshotTool = defineBrowserTool({
   name: "browser_screenshot",
   label: "Browser Screenshot",
-  description: "Capture the current page as PNG or JPEG. JPEG is 2-5x smaller — prefer it for photo-heavy pages.",
-  promptSnippet: "Capture a screenshot of the current page",
+  description:
+    "Capture the page as a JPEG/PNG image. NOT a default exploration tool. Use ONLY when (a) you need to verify visual properties (layout, color, spacing, rendered text legibility), or (b) browser_snapshot and browser_execute_js cannot answer your question. For understanding what's on the page use browser_snapshot. For specific element values use browser_execute_js. For click coordinates use the @(x,y) hints in browser_snapshot's outline.",
+  promptSnippet: "Capture a screenshot — visual verification only",
   promptGuidelines: [
-    "Use BEFORE clicks/scrolls to find coordinates; AFTER to verify the action.",
-    "Pass format='jpeg' with a quality (60-90) for smaller files on photo-heavy pages.",
-    "Set maxDim if the page is huge and you want to fit under LLM image-size limits.",
+    "DO NOT use as a default exploration tool. browser_snapshot is the default for understanding page structure — far cheaper and more reliable.",
+    "DO NOT use to find click coordinates. browser_snapshot already includes @(x,y) for every interactive element. If a target isn't there, use browser_execute_js with element.getBoundingClientRect().",
+    "DO use to verify visual rendering after an action: did the modal animate in correctly, did the chart render, are colors right, did the layout reflow as expected.",
+    "DO use as a debugging fallback when browser_execute_js or browser_snapshot return surprising results and you suspect the rendered page differs from the DOM.",
+    "format='jpeg' with quality 60-90 keeps screenshots small for photo-heavy pages. Use maxDim if the page is huge.",
   ],
   parameters: ScreenshotArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {

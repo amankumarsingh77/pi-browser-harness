@@ -2,6 +2,35 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.4.0 — 2026-05-06
+
+### Added
+
+- **`browser_snapshot`** — new tool. Returns the structured CDP accessibility tree (roles, names, states, hierarchy) for the current page. For every interactive element (button, link, textbox, checkbox, etc.) the outline includes click coordinates as `@(x,y)`, fetched via `DOM.getBoxModel` per node in parallel under a 1.5s aggregate budget. Pass these straight to `browser_click` — no `browser_screenshot` round-trip needed. `format:"json"` returns the slim structure with `box: {x,y,width,height,cx,cy}` per node. Optional `includeScreenshot:true` attaches a JPEG (q=80) when visual confirmation is also wanted.
+- **`browser_network_requests`** — new tool, replacing the deprecated `browser_get_network_log` placeholder. Lists requests captured on the current tab since attach with filters: `urlPattern` (substring; wrap in slashes for regex), `methodFilter`, `statusFilter`, `resourceTypes`, `sinceMs`, `limit` (default 50, cap 500). `includeResponseBodies:true` fetches `Network.getResponseBody` per matched record under a 5s aggregate budget with a 50 KB per-body cap. Buffer is page-scoped (cleared on tab switch) and bounded at 500 records; `bufferOverflowed` flag in the result reports drops since the last drain.
+- **Tab ownership / harness-window isolation.** New `OwnershipRegistry` tracks which page targets this session opened. The harness now creates a dedicated Chrome window on first attach (`newWindow:true`) instead of grabbing the user's foreground tab; subsequent `browser_new_tab` calls open inside that window via `openerId`. `browser_list_tabs` defaults to `scope:"owned"`; pass `scope:"all"` to see the user's other tabs read-only. `browser_switch_tab` and the new **`browser_close_tab`** refuse non-owned tabs with a clear remediation hint. Ownership is persisted across session reloads via `BrowserState`. The session also subscribes `Target.setDiscoverTargets` and reaps `targetDestroyed` events so the registry stays in sync.
+- **`Accessibility` CDP domain enabled** alongside Page/DOM/Runtime/Network on every attach.
+- **`Ctrl+O` (`app.tools.expand`) expand/collapse on tool output.** Three tools now ship custom `renderResult`:
+  - `browser_snapshot` — collapsed: 4-line summary (node count, URL, landmarks/buttons/inputs, screenshot status). Expanded: full indented outline + inline screenshot when `includeScreenshot:true`.
+  - `browser_network_requests` — collapsed: header + first 5 rows. Expanded: full markdown table + per-request body sections when bodies were requested.
+  - `browser_execute_js` — collapsed: size + first 120-char preview. Expanded: pretty-printed JSON if value parses, otherwise raw value, in a code fence.
+  All three append a `keyHint("app.tools.expand", ...)` so the binding label adapts to user remaps.
+
+### Changed
+
+- **Tool prompts pivoted from screenshot-first to snapshot-first.** `browser_screenshot`'s description now explicitly says "NOT a default exploration tool". `browser_snapshot` is documented as the default for understanding pages; `browser_execute_js` as the default for surgical reads. `browser_click` guidance no longer instructs the agent to screenshot for coordinates — it points at `browser_snapshot`'s `@(x,y)` hints. `browser_open_urls` post-step flipped from screenshot to snapshot.
+- **`SKILL.md` rewritten** (~342 lines → ~53 lines). Frontmatter description carries the tool-hierarchy hint (always in context per pi's progressive-disclosure model). Body keeps only what isn't already in tool prompts: the decision tree, the connection rules (real Chrome, no creds, dialog-first), and the `browser_run_script` daemon bindings (the only tool whose API can't be inferred from its prompt). Pattern reference, parallelization details, troubleshooting, and tool enumeration removed as duplication.
+- **CDP `Network.*` events** are now consumed by an in-process aggregator (`src/cdp/network-buffer.ts`) wired into the existing single-consumer event loop in `src/cdp/session.ts`. Pure module, ring-buffered, non-destructive drain.
+
+### Removed
+
+- **`browser_get_network_log`** — was a deprecated placeholder in v0.3 that returned a "use PerformanceObserver" message because the CDP event stream had no public drain API. Replaced by `browser_network_requests`.
+
+### Known follow-ups
+
+- Live network streaming (`browser_network_monitor` real-time during a click) — deferred; reuses the same buffer plumbing once the post-hoc form is proven.
+- No tests added in this release. Verification is manual against real Chrome.
+
 ## 0.3.2 — 2026-05-05
 
 ### Added
