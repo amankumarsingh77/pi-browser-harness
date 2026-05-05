@@ -2,6 +2,20 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.3.2 — 2026-05-05
+
+### Added
+
+- **Parallel tool execution with automatic mutation serialization.** Observation tools (`browser_screenshot`, `browser_page_info`, `browser_execute_js`, `browser_list_tabs`, `browser_http_get` etc.) can now run in parallel with each other and with mutation tools. Mutation tools (`browser_click`, `browser_type`, `browser_scroll`, `browser_navigate`, `browser_switch_tab`, etc.) are automatically serialized through a shared async mutex so they never race on shared CDP session/page state. LLMs can emit independent operations in the same turn for better latency.
+- **New `src/util/mutex.ts`** — lightweight async mutex (~25 LOC) with FIFO queue. `serialized?: boolean` flag added to `BrowserToolDefinition`; `mutationMutex()` exposed on `BrowserClient`.
+- **Prompt and SKILL.md** updated with parallel-execution guidance and safe-parallel-call examples.
+
+### Fixed
+
+- **Scroll tool deltaY sign convention corrected.** Previously `deltaY` was documented as positive=up (inverted vs W3C wheel events). Now follows the W3C convention: positive=down, negative=up. Default changed from `-300` to `300` (scroll down). Prompt snippets, tool descriptions, and guidelines all updated.
+- **Scroll tool now calls `Page.bringToFront`** before dispatching mouse events, preventing silent-drop when the target page is not the active browser tab. Mouse events now include explicit `button:"none"`, `buttons:0`, `pointerType:"mouse"`.
+- **Screenshot TUI render no longer crashes the host on long file paths.** The `Image` text-fallback render did not respect terminal width, so a long path could overflow and crash the host TUI. Each rendered line is now truncated with `truncateToWidth` to fit the available width.
+
 ## 0.3.1 — 2026-05-02
 
 ### Bug fixes

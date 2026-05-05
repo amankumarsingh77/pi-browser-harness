@@ -1,6 +1,6 @@
 {
   "name": "pi-browser-harness",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Browser control extension for pi — navigate, click, type, screenshot, and extract data from real Chrome via CDP",
   "keywords": [
     "pi-package",
