@@ -98,7 +98,23 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
-    client = createBrowserClient({ namespace: state.namespace });
+    const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
+    if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
+    if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
+    client = createBrowserClient({
+      namespace: state.namespace,
+      ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
+      onOwnershipChange: (snap) => {
+        state = {
+          ...state,
+          ownedTargetIds: snap.ownedTargetIds,
+          ...(snap.harnessWindowTargetId !== undefined
+            ? { harnessWindowTargetId: snap.harnessWindowTargetId }
+            : {}),
+        };
+        persistState(pi, state);
+      },
+    });
     // failure is fine — surfaced via tool errors when the agent first tries to use the browser
     await client.start();
     if (!toolsRegistered) {

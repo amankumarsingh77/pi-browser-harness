@@ -6,11 +6,20 @@ import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/transport";
 import { createCdpTransport } from "./cdp/transport";
 import { type CdpSession, createCdpSession } from "./cdp/session";
+import { type OwnershipRegistry, createOwnershipRegistry } from "./cdp/ownership";
 import type { DaemonStatus, DialogInfo, PageInfo, TabInfo } from "./cdp/types";
 
 export type BrowserClientOptions = {
   readonly namespace: string;
   readonly remote?: { readonly cdpUrl: string; readonly browserId: string };
+  readonly initialOwnership?: {
+    readonly ownedTargetIds?: ReadonlyArray<string>;
+    readonly harnessWindowTargetId?: string;
+  };
+  readonly onOwnershipChange?: (snapshot: {
+    readonly ownedTargetIds: ReadonlyArray<string>;
+    readonly harnessWindowTargetId: string | undefined;
+  }) => void;
 };
 
 export type BrowserClient = {
@@ -25,6 +34,9 @@ export type BrowserClient = {
   listTabs(includeInternal?: boolean): Promise<Result<ReadonlyArray<TabInfo>, CdpError>>;
   switchTab(targetId: string): Promise<Result<void, CdpError>>;
   newTab(url?: string): Promise<Result<string, CdpError>>;
+  closeTab(targetId: string): Promise<Result<void, CdpError>>;
+  owns(targetId: string): boolean;
+  ownership(): OwnershipRegistry;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   session(): CdpSession;
   transport(): CdpTransport;
@@ -66,7 +78,24 @@ const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
 
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
   const transport = createCdpTransport();
-  const session = createCdpSession(transport);
+  const ownershipInit: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
+  if (opts.initialOwnership?.ownedTargetIds !== undefined) {
+    ownershipInit.ownedTargetIds = opts.initialOwnership.ownedTargetIds;
+  }
+  if (opts.initialOwnership?.harnessWindowTargetId !== undefined) {
+    ownershipInit.harnessWindowTargetId = opts.initialOwnership.harnessWindowTargetId;
+  }
+  const ownership = createOwnershipRegistry(ownershipInit);
+  if (opts.onOwnershipChange) {
+    const cb = opts.onOwnershipChange;
+    ownership.onChange(() => {
+      cb({
+        ownedTargetIds: ownership.list(),
+        harnessWindowTargetId: ownership.harnessWindow(),
+      });
+    });
+  }
+  const session = createCdpSession(transport, ownership);
   const mutationMutex = createMutex();
   let lastHealth = 0;
   let pageCache: { readonly info: PageInfo; readonly at: number } | null = null;
@@ -186,7 +215,19 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     const tabs = data.targetInfos
       .filter((t) => t.type === "page")
       .filter((t) => includeInternal || !t.url.startsWith("chrome://"))
-      .map((t): TabInfo => ({ targetId: t.targetId, title: t.title, url: t.url }));
+      .map((t): TabInfo => ({
+        targetId: t.targetId,
+        title: t.title,
+        url: t.url,
+        owned: ownership.has(t.targetId),
+      }));
+    // Reconcile any persisted owned ids that no longer exist as live page targets.
+    const live = new Set(tabs.map((t) => t.targetId));
+    const owned = ownership.list();
+    const survivors = owned.filter((id) => live.has(id));
+    if (survivors.length !== owned.length) ownership.replaceAll(survivors);
+    const hw = ownership.harnessWindow();
+    if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
     return ok(tabs);
   };
 
@@ -204,9 +245,30 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
-    const created = await session.callBrowser("Target.createTarget", { url: "about:blank" });
+    // Verify the recorded harness window still exists. Querying the live
+    // target list also gives listTabs's reconciliation a chance to run.
+    const tabsResult = await listTabs(true);
+    if (!tabsResult.success) return tabsResult;
+    const live = new Set(tabsResult.data.map((t) => t.targetId));
+    const hw = ownership.harnessWindow();
+
+    const params: Record<string, unknown> = { url: "about:blank" };
+    if (hw && live.has(hw)) {
+      // Open as a child of the harness window's seed tab — Chrome places
+      // it in the same window, giving us visual grouping for free.
+      params["openerId"] = hw;
+    } else {
+      // Either fresh session or the harness window was closed by the user.
+      // Spawn a new dedicated window.
+      params["newWindow"] = true;
+    }
+    const created = await session.callBrowser("Target.createTarget", params);
     if (!created.success) return created;
     const c = created.data as { targetId: string };
+
+    if (params["newWindow"]) ownership.setHarnessWindow(c.targetId);
+    ownership.add(c.targetId);
+
     const switched = await switchTab(c.targetId);
     if (!switched.success) return switched;
     if (url && url !== "about:blank") {
@@ -215,6 +277,13 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       pageCache = null;
     }
     return ok(c.targetId);
+  };
+
+  const closeTab = async (targetId: string): Promise<Result<void, CdpError>> => {
+    const r = await session.callBrowser("Target.closeTarget", { targetId });
+    if (!r.success) return r;
+    ownership.remove(targetId);
+    return ok(undefined);
   };
 
   const status = (): DaemonStatus => ({
@@ -229,7 +298,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     ensureAlive, status, start, stop,
     evaluateJs, pageInfo,
     takeDialog: () => session.takeDialog(),
-    listTabs, switchTab, newTab,
+    listTabs, switchTab, newTab, closeTab,
+    owns: (id: string) => ownership.has(id),
+    ownership: () => ownership,
     current: () => session.current(),
     session: () => session,
     transport: () => transport,

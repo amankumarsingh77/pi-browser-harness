@@ -9,7 +9,7 @@ import { handleDialogTool } from "./domains/dialog";
 import { screenshotTool } from "./domains/screenshot";
 import { navigateTool, openUrlsTool } from "./domains/navigate";
 import { goBackTool, goForwardTool, reloadTool } from "./domains/history";
-import { listTabsTool, currentTabTool, switchTabTool, newTabTool } from "./domains/tabs";
+import { listTabsTool, currentTabTool, switchTabTool, newTabTool, closeTabTool } from "./domains/tabs";
 import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
@@ -39,6 +39,7 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   currentTabTool,
   { ...switchTabTool, serialized: true },
   { ...newTabTool, serialized: true },
+  { ...closeTabTool, serialized: true },
   { ...uploadFileTool, serialized: true },
   { ...downloadTool, serialized: true },
   { ...printToPdfTool, serialized: true },

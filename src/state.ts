@@ -10,9 +10,14 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 export type BrowserState = {
   readonly namespace: string;
   readonly remoteBrowserId?: string;
+  readonly ownedTargetIds?: ReadonlyArray<string>;
+  readonly harnessWindowTargetId?: string;
 };
 
-export const defaultState = (namespace = "default"): BrowserState => ({ namespace });
+export const defaultState = (namespace = "default"): BrowserState => ({
+  namespace,
+  ownedTargetIds: [],
+});
 
 export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
   pi.appendEntry<BrowserState>("browser-harness-state", state);

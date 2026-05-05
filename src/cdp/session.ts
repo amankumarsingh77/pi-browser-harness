@@ -1,7 +1,7 @@
-import { type Result, err, ok } from "../util/result";
-import { type CdpError, cdpError } from "./errors";
+import { type Result, ok } from "../util/result";
+import type { CdpError } from "./errors";
 import type { DialogInfo } from "./types";
-import { isInternalUrl } from "./types";
+import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./transport";
 
 export type CdpSession = {
@@ -15,7 +15,10 @@ export type CdpSession = {
   drainPageInfoInvalidations(): boolean;
 };
 
-export const createCdpSession = (transport: CdpTransport): CdpSession => {
+export const createCdpSession = (
+  transport: CdpTransport,
+  ownership?: OwnershipRegistry,
+): CdpSession => {
   let sessionId: string | null = null;
   let targetId: string | null = null;
   let dialog: DialogInfo | null = null;
@@ -40,6 +43,10 @@ export const createCdpSession = (transport: CdpTransport): CdpSession => {
       // was about to read. (Fix for spec §7 predictability bug #2.)
       if (ev.method === "Page.frameNavigated" || ev.method === "Page.loadEventFired") {
         pageInfoDirty = true;
+      }
+      if (ev.method === "Target.targetDestroyed" && ownership) {
+        const params = ev.params as { targetId?: string } | undefined;
+        if (params?.targetId) ownership.remove(params.targetId);
       }
     }
   };
@@ -81,25 +88,51 @@ export const createCdpSession = (transport: CdpTransport): CdpSession => {
   // as a clear Error in normal use.
   return {
     async attachFirstPage() {
+      // Subscribe to Target.* events so we can react to targetDestroyed.
+      // Best-effort: failing to enable discovery is not fatal for attach.
+      await transport.request("Target.setDiscoverTargets", { discover: true }, { sessionId: null });
+
       const targets = await transport.request("Target.getTargets", {}, { sessionId: null });
       if (!targets.success) return targets;
       const data = targets.data as { targetInfos: ReadonlyArray<{ targetId: string; type: string; url: string }> };
-      let pages = data.targetInfos.filter((t) => t.type === "page" && !isInternalUrl(t.url));
-      if (pages.length === 0) {
-        const created = await transport.request("Target.createTarget", { url: "about:blank" }, { sessionId: null });
+      const allPages = data.targetInfos.filter((t) => t.type === "page");
+      // Reconcile the persisted ownership set against live targets — drop dead IDs.
+      if (ownership) {
+        const live = new Set(allPages.map((p) => p.targetId));
+        const survivors = ownership.list().filter((id) => live.has(id));
+        if (survivors.length !== ownership.list().length) ownership.replaceAll(survivors);
+        const hw = ownership.harnessWindow();
+        if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
+      }
+
+      // Prefer attaching to a tab this session already owns. Falls back to
+      // creating a fresh harness-owned tab in a dedicated window — never
+      // grabs the user's foreground tab.
+      let pickTargetId: string | undefined;
+      if (ownership) {
+        const ownedLive = ownership.list().filter((id) => allPages.some((p) => p.targetId === id));
+        pickTargetId = ownedLive[0];
+      }
+      if (!pickTargetId) {
+        const createParams: Record<string, unknown> = { url: "about:blank" };
+        if (ownership) createParams["newWindow"] = true;
+        const created = await transport.request("Target.createTarget", createParams, { sessionId: null });
         if (!created.success) return created;
         const c = created.data as { targetId: string };
-        pages = [{ targetId: c.targetId, type: "page", url: "about:blank" }];
+        pickTargetId = c.targetId;
+        if (ownership) {
+          ownership.setHarnessWindow(c.targetId);
+          ownership.add(c.targetId);
+        }
       }
-      const first = pages[0];
-      if (!first) return err(cdpError("invalid_response", "no page targets after creation"));
-      const attached = await transport.request("Target.attachToTarget", { targetId: first.targetId, flatten: true }, { sessionId: null });
+
+      const attached = await transport.request("Target.attachToTarget", { targetId: pickTargetId, flatten: true }, { sessionId: null });
       if (!attached.success) return attached;
       const a = attached.data as { sessionId: string };
       sessionId = a.sessionId;
-      targetId = first.targetId;
+      targetId = pickTargetId;
       await enableDomains(a.sessionId);
-      return ok({ targetId: first.targetId, sessionId: a.sessionId });
+      return ok({ targetId: pickTargetId, sessionId: a.sessionId });
     },
     async switchTo(tid) {
       const activated = await transport.request("Target.activateTarget", { targetId: tid }, { sessionId: null });

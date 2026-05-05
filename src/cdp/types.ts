@@ -23,6 +23,7 @@ export type TabInfo = {
   readonly targetId: string;
   readonly title: string;
   readonly url: string;
+  readonly owned?: boolean;
 };
 
 export type PageInfo = {
