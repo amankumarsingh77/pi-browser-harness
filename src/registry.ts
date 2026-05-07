@@ -14,6 +14,7 @@ import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
 import { httpGetTool, networkRequestsTool } from "./domains/network";
+import { consoleTool } from "./domains/console";
 import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
 
@@ -48,6 +49,7 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   { ...dragAndDropTool, serialized: true },
   httpGetTool,
   networkRequestsTool,
+  consoleTool,
   snapshotTool,
   executeJsTool,
   runScriptTool,

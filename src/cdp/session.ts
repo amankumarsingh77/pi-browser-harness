@@ -4,6 +4,7 @@ import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./transport";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
+import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
 
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
@@ -15,6 +16,7 @@ export type CdpSession = {
   takeDialog(): DialogInfo | null;
   drainPageInfoInvalidations(): boolean;
   drainNetworkBuffer(filter: NetworkFilter): DrainResult;
+  drainConsoleBuffer(filter: ConsoleFilter): ConsoleDrainResult;
 };
 
 export const createCdpSession = (
@@ -26,6 +28,7 @@ export const createCdpSession = (
   let dialog: DialogInfo | null = null;
   let pageInfoDirty = false;
   const networkBuffer = createNetworkBuffer();
+  const consoleBuffer = createConsoleBuffer();
 
   let activeConsumer: Promise<void> = Promise.resolve();
 
@@ -55,6 +58,8 @@ export const createCdpSession = (
       else if (ev.method === "Network.responseReceived") networkBuffer.ingestResponseReceived(ev.params);
       else if (ev.method === "Network.loadingFinished") networkBuffer.ingestLoadingFinished(ev.params);
       else if (ev.method === "Network.loadingFailed") networkBuffer.ingestLoadingFailed(ev.params);
+      else if (ev.method === "Runtime.consoleAPICalled") consoleBuffer.ingestConsoleApi(ev.params);
+      else if (ev.method === "Log.entryAdded") consoleBuffer.ingestLogEntry(ev.params);
     }
   };
 
@@ -82,7 +87,7 @@ export const createCdpSession = (
   // Switching to Promise.all over a single WS pipelines the round-trips and
   // saves ~3× on tab-switch latency. Defer until session.ts has tests.
   const enableDomains = async (sid: string): Promise<void> => {
-    for (const d of ["Page", "DOM", "Runtime", "Network", "Accessibility"]) {
+    for (const d of ["Page", "DOM", "Runtime", "Network", "Accessibility", "Log"]) {
       await transport.request(`${d}.enable`, {}, { sessionId: sid });
     }
   };
@@ -153,6 +158,7 @@ export const createCdpSession = (
       // Buffer is page-scoped: on switch, the network history of the previous
       // tab is no longer relevant to what the agent is now looking at.
       networkBuffer.clear();
+      consoleBuffer.clear();
       await enableDomains(a.sessionId);
       return ok(undefined);
     },
@@ -180,6 +186,9 @@ export const createCdpSession = (
     },
     drainNetworkBuffer(filter) {
       return networkBuffer.drain(filter);
+    },
+    drainConsoleBuffer(filter) {
+      return consoleBuffer.drain(filter);
     },
   };
 };

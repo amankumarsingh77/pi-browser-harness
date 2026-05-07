@@ -36,6 +36,7 @@ to interact with pages visually, and other tools alongside them.
 | browser_switch_tab | Switch to a different tab by targetId |
 | browser_execute_js | Execute JavaScript and return the result |
 | browser_http_get | Direct HTTP GET (outside browser, for APIs) |
+| browser_console | Read JS errors / console output on the current tab (diagnostic — use when an action looks broken; pass sinceSeq from the previous nextCursor to see only new messages) |
 | browser_wait | Wait N seconds |
 | browser_wait_for_load | Wait for document.readyState === 'complete' (returns a typed timeout error if the page doesn't reach readyState=complete in N seconds, default 15) |
 | browser_handle_dialog | Accept or dismiss a JS dialog |

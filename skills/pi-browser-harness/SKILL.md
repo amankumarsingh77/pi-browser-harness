@@ -21,6 +21,9 @@ What do you need to know?
   ├─ Network behavior on the current page?
   │     → browser_network_requests
   │
+  ├─ JS errors / why did nothing happen after an action?
+  │     → browser_console     (DIAGNOSTIC — only when something looks broken)
+  │
   └─ Visual rendering (layout / colors / chart drew correctly)?
         → browser_screenshot   (LAST RESORT — pixels only)
 ```
@@ -30,6 +33,10 @@ Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. No screenshot
 ## Connection
 
 You're attached to the user's real Chrome — never launch your own. If auth is required, stop and ask the user. If `browser_page_info` returns a dialog, handle it first with `browser_handle_dialog`.
+
+## Diagnosing a "nothing happened" moment
+
+When an action runs but the page didn't change, capture `browser_console`'s `nextCursor` *before* the action, take the action, then call `browser_console({ sinceSeq: <cursor> })` after — this isolates what your action caused from what was already there. Pair with `browser_network_requests({ sinceMs: 5000 })` to see if an API call fired and failed. The console buffer is page-scoped: it clears on tab switch, capacity 500.
 
 ## Temporary scripts
 

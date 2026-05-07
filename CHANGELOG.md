@@ -2,6 +2,22 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.5.0 — 2026-05-07
+
+### Added
+
+- **`browser_console`** — new tool. Reads JS errors and console messages from the active tab via two CDP sources merged into one buffer: `Runtime.consoleAPICalled` (page `console.*` calls and uncaught exceptions) and `Log.entryAdded` (browser-level entries — CSP violations, mixed content, deprecations, network errors). Filters: `levels` (log/info/warn/error/debug), `textPattern` (substring; wrap in slashes for regex), `sinceMs`, `limit` (default 50, cap 500). Each record carries a monotonic `seq`; the response includes `nextCursor` so callers can pass `sinceSeq` to see only what's new since the previous drain — the cursor pattern that makes "what did this action cause?" answerable in one call. Buffer is page-scoped (cleared on tab switch) and bounded at 500 records; `bufferOverflowed` flag reports drops since the last drain. Stack traces (top 3 frames) are preserved for error/warn records. Per-arg cap of 2 KB prevents a single `console.log(hugeBlob)` from blowing the buffer.
+- **`Log` CDP domain enabled** alongside Page/DOM/Runtime/Network/Accessibility on every attach. (`Runtime` was already enabled, so `Runtime.consoleAPICalled` was reachable; this adds the missing domain for browser-level entries.)
+- **`browser_console` ships with a custom `renderResult`** following the established pattern — collapsed: header counts (`3 errors · 2 warnings · 47 logs`) + last 5 rows. Expanded: full list with stack traces inline as code fences. Appends `keyHint("app.tools.expand", ...)` so the binding label adapts to user remaps.
+
+### Internal
+
+- New pure module `src/cdp/console-buffer.ts` mirrors the `network-buffer.ts` pattern (insertion-ordered Map, FIFO eviction at capacity 500, overflow flag reset per drain). Wired into the existing single-consumer event loop in `src/cdp/session.ts`.
+
+### Known follow-ups
+
+- No tests added in this release. Verification is manual against real Chrome.
+
 ## 0.4.0 — 2026-05-06
 
 ### Added
