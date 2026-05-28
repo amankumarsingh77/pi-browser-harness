@@ -45,9 +45,9 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
     ) {
       ctx.ui.notify(
         "Chrome remote debugging needs to be enabled.\n\n" +
-        "Open chrome://inspect/#remote-debugging in your browser, tick the\n" +
-        "\"Discover network targets\" / Allow checkbox, then run /browser-setup again.\n\n" +
-        "Or set BU_CDP_WS to a remote browser WebSocket URL.",
+          "Open chrome://inspect/#remote-debugging in your browser, tick the\n" +
+          "\"Discover network targets\" / Allow checkbox, then run /browser-setup again.\n\n" +
+          "Or set BU_CDP_WS to a remote browser WebSocket URL.",
         "warning",
       );
       return;
