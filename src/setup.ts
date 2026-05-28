@@ -81,21 +81,39 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
 function checkChromeRunning(): boolean {
   try {
     if (process.platform === "darwin") {
-      // Exact line matching — excludes "Google Chrome Helper" etc.
-      // that linger after the user quits the browser.
+      // On macOS, `ps -o comm=` returns full executable paths like
+      // `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`,
+      // so we substring-match against the basename and exclude sub-processes
+      // (helpers, renderers, GPU, crashpad) that linger after quit.
       const out = execSync("ps -A -o comm=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
-      const browserProcesses = ["google chrome", "chromium", "microsoft edge"];
+      const browserNames = [
+        "google chrome",
+        "chromium",
+        "microsoft edge",
+        "brave browser",
+        "arc",
+        "vivaldi",
+        "opera",
+      ];
       return lines.some((l) => {
-        if (l.includes("helper") || l.includes("renderer")) return false;
-        return browserProcesses.includes(l);
+        if (
+          l.includes("helper") ||
+          l.includes("renderer") ||
+          l.includes("crashpad") ||
+          l.includes(" gpu") ||
+          l.includes("updater")
+        ) return false;
+        // Match against the basename of the executable path.
+        const base = l.split("/").pop() ?? l;
+        return browserNames.some((name) => base.startsWith(name));
       });
     } else if (process.platform === "linux") {
       // Use args to distinguish the main browser process from sub-processes
       // (GPU, renderer, utility, etc.) which carry --type= flags.
       const out = execSync("ps -A -o comm=,args=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
-      const browserComms = ["chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge", "google-chrome"];
+      const browserComms = ["chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge", "google-chrome", "brave", "brave-browser"];
       return lines.some((line) => {
         const parts = line.split(/\s+/);
         const comm = parts[0] ?? "";
@@ -105,7 +123,7 @@ function checkChromeRunning(): boolean {
       });
     } else if (process.platform === "win32") {
       const out = execSync("tasklist", { timeout: 5000 }).toString().toLowerCase();
-      return ["chrome.exe", "msedge.exe"].some((n) => out.includes(n));
+      return ["chrome.exe", "msedge.exe", "brave.exe"].some((n) => out.includes(n));
     }
   } catch {
     // best-effort
