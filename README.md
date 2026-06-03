@@ -39,7 +39,10 @@ pi install npm:pi-browser-harness
 #    tick "Discover network targets", click Allow.
 #    Or launch Chrome with --remote-debugging-port=9222
 
-# 3. Connect
+# 3. Enable browser tools when a task needs them
+/browser-enable
+
+# Optional: explicitly verify Chrome remote debugging
 /browser-setup
 ```
 
@@ -48,6 +51,10 @@ pi install npm:pi-browser-harness
 - pi (latest)
 - Node.js ≥ 22
 - Chrome / Chromium / Edge
+
+### Lazy activation
+
+pi-browser-harness does not connect to Chrome or open harness tabs during agent or subagent initialization. Browser tools are disabled by default; run `/browser-enable` when a task needs browser control. The first `browser_*` tool call connects lazily. Run `/browser-setup` when you want to explicitly verify Chrome remote-debugging setup.
 
 ---
 
@@ -268,8 +275,10 @@ Scripts are written to disk — auditable and re-runnable.
 
 | Command | Description |
 |---------|-------------|
-| `/browser-setup` | Connect pi to Chrome (run once) |
-| `/browser-status` | Show daemon health and current page |
+| `/browser-enable` | Enable browser tools for this session; first browser tool call connects lazily |
+| `/browser-disable` | Disable browser tools for this session |
+| `/browser-setup` | Explicitly connect to Chrome and verify control with a test tab |
+| `/browser-status` | Show daemon health and current page without starting Chrome |
 | `/browser-reload-daemon` | Restart the connection |
 
 ---

@@ -2,6 +2,17 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- Browser activation is now lazy and opt-in. Agent/subagent session startup no longer connects to Chrome or creates harness tabs; run `/browser-enable` before browser work, and the first `browser_*` tool call connects lazily.
+- Added `/browser-disable` to remove browser tools from the active tool set for the current session.
+
+### Testing
+
+- Added a Node test that guards against `session_start` calling `client.start()`.
+
 ## 0.5.0 — 2026-05-07
 
 ### Added
