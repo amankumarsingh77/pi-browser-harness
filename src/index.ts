@@ -35,6 +35,17 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   let state: BrowserState = defaultState(namespace);
   let client: BrowserClient | null = null;
   let toolsRegistered = false;
+  let browserToolsEnabled = false;
+  const browserToolNames = new Set<string>();
+
+  const applyBrowserToolPolicy = (): void => {
+    const active = new Set(pi.getActiveTools());
+    for (const name of browserToolNames) {
+      if (browserToolsEnabled) active.add(name);
+      else active.delete(name);
+    }
+    pi.setActiveTools([...active]);
+  };
 
   pi.registerFlag("browser-namespace", {
     description: "Browser daemon namespace. Default: auto-generated",
@@ -96,6 +107,26 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("browser-enable", {
+    description: "Enable browser tools for this session",
+    handler: async (_args, ctx) => {
+      browserToolsEnabled = true;
+      applyBrowserToolPolicy();
+      ctx.ui.setStatus("browser", client?.status().alive ? "🟢 Browser enabled" : "⚪ Browser enabled lazily");
+      ctx.ui.notify("Browser tools enabled. Chrome will connect lazily on first browser_* tool call.", "info");
+    },
+  });
+
+  pi.registerCommand("browser-disable", {
+    description: "Disable browser tools for this session",
+    handler: async (_args, ctx) => {
+      browserToolsEnabled = false;
+      applyBrowserToolPolicy();
+      ctx.ui.setStatus("browser", "⚪ Browser disabled");
+      ctx.ui.notify("Browser tools disabled for this session.", "info");
+    },
+  });
+
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
     const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
@@ -115,17 +146,16 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
         persistState(pi, state);
       },
     });
-    // failure is fine — surfaced via tool errors when the agent first tries to use the browser
-    await client.start();
     if (!toolsRegistered) {
       registerAllTools(pi, client);
+      for (const tool of pi.getAllTools()) {
+        if (tool.name.startsWith("browser_")) browserToolNames.add(tool.name);
+      }
       toolsRegistered = true;
     }
+    applyBrowserToolPolicy();
     registerSetupCommand(pi, client);
-    ctx.ui.setStatus(
-      "browser",
-      client.status().alive ? "🟢 Browser connected" : "🔴 Browser — run /browser-setup",
-    );
+    ctx.ui.setStatus("browser", browserToolsEnabled ? "⚪ Browser enabled lazily" : "⚪ Browser disabled");
   });
 
   pi.on("session_shutdown", async () => {
@@ -150,11 +180,13 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event) => {
+    if (!browserToolsEnabled) return { systemPrompt: event.systemPrompt };
+
     if (!client || !client.status().alive) {
       return {
         systemPrompt:
           event.systemPrompt +
-          `\n\n## Browser Control\n\nBrowser tools (browser_*) are available but the browser is not connected. Run /browser-setup.`,
+          `\n\n## Browser Control\n\nBrowser tools (browser_*) are enabled and will connect lazily on first use. Run /browser-setup for guided setup if connection fails.`,
       };
     }
     return { systemPrompt: event.systemPrompt + getBrowserSystemPrompt() };
