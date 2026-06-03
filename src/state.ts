@@ -12,11 +12,15 @@ export type BrowserState = {
   readonly remoteBrowserId?: string;
   readonly ownedTargetIds?: ReadonlyArray<string>;
   readonly harnessWindowTargetId?: string;
+  readonly toolsEnabled?: boolean;
 };
 
 export const defaultState = (namespace = "default"): BrowserState => ({
   namespace,
   ownedTargetIds: [],
+  // Keep browser_* tools available across daemon/extension reloads. The browser
+  // connection itself remains lazy; this flag only controls tool visibility.
+  toolsEnabled: true,
 });
 
 export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {

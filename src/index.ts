@@ -35,7 +35,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   let state: BrowserState = defaultState(namespace);
   let client: BrowserClient | null = null;
   let toolsRegistered = false;
-  let browserToolsEnabled = false;
+  let browserToolsEnabled = state.toolsEnabled ?? true;
   const browserToolNames = new Set<string>();
 
   const applyBrowserToolPolicy = (): void => {
@@ -111,6 +111,8 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     description: "Enable browser tools for this session",
     handler: async (_args, ctx) => {
       browserToolsEnabled = true;
+      state = { ...state, toolsEnabled: true };
+      persistState(pi, state);
       applyBrowserToolPolicy();
       ctx.ui.setStatus("browser", client?.status().alive ? "🟢 Browser enabled" : "⚪ Browser enabled lazily");
       ctx.ui.notify("Browser tools enabled. Chrome will connect lazily on first browser_* tool call.", "info");
@@ -121,6 +123,8 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     description: "Disable browser tools for this session",
     handler: async (_args, ctx) => {
       browserToolsEnabled = false;
+      state = { ...state, toolsEnabled: false };
+      persistState(pi, state);
       applyBrowserToolPolicy();
       ctx.ui.setStatus("browser", "⚪ Browser disabled");
       ctx.ui.notify("Browser tools disabled for this session.", "info");
@@ -129,6 +133,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
+    browserToolsEnabled = state.toolsEnabled ?? true;
     const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
     if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
     if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
