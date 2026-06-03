@@ -4,6 +4,7 @@ import test from "node:test";
 
 const indexSource = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../src/state.ts", import.meta.url), "utf8");
+const toolSource = await readFile(new URL("../src/util/tool.ts", import.meta.url), "utf8");
 
 function extractSessionStartHandler(source) {
   const marker = 'pi.on("session_start", async';
@@ -44,4 +45,9 @@ test("browser enable and disable commands persist tool visibility", () => {
   assert.match(indexSource, /state = \{ \.\.\.state, toolsEnabled: true \}/);
   assert.match(indexSource, /state = \{ \.\.\.state, toolsEnabled: false \}/);
   assert.match(indexSource, /browserToolsEnabled = state\.toolsEnabled \?\? true/);
+});
+
+test("browser status indicator updates after lazy connection attempt", () => {
+  assert.match(toolSource, /setStatus\("browser", "🟢 Browser connected"\)/);
+  assert.match(toolSource, /setStatus\("browser", "🔴 Browser disconnected"\)/);
 });

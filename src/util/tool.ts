@@ -144,11 +144,13 @@ export const registerBrowserTool = (
       if (def.ensureAlive !== false) {
         const alive = await client.ensureAlive();
         if (!alive.success) {
+          extensionCtx.ui.setStatus("browser", "🔴 Browser disconnected");
           return toToolResult(
             { success: false, error: { kind: "not_connected", message: alive.error.message } },
             def.name,
           );
         }
+        extensionCtx.ui.setStatus("browser", "🟢 Browser connected");
       }
       // Serialized tools acquire the client's mutation mutex so that only one
       // mutation tool runs at a time. Observation tools skip this and run freely
