@@ -90,14 +90,14 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
 function checkChromeRunning(): boolean {
   try {
     if (process.platform === "darwin") {
-      // Exact line matching — excludes "Google Chrome Helper" etc.
-      // that linger after the user quits the browser.
+      // ps -o comm= returns the full executable path on modern macOS.
+      // We check for "Google Chrome" anywhere in the path (case-insensitive),
+      // excluding helper/renderer subprocesses.
       const out = execSync("ps -A -o comm=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
-      const browserProcesses = ["google chrome", "chromium", "microsoft edge"];
       return lines.some((l) => {
-        if (l.includes("helper") || l.includes("renderer")) return false;
-        return browserProcesses.includes(l);
+        if (l.includes("helper") || l.includes("renderer") || l.includes("crashpad")) return false;
+        return l.includes("google chrome") || l.includes("chromium") || l.includes("microsoft edge");
       });
     } else if (process.platform === "linux") {
       // Use args to distinguish the main browser process from sub-processes
