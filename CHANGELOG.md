@@ -2,7 +2,18 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
-## 0.5.0 — 2026-05-07
+## 0.6.0 — 2026-06-21
+
+### Added
+
+- **Per-tab isolation for multi-agent safety.** Each agent's browser session now operates in a dedicated Chrome window with tab ownership tracking. Tabs opened via `browser_open_urls` and `browser_new_tab` are automatically registered in the ownership registry and tagged with a 🟢 prefix in the document title for user visibility. `browser_list_tabs` scoped to `"owned"` (default) only shows the current session's tabs.
+- **Unix socket daemon with auto-reconnect.** The browser daemon now binds to a Unix-domain socket (`pi-browser.sock`) in the harness temp directory instead of a TCP port. The transport layer reconnects automatically when Chrome restarts — no manual `/browser-reload-daemon` needed.
+- **On-demand browser initialization.** Chrome is no longer launched eagerly at harness startup. The harness attaches lazily on the first browser tool call, reducing resource usage when the agent isn't using the browser.
+- **`browser_setup` as agent-callable tool.** The setup tool can now be called programmatically by agents, not just via slash command. Idempotent — safe to call when already connected.
+
+### Fixed
+
+- **Chrome detection on macOS** now matches by process-name substring instead of exact binary path comparison, fixing false negatives when Chrome is running from different installation paths (e.g. `/Applications/Google Chrome.app/` vs user-local copies).
 
 ### Added
 

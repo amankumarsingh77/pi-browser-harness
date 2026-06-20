@@ -27,6 +27,7 @@ import { registerSetupCommand } from "./setup";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
+import { createDaemonTransport } from "./cdp/daemon-transport";
 
 export default function browserHarnessExtension(pi: ExtensionAPI): void {
   const flagNs = pi.getFlag("browser-namespace") as string | undefined;
@@ -98,25 +99,43 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
-    const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
-    if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
-    if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
-    client = createBrowserClient({
-      namespace: state.namespace,
-      ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
-      onOwnershipChange: (snap) => {
-        state = {
-          ...state,
-          ownedTargetIds: snap.ownedTargetIds,
-          ...(snap.harnessWindowTargetId !== undefined
-            ? { harnessWindowTargetId: snap.harnessWindowTargetId }
-            : {}),
-        };
-        persistState(pi, state);
-      },
-    });
-    // failure is fine — surfaced via tool errors when the agent first tries to use the browser
-    await client.start();
+
+    // Create the client lazily on first session. The daemon transport
+    // is created but NOT connected — that only happens when the user
+    // runs /browser-setup or a browser tool call finds an existing socket.
+    // This means zero Chrome prompts for non-browser pi sessions.
+    if (!client) {
+      const transport = createDaemonTransport(state.namespace);
+
+      const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
+      if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
+      if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
+
+      client = createBrowserClient({
+        namespace: state.namespace,
+        transport,
+        ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
+        onOwnershipChange: (snap) => {
+          state = {
+            ...state,
+            ownedTargetIds: snap.ownedTargetIds,
+            ...(snap.harnessWindowTargetId !== undefined
+              ? { harnessWindowTargetId: snap.harnessWindowTargetId }
+              : {}),
+          };
+          // Ownership changes can fire from CDP events at any time,
+          // including after session replacement when pi's ctx is stale.
+          // Persistence is best-effort — failure must not crash the event consumer.
+          // ponytail: try/catch is the simplest guard against stale-ctx.
+          try { persistState(pi, state); } catch { /* stale ctx — safe to ignore */ }
+        },
+      });
+    }
+
+    // Do NOT call client.start() here — browser control is on-demand.
+    // The first browser tool call or /browser-setup triggers the actual
+    // daemon socket connection and Chrome prompt.
+
     if (!toolsRegistered) {
       registerAllTools(pi, client);
       toolsRegistered = true;
@@ -132,15 +151,17 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     persistState(pi, state);
     if (client) {
       try {
-        await client.stop();
+        // Detach from the page target (removes the "Chrome is being controlled"
+        // banner) but keep the transport alive for the next session.
+        await client.detach();
       } catch (e) {
-        // Shutdown is best-effort, but a stuck stop() points at a transport
-        // bug worth surfacing for debugging.
-        console.warn("[pi-browser-harness] client.stop() failed during shutdown:", e);
+        console.warn("[pi-browser-harness] client.detach() failed during shutdown:", e);
       }
-      client = null;
+      // ponytail: keep the transport alive across sessions.
+      // Do NOT call client.stop() or null out client — the daemon connection
+      // persists and eliminates the per-session "Allow Remote Debugging" prompt.
+      // Only Chrome restart or daemon death triggers a new prompt.
     }
-    toolsRegistered = false;
     await cleanupTempDirs();
   });
 

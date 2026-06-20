@@ -9,6 +9,8 @@ import type {
   ToolRenderResultOptions,
 } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
+import { access } from "node:fs/promises";
+import { DAEMON_SOCKET_PATH } from "../daemon/protocol";
 import type { BrowserClient } from "../client";
 import type { Result } from "./result";
 
@@ -142,6 +144,23 @@ export const registerBrowserTool = (
       : {}),
     async execute(_toolCallId, args, signal, onUpdate, extensionCtx) {
       if (def.ensureAlive !== false) {
+        // Check daemon socket exists before attempting browser control.
+        // If missing, the user hasn't run /browser-setup yet. Return a clear
+        // error so the agent knows to direct the user to initialize.
+        try {
+          await access(DAEMON_SOCKET_PATH);
+        } catch {
+          return toToolResult(
+            {
+              success: false,
+              error: {
+                kind: "not_connected",
+                message: "Browser harness not initialized. Run /browser-setup first",
+              },
+            },
+            def.name,
+          );
+        }
         const alive = await client.ensureAlive();
         if (!alive.success) {
           return toToolResult(

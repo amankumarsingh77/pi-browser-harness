@@ -58,43 +58,43 @@ Remove:
 Structure your analysis like this:
 
 ```
-## Analysis of: [Document Path]
+## Analysis of: {Document Path}
 
 ### Document Context
-- **Date**: [From frontmatter `date:` field]
-- **Type**: [Research / Solution Analysis / Design / Plan / Review / Handoff]
-- **Purpose**: [From frontmatter `topic:` field + document content]
-- **Status**: [From frontmatter `status:` field — complete/ready/resolved/superseded]
-- **Upstream**: [From `questions_source:`, `research_source:` or `design_source:` if present]
+- **Date**: {From frontmatter `date:` field}
+- **Type**: {Research / Solution Analysis / Design / Plan / Review / Handoff}
+- **Purpose**: {From frontmatter `topic:` field + document content}
+- **Status**: {From frontmatter `status:` field — complete/ready/resolved/superseded}
+- **Upstream**: {From `parent:` if present}
 
 ### Key Decisions
-1. **[Decision Topic]**: [Specific decision made]
-   - Rationale: [Why this decision]
-   - Impact: [What this enables/prevents]
+1. **{Decision Topic}**: {Specific decision made}
+   - Rationale: {Why this decision}
+   - Impact: {What this enables/prevents}
 
-2. **[Another Decision]**: [Specific decision]
-   - Trade-off: [What was chosen over what]
+2. **{Another Decision}**: {Specific decision}
+   - Trade-off: {What was chosen over what}
 
 ### Critical Constraints
-- **[Constraint Type]**: [Specific limitation and why]
-- **[Another Constraint]**: [Limitation and impact]
+- **{Constraint Type}**: {Specific limitation and why}
+- **{Another Constraint}**: {Limitation and impact}
 
 ### Technical Specifications
-- [Specific config/value/approach decided]
-- [API design or interface decision]
-- [Performance requirement or limit]
+- {Specific config/value/approach decided}
+- {API design or interface decision}
+- {Performance requirement or limit}
 
 ### Actionable Insights
-- [Something that should guide current implementation]
-- [Pattern or approach to follow/avoid]
-- [Gotcha or edge case to remember]
+- {Something that should guide current implementation}
+- {Pattern or approach to follow/avoid}
+- {Gotcha or edge case to remember}
 
 ### Still Open/Unclear
-- [Questions that weren't resolved]
-- [Decisions that were deferred]
+- {Questions that weren't resolved}
+- {Decisions that were deferred}
 
 ### Relevance Assessment
-[1-2 sentences on whether this information is still applicable and why]
+{1-2 sentences on whether this information is still applicable and why}
 ```
 
 ## Quality Filters

@@ -62,7 +62,7 @@ thoughts/
 Structure your findings like this:
 
 ```
-## Thought Documents about [Topic]
+## Thought Documents about {Topic}
 
 ### Tickets
 - `thoughts/shared/tickets/eng_1235.md` - Rate limit configuration design
@@ -76,11 +76,11 @@ Structure your findings like this:
 
 ### Design Artifacts
 - `thoughts/shared/designs/2026-01-17_09-00-00_rate-limiter-design.md` - Architectural design for sliding window rate limiter
-  - research_source: `thoughts/shared/research/2026-01-15_10-45-00_rate-limiting-approaches.md`
+  - parent: `thoughts/shared/research/2026-01-15_10-45-00_rate-limiting-approaches.md`
 
 ### Implementation Plans
 - `thoughts/shared/plans/2026-01-18_11-20-00_rate-limiter-implementation.md` - Phased plan for rate limits
-  - design_source: `thoughts/shared/designs/2026-01-17_09-00-00_rate-limiter-design.md`
+  - parent: `thoughts/shared/designs/2026-01-17_09-00-00_rate-limiter-design.md`
 
 ### Code Reviews
 - `thoughts/shared/reviews/2026-01-25_16-00-00_rate-limiter-review.md` - Review of rate limiting implementation
@@ -113,11 +113,11 @@ Artifact chain: research → design → plan (3 linked documents)
 3. **Look for patterns**:
    - Ticket files often named `eng_XXXX.md`
    - Skill-generated files use `YYYY-MM-DD_HH-MM-SS_topic.md` (research, solutions, designs, plans, handoffs, reviews)
-   - Documents have YAML frontmatter with searchable `topic:`, `tags:`, `status:`, `questions_source:`, `research_source:`, `design_source:` fields
+   - Documents have YAML frontmatter with searchable `topic:`, `tags:`, `status:`, `parent:` fields
 
 4. **Follow artifact chains**:
    - Research Questions → Research → Solutions → Designs → Plans → Reviews → Handoffs
-   - Check `questions_source:`, `research_source:` and `design_source:` in frontmatter to find related documents
+   - Check `parent:` in frontmatter to find related documents
    - When you find one artifact, look for upstream/downstream artifacts on the same topic
 
 ## Important Guidelines

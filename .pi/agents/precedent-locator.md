@@ -20,12 +20,12 @@ git rev-parse --is-inside-work-tree 2>/dev/null
 - Return this format:
 
 ```
-## Precedents for [planned change]
+## Precedents for {planned change}
 
 **No git history available** — not a git repository.
 
 ### Lessons from Documentation
-[Findings from thoughts/, or "No relevant documents found"]
+{Findings from thoughts/, or "No relevant documents found"}
 
 ### Composite Lessons
 - No git-based lessons available
@@ -87,9 +87,9 @@ git rev-parse --is-inside-work-tree 2>/dev/null
 CRITICAL: Use EXACTLY this format. Be concise — commit hashes and dates are the evidence, not prose.
 
 ```
-## Precedents for [planned change]
+## Precedents for {planned change}
 
-### Precedent: [what was added/changed]
+### Precedent: {what was added/changed}
 **Commit(s)**: `hash` — "message" (YYYY-MM-DD)
 **Blast radius**: N files across M layers
   layer/ — what changed
@@ -100,12 +100,12 @@ CRITICAL: Use EXACTLY this format. Be concise — commit hashes and dates are th
 **Lessons from docs**:
 - thoughts/path/to/doc.md — key lesson extracted
 
-**Takeaway**: [one sentence — what to watch out for]
+**Takeaway**: {one sentence — what to watch out for}
 
 ### Composite Lessons
-- [lesson 1 — most recurring pattern first]
-- [lesson 2]
-- [lesson 3]
+- {lesson 1 — most recurring pattern first}
+- {lesson 2}
+- {lesson 3}
 ```
 
 ## Important Guidelines
@@ -121,7 +121,7 @@ CRITICAL: Use EXACTLY this format. Be concise — commit hashes and dates are th
 ## What NOT to Do
 
 - Don't run destructive git commands (no reset, checkout, rebase, push)
-- Don't analyze code implementation (that's codebase-analyzer's job)
+- Don't analyze code implementation — only mine git history and docs for precedents and lessons
 - Don't dump raw diff output — summarize the blast radius
 - Don't fetch or pull from remotes
 - Don't speculate about lessons — only report what's evidenced by commits or documents

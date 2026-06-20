@@ -3,6 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
+import { safeJs } from "../util/js-template";
 
 const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
@@ -82,11 +83,18 @@ export const openUrlsTool = defineBrowserTool({
   renderCall: (a) => new Text(`🌐 Opening ${a.urls.length} URL${a.urls.length !== 1 ? "s" : ""}…`, 0, 0),
   async handler(args, { client, onUpdate }): Promise<Result<ToolOk, ToolErr>> {
     const total = args.urls.length;
-    // Phase 1: create tabs in parallel.
+    // Phase 1: create tabs in parallel.  Own them so they appear in
+    // browser_list_tabs scope:'owned' and group in the harness window.
+    const hw = client.ownership().harnessWindow();
     const created = await Promise.all(args.urls.map(async (url): Promise<TabResult> => {
-      const r = await client.session().callBrowser("Target.createTarget", { url: "about:blank" });
+      const params: Record<string, unknown> = { url: "about:blank" };
+      if (hw) params["openerId"] = hw;
+      else params["newWindow"] = true;
+      const r = await client.session().callBrowser("Target.createTarget", params);
       if (!r.success) return { url, targetId: "", ok: false, error: r.error.message };
-      const c = r.data as { targetId: string }; // CDP boundary cast: Target.createTarget returns { targetId: string }
+      const c = r.data as { targetId: string };
+      if (params["newWindow"]) client.ownership().setHarnessWindow(c.targetId);
+      client.ownership().add(c.targetId);
       return { url, targetId: c.targetId, ok: true };
     }));
     // Phase 2: attach + navigate each created tab in parallel.
@@ -101,6 +109,12 @@ export const openUrlsTool = defineBrowserTool({
           if (!enabled.success) return { ...tab, ok: false, error: enabled.error.message };
           const nav = await client.session().callOnTarget("Page.navigate", { url: tab.url }, sid);
           if (!nav.success) return { ...tab, ok: false, error: nav.error.message };
+          // Mark the tab with a green circle so the user can see which
+          // tabs the agent opened. Best-effort; don't fail on CSP blocks.
+          client.evaluateJs(
+            safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
+            sid
+          ).catch(() => {});
           return tab;
         } finally {
           completed++;
