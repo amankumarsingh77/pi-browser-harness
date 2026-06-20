@@ -1,6 +1,6 @@
 ---
 name: pi-browser-harness
-description: Direct browser control via CDP. Use when the user wants to automate, scrape, test, or interact with web pages. Connects to the user's already-running Chrome. Default to browser_snapshot for understanding pages and browser_execute_js for surgical reads — browser_screenshot is for visual verification only.
+description: Direct browser control via CDP. Use when the user wants to automate, scrape, test, or interact with web pages. Connects to the user&apos;s already-running Chrome. Default to browser_snapshot for understanding pages and browser_execute_js for surgical reads — browser_screenshot is for visual verification only.
 ---
 
 # pi-browser-harness
@@ -29,6 +29,18 @@ What do you need to know?
 ```
 
 Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. No screenshot round-trip.
+
+## Connection Setup
+
+Browser control is **on-demand** — the daemon does NOT start automatically.
+If you try a browser tool and get a `not_connected` error, tell the user to
+run `/browser-setup` first. This opens the daemon and connects to Chrome.
+Once initialized, all subsequent sessions reuse the same connection silently.
+
+**Before calling any browser tool**, the runtime checks for the daemon socket
+at `/tmp/pi-browser-daemon.sock`. If the socket is missing (user hasn't run
+`/browser-setup`), you get: `"Browser harness not initialized. Run /browser-setup first"`.
+Stop and tell the user to run `/browser-setup` — do not retry browser tools.
 
 ## Connection
 

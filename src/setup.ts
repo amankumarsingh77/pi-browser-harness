@@ -6,6 +6,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { execSync } from "node:child_process";
 import type { BrowserClient } from "./client";
+import { ensureDaemon } from "./daemon/spawn";
 
 export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): void {
   pi.registerCommand("browser-setup", {
@@ -30,7 +31,15 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
   }
   ctx.ui.notify("Chrome is running ✓", "info");
 
-  // Step 2: Try to connect to Chrome DevTools
+  // Step 2: Start the browser daemon (spawns if not running, silently reuses if alive)
+  ctx.ui.notify("Starting browser daemon...", "info");
+  const daemonReady = await ensureDaemon();
+  if (!daemonReady) {
+    ctx.ui.notify("Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock", "error");
+    return;
+  }
+
+  // Step 3: Connect to Chrome DevTools
   ctx.ui.notify("Connecting to Chrome DevTools...", "info");
   const startResult = await client.start();
   if (!startResult.success) {
@@ -58,7 +67,7 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
   }
   ctx.ui.notify("Connected to Chrome ✓", "info");
 
-  // Step 3: Verify with test navigation
+  // Step 4: Verify with test navigation
   ctx.ui.notify("Testing browser control...", "info");
   const tabResult = await client.newTab("https://github.com");
   if (!tabResult.success) {

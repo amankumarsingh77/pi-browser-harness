@@ -28,7 +28,6 @@ import { type BrowserState, defaultState, persistState, restoreState } from "./s
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
 import { createDaemonTransport } from "./cdp/daemon-transport";
-import { ensureDaemon } from "./daemon/spawn";
 
 export default function browserHarnessExtension(pi: ExtensionAPI): void {
   const flagNs = pi.getFlag("browser-namespace") as string | undefined;
@@ -101,24 +100,20 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
 
-    // Lazy-init: create the client once and reuse it across sessions.
-    // The daemon transport keeps the CDP connection alive between sessions,
-    // eliminating the "Allow Remote Debugging" prompt on every restart.
+    // Create the client lazily on first session. The daemon transport
+    // is created but NOT connected — that only happens when the user
+    // runs /browser-setup or a browser tool call finds an existing socket.
+    // This means zero Chrome prompts for non-browser pi sessions.
     if (!client) {
+      const transport = createDaemonTransport(state.namespace);
+
       const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
       if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
       if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
 
-      // Try daemon transport first (auto-spawns daemon if needed).
-      // Fall back to direct WebSocket if daemon can't start.
-      const daemonAvailable = await ensureDaemon();
-      const transport = daemonAvailable
-        ? createDaemonTransport(state.namespace)
-        : undefined;
-
       client = createBrowserClient({
         namespace: state.namespace,
-        ...(transport ? { transport } : {}),
+        transport,
         ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
         onOwnershipChange: (snap) => {
           state = {
@@ -137,8 +132,9 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
       });
     }
 
-    // start() is a no-op if already connected (transport is open and session is attached)
-    await client.start();
+    // Do NOT call client.start() here — browser control is on-demand.
+    // The first browser tool call or /browser-setup triggers the actual
+    // daemon socket connection and Chrome prompt.
 
     if (!toolsRegistered) {
       registerAllTools(pi, client);
