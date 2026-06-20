@@ -11,6 +11,7 @@ import type { DaemonStatus, DialogInfo, PageInfo, TabInfo } from "./cdp/types";
 
 export type BrowserClientOptions = {
   readonly namespace: string;
+  readonly transport?: CdpTransport;
   readonly remote?: { readonly cdpUrl: string; readonly browserId: string };
   readonly initialOwnership?: {
     readonly ownedTargetIds?: ReadonlyArray<string>;
@@ -28,6 +29,9 @@ export type BrowserClient = {
   status(): DaemonStatus;
   start(): Promise<Result<void, CdpError>>;
   stop(): Promise<void>;
+  /** Detach from the current page target (removes the "Chrome is being controlled" banner)
+   *  while keeping the transport connection alive. Call on session shutdown. */
+  detach(): Promise<void>;
   evaluateJs(expression: string, sessionId?: string): Promise<Result<unknown, CdpError>>;
   pageInfo(): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>>;
   takeDialog(): DialogInfo | null;
@@ -77,7 +81,7 @@ const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
 };
 
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
-  const transport = createCdpTransport();
+  const transport = opts.transport ?? createCdpTransport();
   const ownershipInit: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
   if (opts.initialOwnership?.ownedTargetIds !== undefined) {
     ownershipInit.ownedTargetIds = opts.initialOwnership.ownedTargetIds;
@@ -298,9 +302,19 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     ...(remote?.browserId !== undefined ? { remoteBrowserId: remote.browserId } : {}),
   });
 
+  const detach = async (): Promise<void> => {
+    const cur = session.current();
+    if (!cur) return;
+    // Target.detachFromTarget removes the "Chrome is being controlled" banner
+    // and releases the page session. The transport (WebSocket/Unix socket)
+    // stays alive for reuse by the next session.
+    // Reference: https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-detachFromTarget
+    await transport.request("Target.detachFromTarget", { sessionId: cur.sessionId }, { sessionId: null });
+  };
+
   return {
     namespace: opts.namespace,
-    ensureAlive, status, start, stop,
+    ensureAlive, status, start, stop, detach,
     evaluateJs, pageInfo,
     takeDialog: () => session.takeDialog(),
     listTabs, switchTab, newTab, closeTab,
