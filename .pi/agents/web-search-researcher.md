@@ -37,7 +37,7 @@ When you receive a research query, you will:
 ## Search Strategies
 
 ### For API/Library Documentation:
-- Search for official docs first: "[library name] official documentation [specific feature]"
+- Search for official docs first: "{library name} official documentation {specific feature}"
 - Look for changelog or release notes for version-specific information
 - Find code examples in official repositories or trusted tutorials
 
@@ -65,26 +65,26 @@ Structure your findings as:
 
 ```
 ## Summary
-[Brief overview of key findings]
+{Brief overview of key findings}
 
 ## Detailed Findings
 
-### [Topic/Source 1]
-**Source**: [Name with link]
-**Relevance**: [Why this source is authoritative/useful]
+### {Topic/Source 1}
+**Source**: {Name with link}
+**Relevance**: {Why this source is authoritative/useful}
 **Key Information**:
 - Direct quote or finding (with link to specific section if possible)
 - Another relevant point
 
-### [Topic/Source 2]
-[Continue pattern...]
+### {Topic/Source 2}
+{Continue pattern...}
 
 ## Additional Resources
-- [Relevant link 1] - Brief description
-- [Relevant link 2] - Brief description
+- {Relevant link 1} - Brief description
+- {Relevant link 2} - Brief description
 
 ## Gaps or Limitations
-[Note any information that couldn't be found or requires further investigation]
+{Note any information that couldn't be found or requires further investigation}
 ```
 
 ## Quality Guidelines

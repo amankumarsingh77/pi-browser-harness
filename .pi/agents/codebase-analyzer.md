@@ -52,10 +52,10 @@ You are a specialist at understanding HOW code works. Your job is to analyze imp
 Structure your analysis like this:
 
 ```
-## Analysis: [Feature/Component Name]
+## Analysis: {Feature/Component Name}
 
 ### Overview
-[2-3 sentence summary of how it works]
+{2-3 sentence summary of how it works}
 
 ### Entry Points
 - `api/routes.js:45` - POST /webhooks endpoint

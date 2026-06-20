@@ -112,7 +112,7 @@ Structure your findings like this:
 
 ## What NOT to Do
 
-- Don't read file contents beyond frontmatter fields — that's codebase-analyzer's job
+- Don't read file contents beyond frontmatter fields — catalog metadata only
 - Don't generate or suggest new test cases
 - Don't evaluate test case quality or completeness
 - Don't modify or reorganize existing test case files

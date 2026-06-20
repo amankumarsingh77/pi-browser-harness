@@ -51,9 +51,9 @@ What to look for based on request:
 Structure your findings like this:
 
 ```
-## Pattern Examples: [Pattern Type]
+## Pattern Examples: {Pattern Type}
 
-### Pattern 1: [Descriptive Name]
+### Pattern 1: {Descriptive Name}
 **Found in**: `src/api/users.js:45-67`
 **Used for**: User listing with pagination
 
@@ -89,7 +89,7 @@ router.get('/users', async (req, res) => {
 - Returns pagination metadata
 - Handles defaults
 
-### Pattern 2: [Alternative Approach]
+### Pattern 2: {Alternative Approach}
 **Found in**: `src/api/products.js:89-120`
 **Used for**: Product listing with cursor-based pagination
 
