@@ -17,11 +17,14 @@ import { httpGetTool, networkRequestsTool } from "./domains/network";
 import { consoleTool } from "./domains/console";
 import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
+import { setupTool } from "./domains/setup";
 
 // Mutation tools that modify page / browser state are marked `serialized: true`
 // so they run through a shared async mutex.  Observation / read-only tools are
 // left unmarked and can execute in parallel.
 const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
+  // setup comes first — the agent calls this to self-recover from not-initialized
+  setupTool,
   { ...clickTool, serialized: true },
   { ...typeTool, serialized: true },
   { ...pressKeyTool, serialized: true },

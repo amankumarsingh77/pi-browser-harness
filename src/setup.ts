@@ -1,46 +1,50 @@
 /**
- * Setup command — verifies Chrome is running with remote debugging
- * and connects the pi agent to it.
+ * Setup — verifies Chrome is running with remote debugging and connects
+ * the pi agent to it. Exposed as both a slash command (/browser-setup) for
+ * users and a tool (browser_setup) for the agent to self-recover.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "node:child_process";
 import type { BrowserClient } from "./client";
 import { ensureDaemon } from "./daemon/spawn";
+
+// ── Public: register the /browser-setup slash command ──────────────────────
 
 export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): void {
   pi.registerCommand("browser-setup", {
     description: "Connect pi to your Chrome browser",
     handler: async (_args, ctx) => {
-      await runSetup(ctx, client);
+      const result = await performSetup(client);
+      if (result.success) {
+        ctx.ui.notify(result.data, "info");
+      } else {
+        ctx.ui.notify(result.error, "error");
+      }
     },
   });
 }
 
-async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<void> {
-  ctx.ui.notify("browser setup: checking Chrome...", "info");
+// ── Shared setup result ────────────────────────────────────────────────────
 
+export type SetupResult = { success: true; data: string } | { success: false; error: string };
+
+// ── Shared setup logic (used by both the command and the tool) ─────────────
+
+export async function performSetup(client: BrowserClient): Promise<SetupResult> {
   // Step 1: Check Chrome is running
   const chromeRunning = checkChromeRunning();
   if (!chromeRunning) {
-    ctx.ui.notify(
-      "No browser instance running. Please open your browser and then run /browser-setup.",
-      "error",
-    );
-    return;
+    return { success: false, error: "No browser instance running. Please open your browser and then run /browser-setup." };
   }
-  ctx.ui.notify("Chrome is running ✓", "info");
 
   // Step 2: Start the browser daemon (spawns if not running, silently reuses if alive)
-  ctx.ui.notify("Starting browser daemon...", "info");
   const daemonReady = await ensureDaemon();
   if (!daemonReady) {
-    ctx.ui.notify("Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock", "error");
-    return;
+    return { success: false, error: "Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock." };
   }
 
   // Step 3: Connect to Chrome DevTools
-  ctx.ui.notify("Connecting to Chrome DevTools...", "info");
   const startResult = await client.start();
   if (!startResult.success) {
     const msg = startResult.error.message;
@@ -52,30 +56,23 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
       lower.includes("econnrefused") ||
       lower.includes("cannot reach chrome devtools")
     ) {
-      ctx.ui.notify(
-        "Chrome remote debugging needs to be enabled.\n\n" +
-          "Open chrome://inspect/#remote-debugging in your browser, tick the\n" +
-          "\"Discover network targets\" / Allow checkbox, then run /browser-setup again.\n\n" +
+      return {
+        success: false,
+        error:
+          "Chrome remote debugging needs to be enabled.\n\n" +
+          'Open chrome://inspect/#remote-debugging in your browser, tick the\n' +
+          '"Discover network targets" / Allow checkbox, then retry.\n\n' +
           "Or set BU_CDP_WS to a remote browser WebSocket URL.",
-        "warning",
-      );
-      return;
+      };
     }
 
-    ctx.ui.notify(`Connection failed: ${msg}`, "error");
-    return;
+    return { success: false, error: `Connection failed: ${msg}` };
   }
-  ctx.ui.notify("Connected to Chrome ✓", "info");
 
   // Step 4: Verify with test navigation
-  ctx.ui.notify("Testing browser control...", "info");
   const tabResult = await client.newTab("https://github.com");
   if (!tabResult.success) {
-    ctx.ui.notify(
-      `Browser connected but test navigation failed: ${tabResult.error.message}`,
-      "warning",
-    );
-    return;
+    return { success: false, error: `Browser connected but test navigation failed: ${tabResult.error.message}` };
   }
 
   const info = await client.pageInfo();
@@ -84,8 +81,10 @@ async function runSetup(ctx: ExtensionContext, client: BrowserClient): Promise<v
   }
 
   const pageUrl = info.success && !("dialog" in info.data) ? info.data.url : "github.com";
-  ctx.ui.notify(`Browser control verified ✓\nNavigated to: ${pageUrl}`, "info");
+  return { success: true, data: `Browser connected ✓\nNavigated to: ${pageUrl}` };
 }
+
+// ── Chrome process detection ───────────────────────────────────────────────
 
 function checkChromeRunning(): boolean {
   try {
@@ -100,8 +99,6 @@ function checkChromeRunning(): boolean {
         return l.includes("google chrome") || l.includes("chromium") || l.includes("microsoft edge");
       });
     } else if (process.platform === "linux") {
-      // Use args to distinguish the main browser process from sub-processes
-      // (GPU, renderer, utility, etc.) which carry --type= flags.
       const out = execSync("ps -A -o comm=,args=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
       const browserComms = ["chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge", "google-chrome"];

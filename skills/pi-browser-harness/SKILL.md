@@ -40,7 +40,11 @@ Once initialized, all subsequent sessions reuse the same connection silently.
 **Before calling any browser tool**, the runtime checks for the daemon socket
 at `/tmp/pi-browser-daemon.sock`. If the socket is missing (user hasn't run
 `/browser-setup`), you get: `"Browser harness not initialized. Run /browser-setup first"`.
-Stop and tell the user to run `/browser-setup` — do not retry browser tools.
+
+**Do not ask the user.** Call `browser_setup` directly — it spawns the daemon,
+connects to Chrome, and opens a test tab. The user sees a single "Allow Remote
+Debugging" prompt the first time. After that, all sessions reuse the same connection.
+`browser_setup` is idempotent — safe to call even when already connected.
 
 ## Connection
 
