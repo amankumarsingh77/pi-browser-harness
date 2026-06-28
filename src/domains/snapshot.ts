@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { Type } from "typebox";
 import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
+import type { CdpSession } from "../cdp/session";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
@@ -27,7 +28,7 @@ const SnapshotArgs = Type.Object({
 
 // Raw shapes from CDP Accessibility.getFullAXTree. Cast at this boundary only.
 type AxValue = { value?: unknown };
-type RawAxNode = {
+export type RawAxNode = {
   nodeId: string;
   parentId?: string;
   childIds?: ReadonlyArray<string>;
@@ -42,7 +43,7 @@ type RawAxNode = {
 
 type Box = { x: number; y: number; width: number; height: number; cx: number; cy: number };
 
-type SlimNode = {
+export type SlimNode = {
   role: string;
   name?: string;
   value?: string;
@@ -51,6 +52,8 @@ type SlimNode = {
   children: SlimNode[];
   /** Internal: kept for the post-build box fetch. Stripped before returning to the LLM. */
   _backendId?: number;
+  /** Stable handle (e.g. "e12") for interaction tools. Survives re-renders via backendNodeId. */
+  ref?: string;
   /** Click target — center of the element's bounding box, in viewport CSS pixels. */
   box?: Box;
 };
@@ -68,6 +71,20 @@ const INTERACTIVE_ROLES = new Set([
   "slider",
   "searchbox",
   "spinbutton",
+]);
+
+// Roles whose live DOM value/checked state should override the (often stale)
+// AX-tree value. The AX `value` is unreliable for freshly-typed or controlled
+// inputs, so for these we read the real DOM property at snapshot time.
+const VALUE_ROLES = new Set([
+  "textbox",
+  "searchbox",
+  "spinbutton",
+  "combobox",
+  "checkbox",
+  "radio",
+  "switch",
+  "slider",
 ]);
 
 const stringOf = (v: AxValue | undefined): string | undefined => {
@@ -93,7 +110,7 @@ const collectState = (props: RawAxNode["properties"]): string | undefined => {
   return flags.length > 0 ? flags.join(", ") : undefined;
 };
 
-const buildTree = (
+export const buildTree = (
   rawNodes: ReadonlyArray<RawAxNode>,
   opts: { interestingOnly: boolean; maxNodes: number },
 ): SlimNode[] => {
@@ -204,8 +221,9 @@ const renderOutline = (nodes: ReadonlyArray<SlimNode>): string => {
       if (n.name) line += ` "${n.name}"`;
       if (n.value && n.value !== n.name) line += ` = ${JSON.stringify(n.value)}`;
       if (n.state) line += ` (${n.state})`;
-      // Surface click coordinates for interactive nodes — agents can pass these
-      // straight to browser_click without a screenshot round-trip.
+      // Surface the stable ref + click coordinates for interactive nodes. Agents
+      // pass `ref` to interaction tools (survives re-renders); @(x,y) is a fallback.
+      if (n.ref) line += ` [${n.ref}]`;
       if (n.box && INTERACTIVE_ROLES.has(n.role)) {
         line += ` @(${n.box.cx},${n.box.cy})`;
       }
@@ -229,7 +247,7 @@ const stripInternals = (nodes: ReadonlyArray<SlimNode>): SlimNode[] =>
  * roles. Caller fetches DOM.getBoxModel for each and writes box back into the
  * slim node by reference.
  */
-const collectInteractiveTargets = (
+export const collectInteractiveTargets = (
   nodes: ReadonlyArray<SlimNode>,
 ): Array<{ node: SlimNode; backendId: number }> => {
   const out: Array<{ node: SlimNode; backendId: number }> = [];
@@ -245,6 +263,33 @@ const collectInteractiveTargets = (
   return out;
 };
 
+/**
+ * Read the live DOM value for a form control by backend node id. Resolves the
+ * node to a JS object then reads the property that matters for its type:
+ * `.value` for inputs/selects/textareas, `.checked` (→ "checked"/"unchecked")
+ * for checkboxes/radios. Returns undefined on any failure so the caller falls
+ * back to the AX value. Mirrors the box-fetch error handling: never throws.
+ */
+const liveValue = async (session: CdpSession, backendId: number): Promise<string | undefined> => {
+  const resolved = await session.call("DOM.resolveNode", { backendNodeId: backendId });
+  if (!resolved.success) return undefined;
+  const objectId = (resolved.data as { object?: { objectId?: string } }).object?.objectId;
+  if (!objectId) return undefined;
+  const fn = `function () {
+    if (this.type === "checkbox" || this.type === "radio") return this.checked ? "checked" : "unchecked";
+    if (typeof this.value === "string") return this.value;
+    return null;
+  }`;
+  const r = await session.call("Runtime.callFunctionOn", {
+    objectId,
+    functionDeclaration: fn,
+    returnByValue: true,
+  });
+  if (!r.success) return undefined;
+  const value = (r.data as { result?: { value?: unknown } }).result?.value;
+  return typeof value === "string" ? value : undefined;
+};
+
 type SnapshotDetails = {
   nodeCount: number;
   truncated: boolean;
@@ -258,14 +303,15 @@ export const snapshotTool = defineBrowserTool({
   name: "browser_snapshot",
   label: "Browser Snapshot",
   description:
-    "DEFAULT tool for understanding what is on the page. Returns the structured accessibility tree (roles, names, states, hierarchy) plus click coordinates for every interactive element as @(x,y). Use this BEFORE deciding whether you need a screenshot — almost always sufficient on its own and far cheaper. Pair with browser_execute_js for surgical reads of specific element values.",
-  promptSnippet: "Get accessibility-tree snapshot of the current page (default for page inspection)",
+    "DEFAULT tool for understanding what is on the page. Returns the structured accessibility tree (roles, names, states, hierarchy). Every interactive element gets a stable ref shown as [eN] plus click coordinates @(x,y). Pass the ref to browser_click/browser_fill/etc. — refs survive re-renders, coordinates don't. Use this BEFORE deciding whether you need a screenshot. Pair with browser_execute_js for surgical reads of specific element values.",
+  promptSnippet: "Get accessibility-tree snapshot with stable element refs (default for page inspection)",
   promptGuidelines: [
     "DEFAULT — use this whenever you need to know what's on a page, what's clickable, or how the page is structured.",
-    "Click coordinates come for free: every interactive element shows '@(x,y)' in the outline. Pass these straight to browser_click. NO screenshot round-trip needed.",
-    "DO NOT call browser_screenshot just to understand the page. This tool already gives you structure, labels, states, and click targets.",
+    "Refs come for free: every interactive element shows '[eN]' in the outline. Pass eN as `ref` to browser_click/browser_fill/browser_select_option/browser_focus/browser_upload_file — refs survive re-renders, so prefer them over the '@(x,y)' coordinates (a fallback).",
+    "DO NOT call browser_screenshot just to understand the page. This tool already gives you structure, labels, states, refs, and click targets.",
+    "Re-run after a navigation or a major re-render to get fresh refs; a 'ref is stale' error from an interaction tool means you need a new snapshot.",
     "Pass includeScreenshot:true ONLY if you also need to verify visual rendering (rare).",
-    "format:'json' returns the raw slim structure (with `box` per node) for programmatic use; default 'outline' is human/LLM-readable.",
+    "format:'json' returns the raw slim structure (with `ref` and `box` per node) for programmatic use; default 'outline' is human/LLM-readable.",
   ],
   parameters: SnapshotArgs,
 
@@ -293,6 +339,19 @@ export const snapshotTool = defineBrowserTool({
     //    without a screenshot round-trip. Capped budget so a slow page can't
     //    wedge the call.
     const targets = collectInteractiveTargets(slim);
+
+    // Assign stable refs (e1, e2, …) to every interactive target. Interaction
+    // tools resolve these refs to backendNodeIds at call time, so they stay
+    // valid across re-renders. The ref → backendNodeId map (and the per-ref
+    // signature baseline for the post-mutation diff) is published below, after
+    // the box/live-value fetch so the signature reflects the live DOM value.
+    const refMap = new Map<string, number>();
+    targets.forEach(({ node, backendId }, i) => {
+      const ref = `e${i + 1}`;
+      node.ref = ref;
+      refMap.set(ref, backendId);
+    });
+
     if (targets.length > 0) {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), 1_500);
@@ -320,10 +379,27 @@ export const snapshotTool = defineBrowserTool({
             cx: Math.round(x + width / 2),
             cy: Math.round(y + height / 2),
           };
+          // Override the AX value with the live DOM property for form controls.
+          // The AX `value` is stale for freshly-typed / controlled inputs, so the
+          // agent can't trust it as a read-back signal. Reading .value/.checked
+          // from the actual element fixes that.
+          if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
+          const live = await liveValue(session, backendId);
+          if (live !== undefined) node.value = live;
         }),
       );
       clearTimeout(timer);
     }
+
+    // Publish refs to the active tab. The signature (role|name|value|state) is
+    // the baseline the post-mutation auto-diff compares against, so it must use
+    // the live values resolved above.
+    const refSig = new Map<string, string>();
+    for (const { node } of targets) {
+      if (node.ref === undefined) continue;
+      refSig.set(node.ref, `${node.role}|${node.name ?? ""}|${node.value ?? ""}|${node.state ?? ""}`);
+    }
+    session.setRefMap(refMap, refSig);
 
     const stripped = stripInternals(slim);
     const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);

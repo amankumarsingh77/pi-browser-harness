@@ -17,12 +17,25 @@ type TabSession = {
   pageInfoDirty: boolean;
   networkBuffer: ReturnType<typeof createNetworkBuffer>;
   consoleBuffer: ReturnType<typeof createConsoleBuffer>;
+  // Stable element refs (e1, e2, …) → CDP backendNodeId, from the latest
+  // snapshot of this tab. Replaced wholesale on every snapshot — old refs are
+  // stale anyway, so this stays bounded (~50–60 KB worst case).
+  refMap: Map<string, number>;
+  // Per-ref signature ("role|name|value") from the latest snapshot, used as the
+  // baseline for the post-mutation auto-diff. Replaced alongside refMap.
+  refSig: Map<string, string>;
 };
 
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
   switchTo(targetId: string): Promise<Result<void, CdpError>>;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
+  /** Replace the active tab's ref map and ref signatures (from a fresh snapshot). */
+  setRefMap(refMap: Map<string, number>, refSig: Map<string, string>): void;
+  /** Resolve a ref (e.g. "e12") to its backendNodeId on the active tab, or undefined if unknown/stale. */
+  resolveRef(ref: string): number | undefined;
+  /** The active tab's prior ref signatures — baseline for the post-mutation diff. */
+  refSignatures(): ReadonlyMap<string, string>;
   call(method: string, params?: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
   callOnTarget(method: string, params: Record<string, unknown>, sessionId: string, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
   callBrowser(method: string, params?: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
@@ -211,6 +224,8 @@ export const createCdpSession = (
         pageInfoDirty: false,
         networkBuffer: createNetworkBuffer(),
         consoleBuffer: createConsoleBuffer(),
+        refMap: new Map(),
+        refSig: new Map(),
       });
       sessionIdToTargetId.set(a.sessionId, pickTargetId);
       return ok({ targetId: pickTargetId, sessionId: a.sessionId });
@@ -230,6 +245,8 @@ export const createCdpSession = (
         pageInfoDirty: true,
         networkBuffer: createNetworkBuffer(),
         consoleBuffer: createConsoleBuffer(),
+        refMap: new Map(),
+        refSig: new Map(),
       };
       if (existing) {
         // Each Target.attachToTarget produces a new sessionId — update it.
@@ -248,6 +265,20 @@ export const createCdpSession = (
     },
     current() {
       return sessionId && targetId ? { sessionId, targetId } : null;
+    },
+    setRefMap(refMap, refSig) {
+      const tab = targetId ? tabs.get(targetId) : undefined;
+      if (!tab) return;
+      tab.refMap = refMap;
+      tab.refSig = refSig;
+    },
+    resolveRef(ref) {
+      const tab = targetId ? tabs.get(targetId) : undefined;
+      return tab?.refMap.get(ref);
+    },
+    refSignatures() {
+      const tab = targetId ? tabs.get(targetId) : undefined;
+      return tab?.refSig ?? new Map();
     },
     call(method, params = {}, opts = {}) {
       return transport.request(method, params, { sessionId, ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) });
