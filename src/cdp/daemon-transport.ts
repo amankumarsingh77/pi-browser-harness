@@ -17,6 +17,7 @@ import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError } from "../cdp/errors";
 import type { CdpTransport } from "../cdp/transport";
 import type { CdpEvent } from "../cdp/types";
+import { type Pending, makeEventQueue, makeOnClose, rejectAllPending, sendWithTimeout } from "./event-queue";
 import {
   DAEMON_SOCKET_PATH,
   type WireRequest,
@@ -25,47 +26,6 @@ import {
   serialize,
 } from "../daemon/protocol";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-
-type EventQueue = {
-  readonly push: (e: CdpEvent) => void;
-  readonly end: () => void;
-  readonly iter: AsyncIterable<CdpEvent>;
-};
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-const makeEventQueue = (): EventQueue => {
-  const buf: CdpEvent[] = [];
-  const waiters: Array<(v: IteratorResult<CdpEvent>) => void> = [];
-  let ended = false;
-  return {
-    push(e) {
-      if (ended) return;
-      const w = waiters.shift();
-      if (w) w({ value: e, done: false });
-      else buf.push(e);
-    },
-    end() {
-      ended = true;
-      for (const w of waiters.splice(0)) w({ value: undefined as unknown as CdpEvent, done: true });
-    },
-    iter: {
-      [Symbol.asyncIterator]() {
-        return {
-          next: (): Promise<IteratorResult<CdpEvent>> =>
-            new Promise((resolve) => {
-              const next = buf.shift();
-              if (next) resolve({ value: next, done: false });
-              else if (ended) resolve({ value: undefined as unknown as CdpEvent, done: true });
-              else waiters.push(resolve);
-            }),
-        };
-      },
-    },
-  };
-};
-
 // ── Implementation ─────────────────────────────────────────────────────────────
 
 export const createDaemonTransport = (clientId: string): CdpTransport => {
@@ -73,20 +33,12 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
   let rl: ReturnType<typeof createInterface> | null = null;
   let queue = makeEventQueue();
   const closeListeners = new Set<() => void>();
-  const pending = new Map<number, {
-    resolve: (v: Result<unknown, CdpError>) => void;
-    timer: ReturnType<typeof setTimeout>;
-    method: string;
-  }>();
+  const pending = new Map<number, Pending>();
   let registered = false;
   let nextRequestId = 1;
 
   const cleanup = (reason: string): void => {
-    for (const [, p] of pending) {
-      clearTimeout(p.timer);
-      p.resolve(err(cdpError("transport_closed", reason, p.method)));
-    }
-    pending.clear();
+    rejectAllPending(pending, reason);
     queue.end();
     queue = makeEventQueue();
     registered = false;
@@ -237,22 +189,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
       ...(sessionId !== null && sessionId !== undefined ? { sessionId } : {}),
     };
 
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        resolve(err(cdpError("timeout", `Daemon timeout after ${timeoutMs}ms: ${method}`, method)));
-      }, timeoutMs);
-
-      pending.set(id, { resolve, timer, method });
-
-      try {
-        socket!.write(serialize(req) + "\n");
-      } catch (e) {
-        clearTimeout(timer);
-        pending.delete(id);
-        resolve(err(cdpError("transport_closed", e instanceof Error ? e.message : String(e), method)));
-      }
-    });
+    return sendWithTimeout(pending, id, method, timeoutMs, "Daemon", () => socket!.write(serialize(req) + "\n"));
   };
 
   // ── Events ─────────────────────────────────────────────────────────────
@@ -268,10 +205,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     return "open";
   };
 
-  const onClose = (cb: () => void): (() => void) => {
-    closeListeners.add(cb);
-    return () => closeListeners.delete(cb);
-  };
+  const onClose = makeOnClose(closeListeners);
 
   return { connect, close, request, events, state, onClose };
 };

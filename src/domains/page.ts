@@ -86,3 +86,48 @@ export const waitForLoadTool = defineBrowserTool({
     return err({ kind: "timeout", message: `Page did not finish loading in ${args.timeout ?? 15}s` });
   },
 });
+
+const WaitForArgs = Type.Object({
+  selector: Type.Optional(Type.String({ description: "CSS selector to wait for (or wait to disappear with gone:true)" })),
+  text: Type.Optional(Type.String({ description: "Wait until this text appears anywhere in document.body" })),
+  gone: Type.Optional(Type.Boolean({ default: false, description: "If true with a selector, wait until it is absent instead of present" })),
+  timeout: Type.Optional(Type.Number({ default: 5, minimum: 1, maximum: 60, description: "Max seconds to wait. Default: 5." })),
+});
+
+export const waitForTool = defineBrowserTool({
+  name: "browser_wait_for",
+  label: "Browser Wait For",
+  description:
+    "Poll until a condition holds: a selector appears (or disappears with gone:true), or text appears in the page. Returns a typed timeout error if the deadline elapses. Use to wait for SPA content to render before interacting.",
+  promptSnippet: "Wait for an element or text to appear (or an element to disappear)",
+  promptGuidelines: [
+    "Use before browser_fill / browser_click on dynamic pages so you act after the element renders.",
+    "Provide selector (default: wait until present; gone:true: wait until absent) or text.",
+    "Returns a typed timeout error if the condition isn't met within the timeout.",
+  ],
+  parameters: WaitForArgs,
+  async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
+    if (args.selector === undefined && args.text === undefined) {
+      return err({ kind: "invalid_state", message: "Provide a selector or text to wait for." });
+    }
+    const gone = args.gone ?? false;
+    const timeoutMs = (args.timeout ?? 5) * 1000;
+    const expr =
+      args.selector !== undefined
+        ? safeJs`(() => { const found = !!document.querySelector(${args.selector}); return ${gone} ? !found : found; })()`
+        : safeJs`(() => { const t = document.body ? document.body.innerText : ""; return t.includes(${args.text}); })()`;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
+      const r = await client.evaluateJs(expr);
+      if (r.success && r.data === true) {
+        const ms = Date.now() - start;
+        const what = args.selector !== undefined ? `${args.selector}${gone ? " gone" : ""}` : `text "${args.text}"`;
+        return ok({ text: `Condition met (${what}) in ${Math.round(ms / 100) / 10}s`, details: { ms } });
+      }
+      await sleep(50, signal);
+    }
+    const what = args.selector !== undefined ? `${args.selector}${gone ? " to disappear" : ""}` : `text "${args.text}"`;
+    return err({ kind: "timeout", message: `Timed out after ${args.timeout ?? 5}s waiting for ${what}` });
+  },
+});
