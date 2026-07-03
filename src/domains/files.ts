@@ -6,11 +6,27 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { safeJs } from "../util/js-template";
 import { pdfPath } from "../util/paths";
+import { resolveRefToBackendId } from "./ref-resolve";
 
 const UploadArgs = Type.Object({
-  selector: Type.String({ description: "CSS selector of the file <input>" }),
+  ref: Type.Optional(
+    Type.String({ description: "Stable ref of the file <input> from browser_snapshot. PREFERRED over selector." }),
+  ),
+  selector: Type.Optional(Type.String({ description: "CSS selector of the file <input> (fallback when no ref)" })),
   filePath: Type.String({ description: "Absolute path to the file to upload" }),
 });
+
+// Ref path: set files directly on the resolved backendNodeId via CDP — simplest
+// and most reliable, no selector needed.
+const tryRefUpload = async (
+  client: BrowserClient,
+  backendId: number,
+  filePath: string,
+): Promise<Result<void, ToolErr>> => {
+  const set = await client.session().call("DOM.setFileInputFiles", { files: [filePath], backendNodeId: backendId });
+  if (!set.success) return err({ kind: "cdp_error", message: set.error.message });
+  return ok(undefined);
+};
 
 const verifyReadable = async (filePath: string): Promise<Result<void, ToolErr>> => {
   try {
@@ -89,16 +105,29 @@ const jsFallbackUpload = async (
 export const uploadFileTool = defineBrowserTool({
   name: "browser_upload_file",
   label: "Browser Upload File",
-  description: "Set files on a file <input> via CDP, with a JS-DataTransfer fallback for stubborn pages.",
-  promptSnippet: "Upload a file to a file input",
+  description: "Set files on a file <input> via CDP, with a JS-DataTransfer fallback for stubborn pages. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`.",
+  promptSnippet: "Upload a file to a file input by ref (preferred) or selector",
   promptGuidelines: [
+    "PREFER `ref` from browser_snapshot over a CSS selector — survives re-renders. (File inputs are often hidden; snapshot still surfaces them.)",
     "File path must be absolute and readable.",
-    "Selector must match a file input.",
   ],
   parameters: UploadArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const readable = await verifyReadable(args.filePath);
     if (!readable.success) return readable;
+
+    // Ref path: resolve to backendNodeId and set files directly via CDP.
+    if (args.ref !== undefined) {
+      const backendId = resolveRefToBackendId(client, args.ref);
+      if (!backendId.success) return backendId;
+      const up = await tryRefUpload(client, backendId.data, args.filePath);
+      if (!up.success) return up;
+      return ok({ text: `Uploaded ${args.filePath} via CDP (ref ${args.ref})`, details: { mode: "cdp", ref: args.ref, filePath: args.filePath } });
+    }
+
+    if (args.selector === undefined) {
+      return err({ kind: "invalid_state", message: "Provide either `ref` or `selector`." });
+    }
     const cdp = await tryCdpUpload(client, args.selector, args.filePath);
     if (cdp.success) {
       return ok({

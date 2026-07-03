@@ -21,9 +21,13 @@ to interact with pages visually, and other tools alongside them.
 
 | Tool | Purpose |
 |------|---------|
+| browser_snapshot | Accessibility-tree snapshot. Assigns every interactive element a stable **ref** (\`[eN]\`) plus \`@(x,y)\`. Refs are the primary handle for interaction tools — they survive re-renders, coordinates don't. |
 | browser_screenshot | Capture a PNG or JPEG screenshot of the current page (rendered inline in the TUI; the LLM reads the image via the saved file path) |
-| browser_click | Click at viewport coordinates |
-| browser_type | Type text into the focused element |
+| browser_click | Click an element by **ref** (preferred — re-resolves position, survives re-renders) or viewport x/y. Appends a compact diff of page changes. |
+| browser_type | Type text into the focused element (real keystrokes; requires a focused field) |
+| browser_fill | Fill an input/textarea by **ref** (preferred) or selector — updates React/Vue controlled components, verifies the value, appends a page-changes diff |
+| browser_select_option | Select an option in a native <select> by **ref** (preferred) or selector, choosing by value/label/index (fires change) |
+| browser_focus | Focus an element by **ref** (preferred) or selector (deterministic; use before browser_type) |
 | browser_press_key | Press a keyboard key (Enter, Tab, Escape, arrows, etc.) |
 | browser_scroll | Scroll the page at coordinates |
 | browser_navigate | Navigate to a URL (result details.outcome.kind is "in_place" or "new_tab_created") |
@@ -38,6 +42,7 @@ to interact with pages visually, and other tools alongside them.
 | browser_http_get | Direct HTTP GET (outside browser, for APIs) |
 | browser_console | Read JS errors / console output on the current tab (diagnostic — use when an action looks broken; pass sinceSeq from the previous nextCursor to see only new messages) |
 | browser_wait | Wait N seconds |
+| browser_wait_for | Wait until a selector/text appears (or a selector disappears) — use for SPA content before interacting |
 | browser_wait_for_load | Wait for document.readyState === 'complete' (returns a typed timeout error if the page doesn't reach readyState=complete in N seconds, default 15) |
 | browser_handle_dialog | Accept or dismiss a JS dialog |
 | browser_run_script | Execute a temporary script file with daemon access (write script to disk, then run) |
@@ -83,11 +88,25 @@ browser_http_get("https://api.example.com/data") + browser_click(x, y)
 browser_new_tab("https://example.com") → browser_wait_for_load() → browser_screenshot()
 \`\`\`
 
-**Form filling:**
+**Form filling (ref-first — this is the reliable path on React/SPA forms):**
 \`\`\`
-browser_screenshot() → find input coordinates → browser_click(x, y)
-→ browser_type("text") → browser_press_key("Tab") → browser_screenshot()
+browser_wait_for({ selector: "#email" })                    // ensure SPA field is rendered
+browser_snapshot()                                          // each interactive element gets a [eN] ref
+→ browser_fill({ ref: "e7", value: "a@b.com" })            // target by ref, not a guessed selector
+→ browser_select_option({ ref: "e9", label: "India" })     // native <select> by ref
+→ browser_click({ ref: "e12" })                            // e.g. Save — re-resolves position even if the form reflowed
+// each mutating call appends a compact "Page changes" diff — read it to confirm
+// the change landed (e.g. a save closed the form, a new field appeared as *[eN]).
 \`\`\`
+**Why ref over selector/coordinates:** refs are keyed to the element's identity, so
+they survive the re-renders that React/Vue forms trigger on every edit and save —
+coordinates go stale and selectors you guess often don't match. If a call returns
+"ref is stale", the page changed: re-run browser_snapshot for fresh refs.
+
+Prefer browser_fill for text inputs/textareas — it fires input/change so controlled
+components update, and returns the field's value for verification. Use browser_click +
+browser_type only for keystroke-sensitive widgets (autocomplete, masked inputs);
+browser_type requires an already-focused field and errors if none is focused.
 
 **Data extraction:**
 \`\`\`
@@ -121,8 +140,8 @@ write("/tmp/extract.js", "...script with daemon access...") → browser_run_scri
 
 | Tool | Purpose |
 |------|---------|
-| browser_upload_file | Upload a file to a file input (bypasses file picker) |
-| browser_dispatch_key | Dispatch a DOM KeyboardEvent on a specific element (for React/Vue inputs); returns details.matched (number of elements) |
+| browser_upload_file | Upload a file to a file input by **ref** (preferred) or selector (bypasses file picker) |
+| browser_dispatch_key | Dispatch a DOM KeyboardEvent on an element by **ref** (preferred) or selector (for React/Vue inputs); returns details.matched |
 | browser_download | Configure download directory and disable save-as prompts |
 | browser_viewport_resize | Resize the viewport for responsive testing |
 | browser_drag_and_drop | Perform drag-and-drop from one coordinate to another |

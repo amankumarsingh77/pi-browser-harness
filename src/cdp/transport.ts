@@ -3,14 +3,9 @@ import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError } from "./errors";
 import { isCdpRawMessage } from "./types";
 import type { CdpEvent, CdpRawMessage } from "./types";
+import { type Pending, makeEventQueue, makeOnClose, rejectAllPending, sendWithTimeout } from "./event-queue";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-
-type Pending = {
-  readonly resolve: (v: Result<unknown, CdpError>) => void;
-  readonly timer: ReturnType<typeof setTimeout>;
-  readonly method: string;
-};
 
 export type CdpTransport = {
   connect(url: string, opts?: { timeoutMs?: number }): Promise<Result<void, CdpError>>;
@@ -32,46 +27,6 @@ export const createCdpTransport = (): CdpTransport => {
   let nextId = 1;
   const pending = new Map<number, Pending>();
   const closeListeners = new Set<() => void>();
-
-  type EventQueue = {
-    readonly push: (e: CdpEvent) => void;
-    readonly end: () => void;
-    readonly iter: AsyncIterable<CdpEvent>;
-  };
-
-  const makeEventQueue = (): EventQueue => {
-    const buf: CdpEvent[] = [];
-    const waiters: Array<(v: IteratorResult<CdpEvent>) => void> = [];
-    let ended = false;
-    return {
-      push(e) {
-        if (ended) return;
-        const w = waiters.shift();
-        if (w) w({ value: e, done: false });
-        else buf.push(e);
-      },
-      end() {
-        ended = true;
-        // value: undefined as unknown as CdpEvent is the correct iterator-protocol
-        // pattern: when done=true the value field is conventionally undefined but
-        // the TS type still requires CdpEvent.
-        for (const w of waiters.splice(0)) w({ value: undefined as unknown as CdpEvent, done: true });
-      },
-      iter: {
-        [Symbol.asyncIterator]() {
-          return {
-            next: (): Promise<IteratorResult<CdpEvent>> =>
-              new Promise((resolve) => {
-                const next = buf.shift();
-                if (next) resolve({ value: next, done: false });
-                else if (ended) resolve({ value: undefined as unknown as CdpEvent, done: true });
-                else waiters.push(resolve);
-              }),
-          };
-        },
-      },
-    };
-  };
 
   let queue = makeEventQueue();
 
@@ -109,11 +64,7 @@ export const createCdpTransport = (): CdpTransport => {
   };
 
   const cleanup = (reason: string): void => {
-    for (const [, p] of pending) {
-      clearTimeout(p.timer);
-      p.resolve(err(cdpError("transport_closed", reason, p.method)));
-    }
-    pending.clear();
+    rejectAllPending(pending, reason);
     queue.end();
     queue = makeEventQueue();
     for (const cb of closeListeners) cb();
@@ -184,20 +135,7 @@ export const createCdpTransport = (): CdpTransport => {
       const payload: Record<string, unknown> = { id, method, params };
       if (sessionId) payload["sessionId"] = sessionId;
       const json = JSON.stringify(payload);
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          resolve(err(cdpError("timeout", `CDP timeout after ${timeoutMs}ms: ${method}`, method)));
-        }, timeoutMs);
-        pending.set(id, { resolve, timer, method });
-        try {
-          sock.send(json);
-        } catch (e) {
-          clearTimeout(timer);
-          pending.delete(id);
-          resolve(err(cdpError("transport_closed", e instanceof Error ? e.message : String(e), method)));
-        }
-      });
+      return sendWithTimeout(pending, id, method, timeoutMs, "CDP", () => sock.send(json));
     },
     events(): AsyncIterable<CdpEvent> {
       // Single-consumer: each connection's event stream may be iterated by
@@ -213,9 +151,6 @@ export const createCdpTransport = (): CdpTransport => {
       if (ws.readyState === WebSocket.OPEN) return "open";
       return "closed";
     },
-    onClose(cb): () => void {
-      closeListeners.add(cb);
-      return () => closeListeners.delete(cb);
-    },
+    onClose: makeOnClose(closeListeners),
   };
 };
