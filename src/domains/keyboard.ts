@@ -129,12 +129,17 @@ export const dispatchKeyTool = defineBrowserTool({
     "PREFER `ref` from browser_snapshot over a CSS selector — survives re-renders.",
     "Dispatches a synthetic DOM KeyboardEvent — for React/Vue synthetic event listeners. Does NOT insert text (use browser_type or browser_press_key for actual typing).",
     "Try browser_press_key first; only use browser_dispatch_key when the page ignores raw CDP key events.",
+    "The event carries keyCode/which (e.g. 13 for Enter) for legacy handlers, but is untrusted (isTrusted === false) — a few libraries may still ignore it.",
     "eventType defaults to 'keydown'.",
   ],
   parameters: DispatchKeyArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const eventType = args.eventType ?? "keydown";
     const target = args.ref ?? args.selector ?? "";
+    // Legacy handlers commonly branch on e.keyCode/e.which (e.g. === 13 for
+    // Enter) rather than e.key, so populate both. virtualKeyCode maps named
+    // keys and single chars; 0 for anything unknown.
+    const code = virtualKeyCode(args.key);
     // Ref path: dispatch on the single resolved node. Selector path: dispatch on
     // all matches (preserves the original multi-match behavior).
     if (args.ref !== undefined) {
@@ -142,8 +147,8 @@ export const dispatchKeyTool = defineBrowserTool({
       if (!objectId.success) return objectId;
       const r = await client.session().call("Runtime.callFunctionOn", {
         objectId: objectId.data,
-        functionDeclaration: `function (type, key) { this.dispatchEvent(new KeyboardEvent(type, { key, bubbles: true, cancelable: true })); return 1; }`,
-        arguments: [{ value: eventType }, { value: args.key }],
+        functionDeclaration: `function (type, key, keyCode) { this.dispatchEvent(new KeyboardEvent(type, { key, keyCode, which: keyCode, bubbles: true, cancelable: true })); return 1; }`,
+        arguments: [{ value: eventType }, { value: args.key }, { value: code }],
         returnByValue: true,
       });
       if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
@@ -160,7 +165,7 @@ export const dispatchKeyTool = defineBrowserTool({
         const els = document.querySelectorAll(${args.selector});
         if (els.length === 0) return 0;
         for (const el of els) {
-          el.dispatchEvent(new KeyboardEvent(${eventType}, { key: ${args.key}, bubbles: true, cancelable: true }));
+          el.dispatchEvent(new KeyboardEvent(${eventType}, { key: ${args.key}, keyCode: ${code}, which: ${code}, bubbles: true, cancelable: true }));
         }
         return els.length;
       })()

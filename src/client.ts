@@ -170,12 +170,14 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
     // Heuristic IIFE wrap: legacy convenience that lets agents write
-    // `return foo` instead of `(() => foo)()`. False-positive on substring
-    // `"return "` inside string literals or comments — agents that hit this
-    // can pass an explicit IIFE instead.
-    const wrapped = expression.includes("return ") && !expression.trim().startsWith("(")
-      ? `(function(){${expression}})()`
-      : expression;
+    // `return foo` instead of `(() => foo)()`. Only wrap when the trimmed
+    // source *starts with* a return statement — a bare expression, or one that
+    // merely mentions `return` inside a string literal or comment, is passed
+    // through untouched (previously any substring `"return "` triggered a wrap,
+    // silently turning such expressions into `undefined`).
+    const trimmed = expression.trim();
+    const isReturnStatement = /^return[\s(]/.test(trimmed);
+    const wrapped = isReturnStatement ? `(function(){${expression}})()` : expression;
     const r = sessionId
       ? await session.callOnTarget("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true }, sessionId)
       : await session.call("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true });

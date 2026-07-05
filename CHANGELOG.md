@@ -2,6 +2,17 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.8.1 — 2026-07-05
+
+### Fixed
+
+- **`browser_dispatch_key` now populates `keyCode`/`which`** on the synthesized `KeyboardEvent` (both the ref and selector paths). Legacy React/Vue key handlers commonly branch on `e.keyCode === 13` rather than `e.key`, so Enter on tag/autocomplete inputs previously did nothing. The event remains untrusted (`isTrusted === false`), so a few libraries may still ignore it.
+- **`browser_execute_js` IIFE auto-wrap no longer false-positives.** The wrap now triggers only when the trimmed source *starts with* a `return` statement, instead of whenever the string merely contained the substring `"return "` (which silently turned bare expressions — including ones mentioning `return` inside a string literal or comment — into `undefined`).
+
+### Changed
+
+- **`browser_fill` guidelines** now point at `browser_dispatch_key({ ref, key: 'Enter' })` for submitting tag/autocomplete inputs (not `browser_press_key`, which targets the focused element), and at the open → `browser_snapshot` → `browser_click` recipe for custom (div-based) dropdowns.
+
 ## 0.6.0 — 2026-06-21
 
 ### Added
