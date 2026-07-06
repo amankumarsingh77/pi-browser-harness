@@ -29,7 +29,7 @@ export type CdpBridge = {
    *  are initialized (not when Chrome is connected — that may take retries). */
   start(): Promise<void>;
   stop(): Promise<void>;
-  handleRequest(req: WireRequest, clientId: string, send: SendToClient): void;
+  handleRequest(req: WireRequest, clientId: string, send: SendToClient): Promise<void>;
   /** True when the Chrome WebSocket is open and ready. */
   isAlive(): boolean;
   recordSession(clientId: string, sessionId: string): void;
@@ -339,11 +339,21 @@ export const createCdpBridge = (): CdpBridge => {
     wsUrl = null;
   };
 
-  const handleRequest = (
+  const handleRequest = async (
     req: WireRequest,
     clientId: string,
     send: SendToClient,
-  ): void => {
+  ): Promise<void> => {
+    // ponytail: wait for Chrome to connect (user may still be clicking "Allow").
+    // Bridge retries in background; this polls so the client doesn't fail first try.
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 250));
+        if (ws && ws.readyState === WebSocket.OPEN) break;
+      }
+    }
+
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       send(clientId, {
         type: "response",

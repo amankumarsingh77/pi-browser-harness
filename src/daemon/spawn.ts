@@ -10,25 +10,77 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { DAEMON_SOCKET_PATH } from "./protocol";
+import { createConnection } from "node:net";
+import { DAEMON_SOCKET_PATH, serialize, type WireControl } from "./protocol";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Check whether the daemon is running by testing if its Unix socket exists.
- * The socket file is created by the daemon on startup and removed on shutdown.
+ * Check whether the daemon is running by probing its Unix socket.
+ * A file-existence check is unreliable — a crashed daemon leaves a stale socket.
+ * We connect, send a register, wait for the registered ack, then disconnect.
+ * On failure, clean up the stale socket so ensureDaemon can spawn a fresh one.
  */
-export const isDaemonRunning = async (): Promise<boolean> => {
+export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
+  // If the socket file doesn't exist, the daemon definitely isn't running.
   try {
     await access(DAEMON_SOCKET_PATH);
-    return true;
   } catch {
     return false;
   }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (alive: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve(alive);
+    };
+
+    const sock = createConnection(DAEMON_SOCKET_PATH);
+    const timer = setTimeout(() => {
+      sock.destroy();
+      // ponytail: stale socket cleanup; ENOENT = already gone, fine
+      unlink(DAEMON_SOCKET_PATH).catch(() => {});
+      done(false);
+    }, timeoutMs);
+
+    sock.on("connect", () => {
+      const regMsg: WireControl = { type: "control", action: "register", clientId: "_liveness_probe" };
+      sock.write(serialize(regMsg) + "\n");
+    });
+
+    sock.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      if (text.includes('"registered"')) {
+        clearTimeout(timer);
+        // Send deregister so the probe doesn't hog a slot
+        const deregMsg: WireControl = { type: "control", action: "deregister", clientId: "_liveness_probe" };
+        try { sock.write(serialize(deregMsg) + "\n"); } catch {}
+        sock.destroy();
+        done(true);
+      }
+    });
+
+    sock.on("error", () => {
+      clearTimeout(timer);
+      sock.destroy();
+      // ponytail: connection refused = daemon dead, clean up stale socket
+      unlink(DAEMON_SOCKET_PATH).catch(() => {});
+      done(false);
+    });
+
+    // close without 'registered' ack = daemon alive but rejected us (e.g. max clients);
+    // don't unlink — the daemon is still using that socket.
+    sock.on("close", () => {
+      clearTimeout(timer);
+      done(false);
+    });
+  });
 };
 
 /**
