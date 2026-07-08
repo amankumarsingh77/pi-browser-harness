@@ -85,6 +85,13 @@ Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. **No screensh
 | `browser_page_info` | URL, title, viewport, scroll position, or pending dialog. |
 | `browser_http_get` | Direct HTTP GET outside the browser — 10-50× faster for APIs. |
 
+### Research & reading
+
+| Tool | Purpose |
+|------|---------|
+| `browser_web_search` | Search the web — scrapes a Google results page in the real Chrome (no API key), returns ranked `{title, url, snippet, rank}`. **Links only** — follow up with `browser_read_page`. Runs in its own isolated tab. |
+| `browser_read_page` | Reader mode — a `url` (opened + closed in an isolated tab) or an owned `targetId` → clean main-article text with nav/ads/boilerplate stripped. Use over snapshot/execute_js when you want an article's content. |
+
 ### Visual (last resort)
 
 | Tool | Purpose |
@@ -173,15 +180,28 @@ browser_network_requests({
 
 ### Research workflow
 
+Search → read, with each tool running in its own isolated tab (your current tab is never disturbed):
+
 ```
-browser_navigate({ url: "https://google.com/search?q=..." })
-browser_open_urls({ urls: ["url1", "url2", "url3"] })
-browser_list_tabs()
-browser_switch_tab({ targetId: "..." })
-browser_wait_for_load()
-browser_snapshot()
-browser_execute_js({ expression: "document.querySelector('.content').innerText" })
+browser_web_search({ query: "chrome devtools protocol overview", limit: 5 })
+# → ranked {title, url, snippet, rank} — links only
+browser_read_page({ url: "<the best result's url>" })
+# → clean main-article text, boilerplate stripped
 ```
+
+### Deep research
+
+For a question that needs multiple sources synthesized into a cited report, run:
+
+```
+/deep-research <your question>
+```
+
+This triggers the **deep-research skill**: it decomposes the question into sub-questions, fans out
+one isolated `web-search-researcher` subagent per sub-question (each using `browser_web_search` +
+`browser_read_page`), loops for coverage under a hard ceiling, and writes a **cited Markdown report**
+file where every claim carries a source link. The skill also auto-triggers on research-shaped
+requests ("research X and cite sources", "compare X and Y with sources") without the command.
 
 ### Visual verification (only when pixels matter)
 
@@ -271,6 +291,7 @@ Scripts are written to disk — auditable and re-runnable.
 | `/browser-setup` | Connect pi to Chrome (run once) |
 | `/browser-status` | Show daemon health and current page |
 | `/browser-reload-daemon` | Restart the connection |
+| `/deep-research <q>` | Research a question on the web and write a cited Markdown report |
 
 ---
 

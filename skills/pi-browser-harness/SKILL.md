@@ -21,6 +21,12 @@ What do you need to know?
   ├─ Network behavior on the current page?
   │     → browser_network_requests
   │
+  ├─ Find pages on the web about a topic?
+  │     → browser_web_search    (ranked SERP — links only; follow up with browser_read_page)
+  │
+  ├─ An article's main content as clean text?
+  │     → browser_read_page     (reader mode — a url or an owned targetId → boilerplate stripped)
+  │
   ├─ JS errors / why did nothing happen after an action?
   │     → browser_console     (DIAGNOSTIC — only when something looks broken)
   │
@@ -29,6 +35,8 @@ What do you need to know?
 ```
 
 Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. No screenshot round-trip.
+
+`browser_web_search` and `browser_read_page` each run in their own isolated tab and never touch the user's current tab. For a multi-source question that needs a synthesized, cited report, use the **deep-research** skill (or `/deep-research <question>`): it fans out isolated `web-search-researcher` subagents over both tools and writes a source-cited Markdown report.
 
 ## Connection Setup
 

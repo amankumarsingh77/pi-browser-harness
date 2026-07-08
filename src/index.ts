@@ -14,6 +14,7 @@
  *   /browser-setup          — guided setup wizard
  *   /browser-status         — show client status and current page
  *   /browser-reload-daemon  — restart the browser client
+ *   /deep-research <q>      — research a question on the web, write a cited report
  *
  * Flags:
  *   --browser-namespace <name>   — override namespace (default: auto)
@@ -24,6 +25,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserClient, createBrowserClient } from "./client";
 import { getBrowserSystemPrompt } from "./prompt";
 import { registerSetupCommand } from "./setup";
+import { registerDeepResearchCommand } from "./deep-research";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
@@ -141,6 +143,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
       toolsRegistered = true;
     }
     registerSetupCommand(pi, client);
+    registerDeepResearchCommand(pi);
     ctx.ui.setStatus(
       "browser",
       client.status().alive ? "🟢 Browser connected" : "🔴 Browser — run /browser-setup",
