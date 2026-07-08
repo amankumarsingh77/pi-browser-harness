@@ -9,6 +9,7 @@ import {
   openIsolatedTab,
   waitForIsolatedLoad,
 } from "../isolated-tab";
+import { renderExpandableText } from "../render";
 import { buildSerpExtractionExpr } from "./extract";
 import { classifySerp, parseGoogleSerp, type SearchResult, type SerpExtraction } from "./google-serp";
 
@@ -81,19 +82,28 @@ export const webSearchTool = defineBrowserTool({
         });
       }
 
-      const truncated = await applyTruncation(formatResults(args.query, results), "search");
+      const body = formatResults(args.query, results);
+      const truncated = await applyTruncation(body, "search");
       return ok({
         text: truncated.text,
         details: {
           results,
           engine: "google",
           query: args.query,
+          render: {
+            summary: `${results.length} result(s) · google · "${args.query}"`,
+            body,
+            ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
+          },
           ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
         },
       });
     } finally {
       await closeIsolatedTab(client, tab);
     }
+  },
+  renderResult(result, expanded, theme) {
+    return renderExpandableText("web_search", result, expanded, theme);
   },
 });
 

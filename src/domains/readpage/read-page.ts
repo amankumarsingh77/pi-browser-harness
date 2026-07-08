@@ -10,6 +10,7 @@ import {
   openIsolatedTab,
   waitForIsolatedLoad,
 } from "../isolated-tab";
+import { renderExpandableText } from "../render";
 import { buildPageCaptureExpr } from "./capture";
 import { extractReadable, type PageCapture, type ReadablePage } from "./readability";
 
@@ -42,12 +43,18 @@ const captureToResult = async (raw: unknown): Promise<Result<ToolOk, ToolErr>> =
   const page: ReadablePage = extractReadable(parsed);
   const header = `# ${page.title}\n${page.url}\n(${page.wordCount} words)\n\n`;
   const truncated = await applyTruncation(header + page.text, "readpage");
+  const summary = `${page.title} · ${page.wordCount} words`;
   return ok({
     text: truncated.text,
     details: {
       title: page.title,
       url: page.url,
       wordCount: page.wordCount,
+      render: {
+        summary,
+        body: page.text,
+        ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
+      },
       ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
     },
   });
@@ -105,5 +112,8 @@ export const readPageTool = defineBrowserTool({
     if (args.url !== undefined && args.url.length > 0) return readOpenedUrl(client, args.url, signal);
     if (args.targetId !== undefined && args.targetId.length > 0) return readOwnedTab(client, args.targetId);
     return err({ kind: "invalid_state", message: "provide either url or targetId" });
+  },
+  renderResult(result, expanded, theme) {
+    return renderExpandableText("read_page", result, expanded, theme);
   },
 });
