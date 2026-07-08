@@ -19,6 +19,7 @@ import { consoleTool } from "./domains/console";
 import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
 import { setupTool } from "./domains/setup";
+import { webSearchTool } from "./domains/search/web-search";
 
 // Mutation tools that modify page / browser state are marked `serialized: true`
 // so they run through a shared async mutex.  Observation / read-only tools are
@@ -61,6 +62,8 @@ const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   snapshotTool,
   executeJsTool,
   runScriptTool,
+  // Opens and owns an isolated tab to scrape a SERP — same class as openUrlsTool.
+  { ...webSearchTool, serialized: true },
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {

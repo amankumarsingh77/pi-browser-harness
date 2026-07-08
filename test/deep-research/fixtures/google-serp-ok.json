@@ -1,0 +1,40 @@
+{
+  "anchors": [
+    {
+      "href": "https://www.google.com/url?q=https://real.example/x&sa=U&ved=abc",
+      "heading": "Real Example X — the definitive guide",
+      "snippet": "Real Example X — the definitive guide. Everything about x, explained clearly."
+    },
+    {
+      "href": "https://docs.example.org/guide",
+      "heading": "Official Guide",
+      "snippet": "Official Guide to the thing you searched for."
+    },
+    {
+      "href": "https://www.google.com/search?q=related",
+      "heading": "Related searches on Google",
+      "snippet": "internal google navigation"
+    },
+    {
+      "href": "javascript:void(0)",
+      "heading": "Expand",
+      "snippet": "ui control"
+    },
+    {
+      "href": "https://real.example/x/",
+      "heading": "Real Example X (duplicate with trailing slash)",
+      "snippet": "should be deduped against the first result"
+    },
+    {
+      "href": "https://second.example/a",
+      "heading": "Second Example A",
+      "snippet": "Second result body."
+    },
+    {
+      "href": "https://third.example/b",
+      "heading": "Third Example B",
+      "snippet": "Third result body."
+    }
+  ],
+  "pageText": "Real Example X the definitive guide Official Guide Second Example Third Example About 12,300 results"
+}
