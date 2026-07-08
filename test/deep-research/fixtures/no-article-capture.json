@@ -1,0 +1,10 @@
+{
+  "url": "https://app.example.com/dashboard",
+  "title": "Dashboard",
+  "blocks": [
+    { "kind": "other", "text": "Menu", "linkTextLength": 4, "inBoilerplate": true },
+    { "kind": "listitem", "text": "Widget A", "linkTextLength": 8, "inBoilerplate": true },
+    { "kind": "listitem", "text": "Widget B", "linkTextLength": 8, "inBoilerplate": true }
+  ],
+  "bodyText": "Dashboard Widget A Widget B Your account is active. Usage this month is within limits and no action is required at this time from you."
+}

@@ -1,0 +1,17 @@
+{
+  "url": "https://blog.example.com/how-cdp-works",
+  "title": "How the Chrome DevTools Protocol Works",
+  "blocks": [
+    { "kind": "other", "text": "Home Products Blog About Contact", "linkTextLength": 33, "inBoilerplate": true },
+    { "kind": "heading", "text": "How the Chrome DevTools Protocol Works", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "paragraph", "text": "The Chrome DevTools Protocol lets tools instrument, inspect, and control Chromium-based browsers over a WebSocket connection.", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "paragraph", "text": "Each command targets a domain such as Page, Runtime, or Network, and receives a structured JSON response that the client correlates by id.", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "heading", "text": "Sessions and Targets", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "paragraph", "text": "A target is a page or worker; attaching to one yields a session id that scopes subsequent commands to that target without disturbing others.", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "listitem", "text": "Attach with Target.attachToTarget", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "listitem", "text": "Drive with Runtime.evaluate", "linkTextLength": 0, "inBoilerplate": false },
+    { "kind": "paragraph", "text": "Subscribe here for our newsletter and follow us on social media for updates", "linkTextLength": 55, "inBoilerplate": true },
+    { "kind": "other", "text": "Copyright 2026 Example Inc. Privacy Terms Cookies", "linkTextLength": 24, "inBoilerplate": true }
+  ],
+  "bodyText": "Home Products Blog How the Chrome DevTools Protocol Works The Chrome DevTools Protocol lets tools instrument inspect and control browsers Copyright 2026"
+}
