@@ -60,9 +60,12 @@ export async function performSetup(client: BrowserClient): Promise<SetupResult> 
       return {
         success: false,
         error:
-          "Chrome remote debugging needs to be enabled.\n\n" +
-          'Open chrome://inspect/#remote-debugging in your browser, tick the\n' +
+          "Browser remote debugging needs to be enabled.\n\n" +
+          "Open chrome://inspect/#remote-debugging (or brave://inspect,\n" +
+          "edge://inspect) in your browser, tick the\n" +
           '"Discover network targets" / Allow checkbox, then retry.\n\n' +
+          "If that doesn't expose DevTools, relaunch the browser with\n" +
+          "--remote-debugging-port=9222.\n\n" +
           "Or set BU_CDP_WS to a remote browser WebSocket URL.",
       };
     }
@@ -90,19 +93,31 @@ export async function performSetup(client: BrowserClient): Promise<SetupResult> 
 function checkChromeRunning(): boolean {
   try {
     if (process.platform === "darwin") {
-      // ps -o comm= returns the full executable path on modern macOS.
-      // We check for "Google Chrome" anywhere in the path (case-insensitive),
-      // excluding helper/renderer subprocesses.
+      // ps -o comm= returns the full executable path on modern macOS, e.g.
+      // "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser". We check
+      // for a known Chromium-family name anywhere in the path (case-insensitive),
+      // excluding helper/renderer/gpu/crashpad/updater subprocesses that linger
+      // after the user quits the browser.
       const out = execSync("ps -A -o comm=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+      const browserNames = ["google chrome", "chromium", "microsoft edge", "brave browser"];
       return lines.some((l) => {
-        if (l.includes("helper") || l.includes("renderer") || l.includes("crashpad")) return false;
-        return l.includes("google chrome") || l.includes("chromium") || l.includes("microsoft edge");
+        if (
+          l.includes("helper") ||
+          l.includes("renderer") ||
+          l.includes("crashpad") ||
+          l.includes(" gpu") ||
+          l.includes("updater")
+        ) return false;
+        return browserNames.some((name) => l.includes(name));
       });
     } else if (process.platform === "linux") {
       const out = execSync("ps -A -o comm=,args=", { timeout: 5000 }).toString().toLowerCase();
       const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
-      const browserComms = ["chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge", "google-chrome"];
+      const browserComms = [
+        "chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge",
+        "google-chrome", "brave", "brave-browser",
+      ];
       return lines.some((line) => {
         const parts = line.split(/\s+/);
         const comm = parts[0] ?? "";
@@ -112,7 +127,7 @@ function checkChromeRunning(): boolean {
       });
     } else if (process.platform === "win32") {
       const out = execSync("tasklist", { timeout: 5000 }).toString().toLowerCase();
-      return ["chrome.exe", "msedge.exe"].some((n) => out.includes(n));
+      return ["chrome.exe", "msedge.exe", "brave.exe"].some((n) => out.includes(n));
     }
   } catch {
     // best-effort
