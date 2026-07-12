@@ -19,6 +19,19 @@ import { DAEMON_SOCKET_PATH, serialize, type WireControl } from "./protocol";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
+const isWindows = process.platform === "win32";
+
+/**
+ * Remove a stale POSIX socket file. On Windows the daemon endpoint is a named
+ * pipe, which is not a filesystem entry and is torn down automatically when the
+ * owning process exits — so there is nothing to unlink, and calling unlink on a
+ * pipe path throws. This is a no-op on Windows.
+ */
+const cleanupStaleSocket = (): void => {
+  if (isWindows) return;
+  unlink(DAEMON_SOCKET_PATH).catch(() => {});
+};
+
 /**
  * Check whether the daemon is running by probing its Unix socket.
  * A file-existence check is unreliable — a crashed daemon leaves a stale socket.
@@ -26,11 +39,15 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
  * On failure, clean up the stale socket so ensureDaemon can spawn a fresh one.
  */
 export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
-  // If the socket file doesn't exist, the daemon definitely isn't running.
-  try {
-    await access(DAEMON_SOCKET_PATH);
-  } catch {
-    return false;
+  // On POSIX, a missing socket file means the daemon definitely isn't running,
+  // so we can short-circuit. Windows named pipes are not filesystem entries —
+  // access() always fails there — so skip the pre-check and probe directly.
+  if (!isWindows) {
+    try {
+      await access(DAEMON_SOCKET_PATH);
+    } catch {
+      return false;
+    }
   }
 
   return new Promise((resolve) => {
@@ -45,7 +62,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
     const timer = setTimeout(() => {
       sock.destroy();
       // ponytail: stale socket cleanup; ENOENT = already gone, fine
-      unlink(DAEMON_SOCKET_PATH).catch(() => {});
+      cleanupStaleSocket();
       done(false);
     }, timeoutMs);
 
@@ -70,7 +87,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
       clearTimeout(timer);
       sock.destroy();
       // ponytail: connection refused = daemon dead, clean up stale socket
-      unlink(DAEMON_SOCKET_PATH).catch(() => {});
+      cleanupStaleSocket();
       done(false);
     });
 
@@ -96,18 +113,34 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
 export const spawnDaemon = (): ChildProcess | null => {
   // Resolve the daemon entry point and tsx binary.
   const daemonScript = join(moduleDir, "index.ts");
-  const tsxBin = join(moduleDir, "..", "..", "node_modules", ".bin", "tsx");
 
-  // Use tsx to run the daemon TypeScript source directly.
-  // The spawed process inherits the parent's env so module resolution works.
+  // On Windows, npm installs binaries as `.cmd` shims, not bare executables,
+  // and the npx fallback is `npx.cmd`. A `.cmd` file can only be launched
+  // through a shell (spawning it directly yields EINVAL), so set shell: true
+  // whenever we invoke one.
+  const tsxBinBase = join(moduleDir, "..", "..", "node_modules", ".bin", "tsx");
+  const tsxBin = isWindows ? `${tsxBinBase}.cmd` : tsxBinBase;
+  const hasLocalTsx = existsSync(tsxBin);
+
+  // Use the local tsx binary to run the daemon TypeScript source directly.
+  // The spawned process inherits the parent's env so module resolution works.
   // Fall back to `npx tsx` if the local binary isn't available.
-  const cmd = existsSync(tsxBin) ? tsxBin : "npx";
-  const args = existsSync(tsxBin) ? [daemonScript] : ["tsx", daemonScript];
+  const cmd = hasLocalTsx ? tsxBin : isWindows ? "npx.cmd" : "npx";
+  const args = hasLocalTsx ? [daemonScript] : ["tsx", daemonScript];
 
-  const child = spawn(cmd, args, {
+  // With shell: true, Node passes the command line to the shell verbatim
+  // without quoting, so any path containing spaces (e.g. C:\Users\Some Name)
+  // would be split into multiple tokens. Wrap each token in double quotes on
+  // Windows to keep space-containing paths intact.
+  const quote = (s: string): string => (isWindows ? `"${s}"` : s);
+
+  const child = spawn(quote(cmd), args.map(quote), {
     detached: true,
     stdio: "ignore",
     env: { ...process.env },
+    // `.cmd` shims (local tsx or npx.cmd on Windows) must run via a shell.
+    shell: isWindows,
+    windowsVerbatimArguments: isWindows,
   });
 
   child.unref();
