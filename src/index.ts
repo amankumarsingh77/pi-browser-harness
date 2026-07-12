@@ -144,10 +144,6 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     }
     registerSetupCommand(pi, client);
     registerDeepResearchCommand(pi);
-    ctx.ui.setStatus(
-      "browser",
-      client.status().alive ? "🟢 Browser connected" : "🔴 Browser — run /browser-setup",
-    );
   });
 
   pi.on("session_shutdown", async () => {
