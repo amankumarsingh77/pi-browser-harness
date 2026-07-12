@@ -8,6 +8,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { execSync } from "node:child_process";
 import type { BrowserClient } from "./client";
 import { ensureDaemon } from "./daemon/spawn";
+import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 
 // ── Public: register the /browser-setup slash command ──────────────────────
 
@@ -41,7 +42,7 @@ export async function performSetup(client: BrowserClient): Promise<SetupResult> 
   // Step 2: Start the browser daemon (spawns if not running, silently reuses if alive)
   const daemonReady = await ensureDaemon();
   if (!daemonReady) {
-    return { success: false, error: "Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock." };
+    return { success: false, error: `Could not start the browser daemon. Check ${DAEMON_SOCKET_PATH}.` };
   }
 
   // Step 3: Connect to Chrome DevTools

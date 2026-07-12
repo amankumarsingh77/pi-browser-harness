@@ -133,8 +133,18 @@ export const deserialize = (line: string): WireMessage | null => {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-/** Filesystem path for the daemon's Unix domain socket. */
-export const DAEMON_SOCKET_PATH = "/tmp/pi-browser-daemon.sock";
+/**
+ * IPC endpoint for the daemon.
+ *
+ * On POSIX platforms this is a Unix domain socket path. On Windows, Node's IPC
+ * requires a named pipe of the form `\\.\pipe\<name>` — a Unix path like
+ * `/tmp/…` is not a valid `net` listen/connect target there and causes setup
+ * to fail. See https://nodejs.org/api/net.html#ipc-support.
+ */
+export const DAEMON_SOCKET_PATH =
+  process.platform === "win32"
+    ? "\\\\.\\pipe\\pi-browser-daemon"
+    : "/tmp/pi-browser-daemon.sock";
 
 /**
  * How long the daemon stays alive with zero connected clients before exiting
