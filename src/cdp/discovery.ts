@@ -184,7 +184,13 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
     const port = lines[0]?.trim();
     const path = lines[1]?.trim();
     if (!port || !path) continue;
-    candidates.push({ port: Number(port), path, mtimeMs });
+    // Guard against a truncated/corrupt port file (e.g. a non-numeric first
+    // line): an out-of-range port makes net.connect throw ERR_SOCKET_BAD_PORT
+    // synchronously, which would escape discoverWsUrl instead of surfacing as
+    // a Result error. Skip such entries.
+    const portNum = Number(port);
+    if (!Number.isInteger(portNum) || portNum <= 0 || portNum >= 65536) continue;
+    candidates.push({ port: portNum, path, mtimeMs });
   }
 
   // Phase 2: no readable candidate — probe well-known ports directly. Covers
@@ -236,5 +242,16 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
     const liveUrl = await queryLiveWsUrl(c.port);
     return ok(liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`);
   }
+
+  // Every discovered candidate was stale/unreachable. Before giving up, try the
+  // well-known fallback ports — a user with a leftover DevToolsActivePort file
+  // may still have a live browser reachable via 9222 / BU_CDP_PORTS. (Skip ports
+  // already covered by a candidate above so we don't re-probe them.)
+  for (const port of fallbackPorts()) {
+    if (byPort.has(port) || !(await isPortLive(port))) continue;
+    const liveUrl = await queryLiveWsUrl(port);
+    if (liveUrl) return ok(liveUrl);
+  }
+
   return lastErr ?? err(cdpError("discovery_failed", "no live DevTools endpoint among discovered candidates"));
 };
