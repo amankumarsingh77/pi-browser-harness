@@ -12,6 +12,7 @@ export type BrowserState = {
   readonly remoteBrowserId?: string;
   readonly ownedTargetIds?: ReadonlyArray<string>;
   readonly harnessWindowTargetId?: string;
+  readonly harnessWindowId?: number;
 };
 
 export const defaultState = (namespace = "default"): BrowserState => ({

@@ -1,4 +1,4 @@
 {
-  "extensions": ["../src/index.ts"],
-  "skills": ["../skills"]
+    "extensions": ["./src/index.ts"],
+    "skills":["./skills"]
 }

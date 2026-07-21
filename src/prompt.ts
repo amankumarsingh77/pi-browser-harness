@@ -2,150 +2,126 @@
  * System prompt guidance for browser usage.
  *
  * Injects a compact browser control reference into the pi system prompt.
- * Per-tool guidelines are injected via promptGuidelines on each tool registration.
- * This prompt provides only the cross-cutting patterns and tool reference table.
+ * This prompt carries only cross-cutting knowledge — the mental model, tool
+ * routing, workflows, and gotchas. Per-tool specifics (schemas, detailed usage)
+ * are injected separately via promptGuidelines on each tool registration, so this
+ * file intentionally does NOT restate full tool descriptions.
  */
 
 export function getBrowserSystemPrompt(): string {
   return `
 ## Browser Control
 
-You have full control of a real Chrome browser via \`browser_*\` tools.
-The browser connects to the user's running Chrome (not a headless instance).
+You drive a **real Chrome** (the user's running instance, not headless) through
+\`browser_*\` tools. These coexist with every standard pi tool — read, bash, edit,
+write — so mix them freely: \`browser_*\` for the page, everything else alongside.
 
-**These tools coexist with all other standard pi tools** — read, bash, edit,
-write, and any other built-in tools are still available. Use browser_* tools
-to interact with pages visually, and other tools alongside them.
+### The core handle: refs
 
-### Browser-Specific Tools
+Interaction is ref-first. Call \`browser_snapshot\` to get an accessibility tree
+where every interactive element has a stable ref (\`[eN]\`) and \`@(x,y)\`. **Target
+elements by ref, not by coordinates or guessed selectors** — refs are keyed to
+element identity, so they survive the re-renders that React/Vue forms trigger on
+every edit and save. Coordinates go stale; guessed selectors miss.
 
-| Tool | Purpose |
-|------|---------|
-| browser_snapshot | Accessibility-tree snapshot. Assigns every interactive element a stable **ref** (\`[eN]\`) plus \`@(x,y)\`. Refs are the primary handle for interaction tools — they survive re-renders, coordinates don't. |
-| browser_screenshot | Capture a PNG or JPEG screenshot of the current page (rendered inline in the TUI; the LLM reads the image via the saved file path) |
-| browser_click | Click an element by **ref** (preferred — re-resolves position, survives re-renders) or viewport x/y. Appends a compact diff of page changes. |
-| browser_type | Type text into the focused element (real keystrokes; requires a focused field) |
-| browser_fill | Fill an input/textarea by **ref** (preferred) or selector — updates React/Vue controlled components, verifies the value, appends a page-changes diff |
-| browser_select_option | Select an option in a native <select> by **ref** (preferred) or selector, choosing by value/label/index (fires change) |
-| browser_focus | Focus an element by **ref** (preferred) or selector (deterministic; use before browser_type) |
-| browser_press_key | Press a keyboard key (Enter, Tab, Escape, arrows, etc.) |
-| browser_scroll | Scroll the page at coordinates |
-| browser_navigate | Navigate to a URL (result details.outcome.kind is "in_place" or "new_tab_created") |
-| browser_new_tab | Open a new tab, optionally navigate |
-| browser_open_urls | Open multiple URLs in new tabs (parallel) |
-| browser_go_back / browser_go_forward / browser_reload | History navigation |
-| browser_page_info | Get page URL, title, viewport, scroll position, or dialog info |
-| browser_list_tabs | List all open browser tabs |
-| browser_current_tab | Get current tab info |
-| browser_switch_tab | Switch to a different tab by targetId |
-| browser_execute_js | Execute JavaScript and return the result |
-| browser_http_get | Direct HTTP GET (outside browser, for APIs) |
-| browser_console | Read JS errors / console output on the current tab (diagnostic — use when an action looks broken; pass sinceSeq from the previous nextCursor to see only new messages) |
-| browser_wait | Wait N seconds |
-| browser_wait_for | Wait until a selector/text appears (or a selector disappears) — use for SPA content before interacting |
-| browser_wait_for_load | Wait for document.readyState === 'complete' (returns a typed timeout error if the page doesn't reach readyState=complete in N seconds, default 15) |
-| browser_handle_dialog | Accept or dismiss a JS dialog |
-| browser_run_script | Execute a temporary script file with daemon access (write script to disk, then run) |
+- Prefer \`browser_fill\` for text — it fires input/change so controlled components
+  update, and returns the value for verification. Use \`browser_click\` + \`browser_type\`
+  only for keystroke-sensitive widgets (autocomplete, masked inputs).
+- Mutating calls append a compact **"Page changes"** diff — read it to confirm the
+  change landed (form closed, new \`*[eN]\` appeared).
+- \`"ref is stale"\` means the page changed: re-run \`browser_snapshot\` for fresh refs.
 
-### Temporary Scripts
+### Choosing a tool
 
-When the built-in tools aren't enough for a multi-step workflow, write a temporary
-script to disk and execute it with browser_run_script. The script runs in the
-harness process with direct access to the browser daemon and Node.js APIs.
+| To… | Reach for |
+|-----|-----------|
+| See the page structure (for interaction) | \`browser_snapshot\` (refs) |
+| See the page visually | \`browser_screenshot\` |
+| Search the web | \`browser_web_search\` → ranked {title, url, snippet} |
+| Read an article's clean text | \`browser_read_page\` (reader mode; url or owned tab) |
+| Extract specific DOM values | \`browser_execute_js\` |
+| Hit a JSON/API endpoint | \`browser_http_get\` (raw GET, outside the browser) |
+| Click / fill / type / select / focus / press a key | \`browser_click\` · \`browser_fill\` · \`browser_type\` · \`browser_select_option\` · \`browser_focus\` · \`browser_press_key\` |
+| Upload a file · drag · resize viewport | \`browser_upload_file\` · \`browser_drag_and_drop\` · \`browser_viewport_resize\` |
+| Go to a URL / open many / manage tabs | \`browser_navigate\` · \`browser_new_tab\` · \`browser_open_urls\` · \`browser_list_tabs\` · \`browser_switch_tab\` · \`browser_go_back\`/\`go_forward\`/\`reload\` |
+| Wait for content / load / a fixed delay | \`browser_wait_for\` (selector/text) · \`browser_wait_for_load\` (readyState) · \`browser_wait\` |
+| Inspect page / handle a dialog | \`browser_page_info\` · \`browser_current_tab\` · \`browser_handle_dialog\` |
+| Diagnose a broken action | \`browser_console\` (JS errors) · \`browser_get_network_log\` |
+| Save output / config downloads | \`browser_print_to_pdf\` · \`browser_download\` |
+| Anything the tools can't express | \`browser_run_script\` (see Extending) |
 
+Each tool carries its own detailed guidelines — this table is only for routing.
+
+### Workflows
+
+**Research (search → read):**
 \`\`\`
-write("/tmp/scrape-pages.js", \`
-  const results = [];
-  for (const url of params.urls) {
-    await daemon.cdp("Page.navigate", { url });
-    await new Promise(r => setTimeout(r, 2000));
-    const data = await daemon.evaluateJS("document.title");
-    results.push({ url, title: data });
-  }
-  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-\`)
-browser_run_script("/tmp/scrape-pages.js", { urls: [...] })
+browser_web_search("query")        // ranked links, no page content
+→ browser_read_page(url)           // clean article text for the top hits
+// fall back to browser_open_urls + browser_execute_js only when reader mode misses
 \`\`\`
 
-Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON, Buffer, setTimeout, clearTimeout.
-
-### Parallel Execution
-
-Observation tools (browser_screenshot, browser_page_info, browser_execute_js, browser_list_tabs, browser_http_get, etc.) can run in parallel with each other and with mutation tools. The harness automatically serializes mutation tools (click, type, scroll, navigate, switch_tab, etc.) so they never race on shared state. When operations are independent, emit them in the same turn for better performance.
-
-**Examples of safe parallel calls:**
+**Form filling (ref-first — the reliable path on SPA forms):**
 \`\`\`
-browser_screenshot() + browser_page_info() + browser_execute_js("document.title")
-browser_http_get("https://api.example.com/data") + browser_click(x, y)
+browser_wait_for({ selector: "#email" })   // ensure the field is rendered
+browser_snapshot()                          // interactive elements get [eN] refs
+→ browser_fill({ ref: "e7", value: "a@b.com" })
+→ browser_select_option({ ref: "e9", label: "India" })
+→ browser_click({ ref: "e12" })             // re-resolves position even after reflow
+// read each "Page changes" diff to confirm the step landed
 \`\`\`
 
-**Multi-agent note**: When multiple subagents use the browser, tab switching by one agent changes the active tab for all agents. Per-tab data (console buffers, network traces, dialogs, page info cache) is isolated — switching tabs does not destroy another agent's collected data. Call \`browser_current_tab\` before mutation tools to confirm you're on the expected tab. If \`browser_page_info\` returns a dialog, handle it with \`browser_handle_dialog\` promptly — dialogs block page interaction and are not queued across agents.
-
-### Common Patterns
-
-**Navigation:**
+**Navigate + verify:**
 \`\`\`
 browser_new_tab("https://example.com") → browser_wait_for_load() → browser_screenshot()
 \`\`\`
 
-**Form filling (ref-first — this is the reliable path on React/SPA forms):**
-\`\`\`
-browser_wait_for({ selector: "#email" })                    // ensure SPA field is rendered
-browser_snapshot()                                          // each interactive element gets a [eN] ref
-→ browser_fill({ ref: "e7", value: "a@b.com" })            // target by ref, not a guessed selector
-→ browser_select_option({ ref: "e9", label: "India" })     // native <select> by ref
-→ browser_click({ ref: "e12" })                            // e.g. Save — re-resolves position even if the form reflowed
-// each mutating call appends a compact "Page changes" diff — read it to confirm
-// the change landed (e.g. a save closed the form, a new field appeared as *[eN]).
-\`\`\`
-**Why ref over selector/coordinates:** refs are keyed to the element's identity, so
-they survive the re-renders that React/Vue forms trigger on every edit and save —
-coordinates go stale and selectors you guess often don't match. If a call returns
-"ref is stale", the page changed: re-run browser_snapshot for fresh refs.
+**Scroll:** \`browser_scroll({ deltaY: 500 })\` — W3C wheel convention: positive = down,
+negative = up (default 300, down).
 
-Prefer browser_fill for text inputs/textareas — it fires input/change so controlled
-components update, and returns the field's value for verification. Use browser_click +
-browser_type only for keystroke-sensitive widgets (autocomplete, masked inputs);
-browser_type requires an already-focused field and errors if none is focused.
+### Parallelism
 
-**Data extraction:**
+Observation tools (\`browser_screenshot\`, \`browser_page_info\`, \`browser_execute_js\`,
+\`browser_list_tabs\`, \`browser_http_get\`, \`browser_web_search\`, \`browser_read_page\`, …)
+run in parallel with each other and with mutations. The harness serializes mutations
+(click, type, scroll, navigate, switch_tab) so they never race. Emit independent calls
+in one turn:
 \`\`\`
-browser_execute_js("document.querySelector('.price').innerText")
-// or for APIs:
-browser_http_get("https://api.example.com/data")
+browser_screenshot() + browser_page_info() + browser_execute_js("document.title")
 \`\`\`
 
-**Scrolling:**
-\`\`\`
-browser_screenshot() → browser_scroll({ deltaY: 500 }) → browser_screenshot()
-\`\`\`
-Note: deltaY follows W3C wheel-event convention: positive=down, negative=up. Default deltaY=300 scrolls down.
+**Multi-agent:** tab switching by one agent changes the active tab for all agents,
+but per-tab data (console, network, dialogs) stays isolated. Call \`browser_current_tab\`
+before a mutation to confirm you're on the expected tab. Handle any dialog reported by
+\`browser_page_info\` promptly — dialogs block interaction and aren't queued across agents.
 
-**Research Workflow (search + browser):**
-\`\`\`
-browser_navigate("https://google.com/search?q=...") → search engine in a tab
-browser_open_urls(urls: ["url1", "url2", ...]) → open result pages in parallel tabs
-browser_list_tabs() → see all open tabs with targetIds
-browser_switch_tab(targetId: "...") → switch to a tab
-browser_screenshot() → visually inspect the page
-browser_execute_js("document.querySelector('.main').innerText") → extract content
-\`\`\`
+**Session boundary & tab hygiene:** you operate only inside this session's own Chrome
+window. \`browser_switch_tab\`/\`browser_close_tab\` refuse tabs this session didn't open,
+and \`browser_list_tabs\` defaults to owned tabs — never reach into the user's other tabs
+or windows. Close tabs when you're done with them: call \`browser_close_tab\` on any tab
+you opened (via \`browser_new_tab\`/\`browser_open_urls\`) once you've extracted what you
+need. Don't leave a pile of stale tabs behind — keep only what a later step still needs.
+(Leftover tabs are closed automatically when the session ends, but close them yourself
+as you go.)
 
-**Temporary Scripts (extending the harness):**
-\`\`\`
-write("/tmp/extract.js", "...script with daemon access...") → browser_run_script("/tmp/extract.js")
-\`\`\`
+### Extending: temporary scripts
 
-### Additional Tools
-
-| Tool | Purpose |
-|------|---------|
-| browser_upload_file | Upload a file to a file input by **ref** (preferred) or selector (bypasses file picker) |
-| browser_dispatch_key | Dispatch a DOM KeyboardEvent on an element by **ref** (preferred) or selector (for React/Vue inputs); returns details.matched |
-| browser_download | Configure download directory and disable save-as prompts |
-| browser_viewport_resize | Resize the viewport for responsive testing |
-| browser_drag_and_drop | Perform drag-and-drop from one coordinate to another |
-| browser_print_to_pdf | Print the current page to a PDF file |
-| browser_get_network_log | Get buffered network request/response events |
+When built-in tools can't express a multi-step workflow, write a script to a temp file
+and run it with \`browser_run_script\`. It executes in the harness process with direct
+daemon + Node access.
+\`\`\`
+write(<tempfile>.js, \`
+  const results = [];
+  for (const url of params.urls) {
+    await daemon.cdp("Page.navigate", { url });
+    await new Promise(r => setTimeout(r, 2000));
+    results.push({ url, title: await daemon.evaluateJS("document.title") });
+  }
+  return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+\`)
+browser_run_script(<tempfile>.js, { urls: [...] })
+\`\`\`
+Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON,
+Buffer, setTimeout, clearTimeout. Use a real temp path from the OS — don't hardcode \`/tmp\`.
 `;
 }

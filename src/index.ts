@@ -109,9 +109,10 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     if (!client) {
       const transport = createDaemonTransport(state.namespace);
 
-      const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
+      const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string; harnessWindowId?: number } = {};
       if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
       if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
+      if (state.harnessWindowId !== undefined) initialOwnership.harnessWindowId = state.harnessWindowId;
 
       client = createBrowserClient({
         namespace: state.namespace,
@@ -123,6 +124,9 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
             ownedTargetIds: snap.ownedTargetIds,
             ...(snap.harnessWindowTargetId !== undefined
               ? { harnessWindowTargetId: snap.harnessWindowTargetId }
+              : {}),
+            ...(snap.harnessWindowId !== undefined
+              ? { harnessWindowId: snap.harnessWindowId }
               : {}),
           };
           // Ownership changes can fire from CDP events at any time,
@@ -147,20 +151,27 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
-    persistState(pi, state);
     if (client) {
       try {
         // Detach from the page target (removes the "Chrome is being controlled"
         // banner) but keep the transport alive for the next session.
         await client.detach();
+        // Close every tab this session opened so no stale harness tabs linger
+        // in the user's browser between sessions. This also clears the persisted
+        // ownership + window binding via onOwnershipChange, so the next session
+        // starts with a fresh dedicated window rather than reattaching to leftovers.
+        await client.closeOwnedTabs();
       } catch (e) {
-        console.warn("[pi-browser-harness] client.detach() failed during shutdown:", e);
+        console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
       }
       // ponytail: keep the transport alive across sessions.
       // Do NOT call client.stop() or null out client — the daemon connection
       // persists and eliminates the per-session "Allow Remote Debugging" prompt.
       // Only Chrome restart or daemon death triggers a new prompt.
     }
+    // Persist last — closeOwnedTabs mutates `state` through onOwnershipChange,
+    // so this captures the cleared ownership set.
+    persistState(pi, state);
     await cleanupTempDirs();
   });
 

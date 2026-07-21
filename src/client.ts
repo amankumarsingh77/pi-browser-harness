@@ -16,10 +16,12 @@ export type BrowserClientOptions = {
   readonly initialOwnership?: {
     readonly ownedTargetIds?: ReadonlyArray<string>;
     readonly harnessWindowTargetId?: string;
+    readonly harnessWindowId?: number;
   };
   readonly onOwnershipChange?: (snapshot: {
     readonly ownedTargetIds: ReadonlyArray<string>;
     readonly harnessWindowTargetId: string | undefined;
+    readonly harnessWindowId: number | undefined;
   }) => void;
 };
 
@@ -32,6 +34,9 @@ export type BrowserClient = {
   /** Detach from the current page target (removes the "Chrome is being controlled" banner)
    *  while keeping the transport connection alive. Call on session shutdown. */
   detach(): Promise<void>;
+  /** Close every tab this session owns and clear the window binding. Best-effort —
+   *  used on session shutdown so no stale harness tabs survive. */
+  closeOwnedTabs(): Promise<void>;
   evaluateJs(expression: string, sessionId?: string): Promise<Result<unknown, CdpError>>;
   pageInfo(): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>>;
   takeDialog(): DialogInfo | null;
@@ -82,12 +87,15 @@ const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
 
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
   const transport = opts.transport ?? createCdpTransport();
-  const ownershipInit: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string } = {};
+  const ownershipInit: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string; harnessWindowId?: number } = {};
   if (opts.initialOwnership?.ownedTargetIds !== undefined) {
     ownershipInit.ownedTargetIds = opts.initialOwnership.ownedTargetIds;
   }
   if (opts.initialOwnership?.harnessWindowTargetId !== undefined) {
     ownershipInit.harnessWindowTargetId = opts.initialOwnership.harnessWindowTargetId;
+  }
+  if (opts.initialOwnership?.harnessWindowId !== undefined) {
+    ownershipInit.harnessWindowId = opts.initialOwnership.harnessWindowId;
   }
   const ownership = createOwnershipRegistry(ownershipInit);
   if (opts.onOwnershipChange) {
@@ -96,6 +104,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       cb({
         ownedTargetIds: ownership.list(),
         harnessWindowTargetId: ownership.harnessWindow(),
+        harnessWindowId: ownership.harnessWindowId(),
       });
     });
   }
@@ -256,6 +265,15 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return ok(undefined);
   };
 
+  // Ask Chrome for the real windowId hosting a target. Undefined on failure —
+  // callers treat the window binding as best-effort.
+  const getWindowId = async (targetId: string): Promise<number | undefined> => {
+    const r = await session.callBrowser("Browser.getWindowForTarget", { targetId });
+    if (!r.success) return undefined;
+    const wid = (r.data as { windowId?: number }).windowId;
+    return typeof wid === "number" ? wid : undefined;
+  };
+
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
     // Verify the recorded harness window still exists. Querying the live
     // target list also gives listTabs's reconciliation a chance to run.
@@ -263,22 +281,35 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     if (!tabsResult.success) return tabsResult;
     const live = new Set(tabsResult.data.map((t) => t.targetId));
     const hw = ownership.harnessWindow();
+    // Pick an opener that keeps us inside the harness window. Prefer the seed
+    // tab; if the user closed it but other owned tabs survive, reuse one of
+    // those instead of spawning a second window (avoids window scatter).
+    const opener = hw && live.has(hw)
+      ? hw
+      : ownership.list().find((id) => live.has(id));
 
     const params: Record<string, unknown> = { url: "about:blank" };
-    if (hw && live.has(hw)) {
-      // Open as a child of the harness window's seed tab — Chrome places
-      // it in the same window, giving us visual grouping for free.
-      params["openerId"] = hw;
+    if (opener) {
+      // Open as a child of an owned tab — Chrome places it in the same window,
+      // giving us visual grouping for free and keeping the session single-window.
+      params["openerId"] = opener;
     } else {
-      // Either fresh session or the harness window was closed by the user.
-      // Spawn a new dedicated window.
+      // Fresh session, or the whole harness window was closed by the user.
+      // Spawn a new dedicated window and rebind to it.
       params["newWindow"] = true;
     }
     const created = await session.callBrowser("Target.createTarget", params);
     if (!created.success) return created;
     const c = created.data as { targetId: string };
 
-    if (params["newWindow"]) ownership.setHarnessWindow(c.targetId);
+    if (params["newWindow"]) {
+      ownership.setHarnessWindow(c.targetId);
+      const wid = await getWindowId(c.targetId);
+      if (wid !== undefined) ownership.setHarnessWindowId(wid);
+    } else if (opener && opener !== hw) {
+      // Re-seeded onto a surviving owned tab; keep the seed pointer live.
+      ownership.setHarnessWindow(opener);
+    }
     ownership.add(c.targetId);
 
     const switched = await switchTab(c.targetId);
@@ -295,6 +326,18 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     if (!r.success) return r;
     ownership.remove(targetId);
     return ok(undefined);
+  };
+
+  const closeOwnedTabs = async (): Promise<void> => {
+    // Snapshot first — remove() mutates the list, and targetDestroyed events
+    // may also prune concurrently. Failures are swallowed: a tab the user
+    // already closed, or a dead transport, must not block shutdown.
+    for (const id of ownership.list()) {
+      await session.callBrowser("Target.closeTarget", { targetId: id }).catch(() => {});
+      ownership.remove(id);
+    }
+    ownership.setHarnessWindow(undefined);
+    ownership.setHarnessWindowId(undefined);
   };
 
   const status = (): DaemonStatus => ({
@@ -316,7 +359,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   return {
     namespace: opts.namespace,
-    ensureAlive, status, start, stop, detach,
+    ensureAlive, status, start, stop, detach, closeOwnedTabs,
     evaluateJs, pageInfo,
     takeDialog: () => session.takeDialog(),
     listTabs, switchTab, newTab, closeTab,

@@ -4,6 +4,7 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
+import { bindHarnessWindowId } from "../cdp/window-binding";
 
 const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
@@ -75,7 +76,7 @@ export const openUrlsTool = defineBrowserTool({
   description: "Open multiple URLs in parallel new tabs. Returns per-URL outcomes.",
   promptSnippet: "Open multiple URLs in new tabs (parallel)",
   promptGuidelines: [
-    "Use after web_search to open citations in parallel.",
+    "Use after browser_web_search to open citations in parallel.",
     "After opening, use browser_list_tabs / browser_switch_tab to navigate, then browser_snapshot to inspect each tab.",
     "Use browser_wait_for_load on a tab before extracting data from SPAs.",
   ],
@@ -83,17 +84,31 @@ export const openUrlsTool = defineBrowserTool({
   renderCall: (a) => new Text(`🌐 Opening ${a.urls.length} URL${a.urls.length !== 1 ? "s" : ""}…`, 0, 0),
   async handler(args, { client, onUpdate }): Promise<Result<ToolOk, ToolErr>> {
     const total = args.urls.length;
-    // Phase 1: create tabs in parallel.  Own them so they appear in
-    // browser_list_tabs scope:'owned' and group in the harness window.
-    const hw = client.ownership().harnessWindow();
-    const created = await Promise.all(args.urls.map(async (url): Promise<TabResult> => {
-      const params: Record<string, unknown> = { url: "about:blank" };
-      if (hw) params["openerId"] = hw;
-      else params["newWindow"] = true;
-      const r = await client.session().callBrowser("Target.createTarget", params);
+    // Phase 1: create tabs. All must land in ONE window. If the harness window
+    // already exists, open every url as its child in parallel. If it doesn't
+    // (fresh/closed), create the FIRST url as a new dedicated window (binding
+    // its windowId) and open the rest as children of it — a parallel
+    // newWindow:true per url would otherwise scatter tabs across N windows.
+    let seed = client.ownership().harnessWindow();
+    let seedResult: TabResult | undefined;
+    if (!seed) {
+      const url0 = args.urls[0];
+      if (url0 === undefined) return err({ kind: "invalid_state", message: "no URLs provided" });
+      const r0 = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true });
+      if (!r0.success) return err({ kind: "cdp_error", message: r0.error.message });
+      seed = (r0.data as { targetId: string }).targetId;
+      client.ownership().setHarnessWindow(seed);
+      await bindHarnessWindowId(client, seed);
+      client.ownership().add(seed);
+      seedResult = { url: url0, targetId: seed, ok: true };
+    }
+    const seededWindow = seed;
+    const created = await Promise.all(args.urls.map(async (url, i): Promise<TabResult> => {
+      // Reuse the seed tab (created above) for the first url instead of duplicating it.
+      if (i === 0 && seedResult) return seedResult;
+      const r = await client.session().callBrowser("Target.createTarget", { url: "about:blank", openerId: seededWindow });
       if (!r.success) return { url, targetId: "", ok: false, error: r.error.message };
       const c = r.data as { targetId: string };
-      if (params["newWindow"]) client.ownership().setHarnessWindow(c.targetId);
       client.ownership().add(c.targetId);
       return { url, targetId: c.targetId, ok: true };
     }));

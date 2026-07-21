@@ -20,14 +20,24 @@ export type OwnershipRegistry = {
   replaceAll(ids: ReadonlyArray<string>): void;
   setHarnessWindow(targetId: string | undefined): void;
   harnessWindow(): string | undefined;
+  /** The real Chrome windowId of the dedicated harness window — the durable
+   *  identity of "the window this session initialized", surviving seed-tab
+   *  closure. Undefined until the window is created (or after teardown). */
+  setHarnessWindowId(windowId: number | undefined): void;
+  harnessWindowId(): number | undefined;
   onChange(cb: () => void): void;
 };
 
 export const createOwnershipRegistry = (
-  initial?: { readonly ownedTargetIds?: ReadonlyArray<string>; readonly harnessWindowTargetId?: string },
+  initial?: {
+    readonly ownedTargetIds?: ReadonlyArray<string>;
+    readonly harnessWindowTargetId?: string;
+    readonly harnessWindowId?: number;
+  },
 ): OwnershipRegistry => {
   const owned = new Set<string>(initial?.ownedTargetIds ?? []);
   let harnessWindow: string | undefined = initial?.harnessWindowTargetId;
+  let harnessWindowId: number | undefined = initial?.harnessWindowId;
   let listener: (() => void) | null = null;
 
   const notify = (): void => {
@@ -64,6 +74,14 @@ export const createOwnershipRegistry = (
     },
     harnessWindow() {
       return harnessWindow;
+    },
+    setHarnessWindowId(windowId) {
+      if (harnessWindowId === windowId) return;
+      harnessWindowId = windowId;
+      notify();
+    },
+    harnessWindowId() {
+      return harnessWindowId;
     },
     onChange(cb) {
       listener = cb;
