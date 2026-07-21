@@ -92,6 +92,17 @@ export const createCdpSession = (
         const tab = targetId ? tabs.get(targetId) : undefined;
         if (tab) tab.pageInfoDirty = true;
       }
+      if (ev.method === "Target.targetCreated" && ownership) {
+        // Adopt tabs opened BY a tab we already own (window.open, target=_blank,
+        // popups). Chrome sets openerId to the opener target; if that opener is
+        // owned, the child belongs to this session's window and must be
+        // controllable + cleaned up. Targets the user opens themselves have no
+        // owned opener, so they are never adopted.
+        const info = (ev.params as { targetInfo?: { targetId?: string; type?: string; openerId?: string } } | undefined)?.targetInfo;
+        if (info?.type === "page" && info.targetId && info.openerId && ownership.has(info.openerId)) {
+          ownership.add(info.targetId);
+        }
+      }
       if (ev.method === "Target.targetDestroyed" && ownership) {
         const params = ev.params as { targetId?: string } | undefined;
         if (params?.targetId) {
@@ -179,6 +190,43 @@ export const createCdpSession = (
         if (survivors.length !== ownership.list().length) ownership.replaceAll(survivors);
         const hw = ownership.harnessWindow();
         if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
+
+        if (survivors.length === 0) {
+          // No owned tab survived — the harness window is gone (user closed it,
+          // or Chrome restarted and reassigned all ids). The persisted windowId
+          // is now meaningless and could even collide with one of the user's
+          // windows, so drop it. attachFirstPage will mint a fresh window below.
+          ownership.setHarnessWindowId(undefined);
+        } else {
+          // Self-heal ownership from the window itself. We anchor on a tab we
+          // KNOW we own (a survivor) and re-adopt only its live window-mates —
+          // popups/children from last session, tabs reopened in our window.
+          // Ownership is thus DERIVED from the real window, never from the bare
+          // persisted integer (which Chrome may reassign to a user window on
+          // restart — anchoring on a survivor makes that misfire impossible).
+          const anchorId = survivors[0]!;
+          const anchorWin = await transport.request("Browser.getWindowForTarget", { targetId: anchorId }, { sessionId: null });
+          if (anchorWin.success) {
+            const anchorWindowId = (anchorWin.data as { windowId?: number }).windowId;
+            if (typeof anchorWindowId === "number") {
+              ownership.setHarnessWindowId(anchorWindowId); // refresh to the live id
+              const windows = await Promise.all(
+                allPages.map((p) =>
+                  p.targetId === anchorId
+                    ? Promise.resolve(anchorWin)
+                    : transport.request("Browser.getWindowForTarget", { targetId: p.targetId }, { sessionId: null }),
+                ),
+              );
+              allPages.forEach((p, i) => {
+                const r = windows[i];
+                if (r?.success && (r.data as { windowId?: number }).windowId === anchorWindowId) {
+                  ownership.add(p.targetId);
+                }
+              });
+            }
+          }
+          if (!ownership.harnessWindow()) ownership.setHarnessWindow(anchorId);
+        }
       }
       // Prune per-tab state for pages that no longer exist
       const liveTargetIds = new Set(allPages.map((p) => p.targetId));
@@ -208,6 +256,13 @@ export const createCdpSession = (
         if (ownership) {
           ownership.setHarnessWindow(c.targetId);
           ownership.add(c.targetId);
+          // Capture the real Chrome windowId — the durable identity of the
+          // window this session initialized (survives seed-tab closure).
+          const win = await transport.request("Browser.getWindowForTarget", { targetId: c.targetId }, { sessionId: null });
+          if (win.success) {
+            const wid = (win.data as { windowId?: number }).windowId;
+            if (typeof wid === "number") ownership.setHarnessWindowId(wid);
+          }
         }
       }
 

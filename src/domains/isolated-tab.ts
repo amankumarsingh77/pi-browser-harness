@@ -13,6 +13,7 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
+import { bindHarnessWindowId } from "../cdp/window-binding";
 import type { ToolErr } from "../util/tool";
 
 /** A tab attached by its own sessionId, ready to drive via callOnTarget. */
@@ -40,7 +41,10 @@ export const openIsolatedTab = async (client: BrowserClient): Promise<Result<Iso
   if (!created.success) return err(toToolErr(created.error.message));
   const { targetId } = created.data as { targetId: string };
 
-  if (createParams["newWindow"]) client.ownership().setHarnessWindow(targetId);
+  if (createParams["newWindow"]) {
+    client.ownership().setHarnessWindow(targetId);
+    await bindHarnessWindowId(client, targetId);
+  }
   client.ownership().add(targetId);
 
   const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
