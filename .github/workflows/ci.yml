@@ -88,3 +88,9 @@ jobs:
         if: runner.os != 'Linux'
         run: npx tsx test/manual/profile-e2e-test.ts
         shell: bash
+
+      # Tab-creation concurrency is pure JS coordination — the same on every
+      # OS — so one platform is enough to guard the invariant.
+      - name: Tab concurrency (Linux only)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx tsx test/manual/profile-concurrency-test.ts

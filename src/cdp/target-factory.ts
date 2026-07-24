@@ -114,12 +114,38 @@ const spawnTabViaOpener = async (
 };
 
 /**
+ * In-flight window creation, per client. Isolated tabs run concurrently
+ * (browser_read_page is registered unserialized), so two of them starting at
+ * once would otherwise each find "no harness window" and create one — two blank
+ * windows before, and two launched profile windows now. Callers share the first
+ * call's result instead.
+ */
+const inFlight = new WeakMap<BrowserClient, Promise<Result<HarnessWindow, CdpError>>>();
+
+/**
  * The harness window for this session, creating it when absent.
  *
  * Reuses a live owned tab when one exists — including after the user closed the
  * original seed — so reconnects don't scatter windows.
  */
 export const ensureHarnessWindow = async (client: BrowserClient): Promise<Result<HarnessWindow, CdpError>> => {
+  const pending = inFlight.get(client);
+  if (pending) {
+    const shared = await pending;
+    // `freshlyCreated` is a claim on the seed tab, and only the caller that
+    // started the creation may hold it. Everyone waiting on the same window
+    // must open a tab of their own beside it, or two callers would drive the
+    // very same tab.
+    return shared.success ? ok({ targetId: shared.data.targetId, freshlyCreated: false }) : shared;
+  }
+  const attempt = ensureHarnessWindowUncoordinated(client).finally(() => inFlight.delete(client));
+  inFlight.set(client, attempt);
+  return attempt;
+};
+
+const ensureHarnessWindowUncoordinated = async (
+  client: BrowserClient,
+): Promise<Result<HarnessWindow, CdpError>> => {
   const targets = await listPageTargets(client);
   if (!targets.success) return targets;
   const live = new Set(targets.data.map((t) => t.targetId));
