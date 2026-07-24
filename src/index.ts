@@ -12,6 +12,7 @@
  *
  * Commands:
  *   /browser-setup          — guided setup wizard
+ *   /browser-profile        — choose which browser profile the agent uses
  *   /browser-status         — show client status and current page
  *   /browser-reload-daemon  — restart the browser client
  *   /deep-research <q>      — research a question on the web, write a cited report
@@ -25,6 +26,8 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserClient, createBrowserClient } from "./client";
 import { getBrowserSystemPrompt } from "./prompt";
 import { registerSetupCommand } from "./setup";
+import { registerProfileCommand } from "./profile/command";
+import { readPin } from "./profile/store";
 import { registerDeepResearchCommand } from "./deep-research";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
@@ -57,8 +60,10 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
         return;
       }
       const s = client.status();
+      const pin = client.profilePin();
       const lines = [
         `Browser: ${s.alive ? "🟢 Connected" : "🔴 Disconnected"}`,
+        `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
@@ -102,6 +107,11 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
 
+    // The pinned profile lives on disk, not in the session, so it survives
+    // session termination. Re-read it every session start: another pi session
+    // may have changed it since this client was created.
+    const profilePin = await readPin();
+
     // Create the client lazily on first session. The daemon transport
     // is created but NOT connected — that only happens when the user
     // runs /browser-setup or a browser tool call finds an existing socket.
@@ -117,6 +127,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
       client = createBrowserClient({
         namespace: state.namespace,
         transport,
+        profilePin,
         ...(Object.keys(initialOwnership).length > 0 ? { initialOwnership } : {}),
         onOwnershipChange: (snap) => {
           state = {
@@ -136,6 +147,10 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
           try { persistState(pi, state); } catch { /* stale ctx — safe to ignore */ }
         },
       });
+    } else {
+      // Client carried over from a previous session — adopt whatever pin is on
+      // disk now, which another pi session may have changed.
+      client.setProfilePin(profilePin);
     }
 
     // Do NOT call client.start() here — browser control is on-demand.
@@ -147,6 +162,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
       toolsRegistered = true;
     }
     registerSetupCommand(pi, client);
+    registerProfileCommand(pi, client);
     registerDeepResearchCommand(pi);
   });
 

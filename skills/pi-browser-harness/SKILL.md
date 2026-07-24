@@ -54,6 +54,21 @@ connects to Chrome, and opens a test tab. The user sees a single "Allow Remote
 Debugging" prompt the first time. After that, all sessions reuse the same connection.
 `browser_setup` is idempotent — safe to call even when already connected.
 
+## Browser profile
+
+Every harness tab opens in one chosen browser profile, which determines the logins,
+cookies, and extensions you're working with. The user picks it once via
+`/browser-profile`; the choice persists across sessions in `~/.pi/agent/`.
+
+The first `browser_setup` in a fresh install shows that picker, so the tool may pause
+briefly on user input — this is expected, and the result appears in the tool output as
+`Browser profile: <name> (<email>)`.
+
+If setup reports `couldn't open a window in "…" automatically`, the harness could not
+open the pinned profile's window. Tell the user to open that profile from their browser's
+profile menu and retry, or to run `/browser-profile` to choose another. Never work around
+it by opening tabs elsewhere — a different profile means different accounts.
+
 ## Connection
 
 You're attached to the user's real Chrome — never launch your own. If auth is required, stop and ask the user. If `browser_page_info` returns a dialog, handle it first with `browser_handle_dialog`.

@@ -31,8 +31,10 @@ export const setupTool = defineBrowserTool({
   // ensureAlive:false — this tool IS the setup; it must bypass the socket guard
   ensureAlive: false,
   renderCall: () => new Text("🔧 Initializing browser...", 0, 0),
-  async handler(_args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const result = await performSetup(client);
+  async handler(_args, { client, extensionCtx }): Promise<Result<ToolOk, ToolErr>> {
+    // extensionCtx carries the UI, so the agent calling browser_setup gets the
+    // same first-run profile picker the user gets from /browser-setup.
+    const result = await performSetup(client, extensionCtx);
     if (result.success) {
       return ok({ text: result.data });
     }
