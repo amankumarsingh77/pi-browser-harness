@@ -45,9 +45,21 @@ export type CdpSession = {
   drainConsoleBuffer(filter: ConsoleFilter): ConsoleDrainResult;
 };
 
+/**
+ * Supplies the seed tab when attachFirstPage finds no owned tab to attach to.
+ * Injected by the client so that seeding goes through the target factory —
+ * which, with a profile pinned, opens the window inside that profile. Without
+ * it, attachFirstPage's own `Target.createTarget` would land in whichever
+ * profile currently has focus.
+ *
+ * The provider is responsible for its own ownership bookkeeping.
+ */
+export type SeedTargetProvider = () => Promise<Result<string, CdpError>>;
+
 export const createCdpSession = (
   transport: CdpTransport,
   ownership?: OwnershipRegistry,
+  createSeedTarget?: SeedTargetProvider,
 ): CdpSession => {
   let sessionId: string | null = null;
   let targetId: string | null = null;
@@ -245,6 +257,13 @@ export const createCdpSession = (
       if (ownership) {
         const ownedLive = ownership.list().filter((id) => allPages.some((p) => p.targetId === id));
         pickTargetId = ownedLive[0];
+      }
+      if (!pickTargetId && createSeedTarget) {
+        // Delegated seeding (see SeedTargetProvider): the provider creates the
+        // window in the right profile and records ownership itself.
+        const seeded = await createSeedTarget();
+        if (!seeded.success) return seeded;
+        pickTargetId = seeded.data;
       }
       if (!pickTargetId) {
         const createParams: Record<string, unknown> = { url: "about:blank" };

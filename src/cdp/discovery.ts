@@ -1,61 +1,24 @@
 import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { connect as netConnect } from "node:net";
 import { request as httpRequest } from "node:http";
 import { type Result, err, ok } from "../util/result";
+import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
 
-const profileDirs = (): ReadonlyArray<string> => {
-  const home = homedir();
-  return [
-    // macOS — Chrome (all channels), Chromium, Brave, Edge
-    join(home, "Library/Application Support/Google/Chrome"),
-    join(home, "Library/Application Support/Google/Chrome Beta"),
-    join(home, "Library/Application Support/Google/Chrome Dev"),
-    join(home, "Library/Application Support/Google/Chrome Canary"),
-    join(home, "Library/Application Support/Chromium"),
-    join(home, "Library/Application Support/BraveSoftware/Brave-Browser"),
-    join(home, "Library/Application Support/BraveSoftware/Brave-Browser-Beta"),
-    join(home, "Library/Application Support/BraveSoftware/Brave-Browser-Nightly"),
-    join(home, "Library/Application Support/BraveSoftware/Brave-Browser-Dev"),
-    join(home, "Library/Application Support/Microsoft Edge"),
-    join(home, "Library/Application Support/Microsoft Edge Beta"),
-    join(home, "Library/Application Support/Microsoft Edge Dev"),
-    join(home, "Library/Application Support/Microsoft Edge Canary"),
-    // Linux — Chrome (all channels), Chromium, Brave, Edge
-    join(home, ".config/google-chrome"),
-    join(home, ".config/google-chrome-beta"),
-    join(home, ".config/google-chrome-unstable"),
-    join(home, ".config/chromium"),
-    join(home, ".config/chromium-browser"),
-    join(home, ".config/BraveSoftware/Brave-Browser"),
-    join(home, ".config/BraveSoftware/Brave-Browser-Beta"),
-    join(home, ".config/BraveSoftware/Brave-Browser-Nightly"),
-    join(home, ".config/microsoft-edge"),
-    join(home, ".config/microsoft-edge-beta"),
-    join(home, ".config/microsoft-edge-dev"),
-    // Linux flatpak
-    join(home, ".var/app/org.chromium.Chromium/config/chromium"),
-    join(home, ".var/app/com.google.Chrome/config/google-chrome"),
-    join(home, ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"),
-    join(home, ".var/app/com.microsoft.Edge/config/microsoft-edge"),
-    // Windows — Chrome, Chromium, Brave, Edge
-    join(home, "AppData/Local/Google/Chrome/User Data"),
-    join(home, "AppData/Local/Google/Chrome Beta/User Data"),
-    join(home, "AppData/Local/Google/Chrome Dev/User Data"),
-    join(home, "AppData/Local/Google/Chrome SxS/User Data"),
-    join(home, "AppData/Local/Chromium/User Data"),
-    join(home, "AppData/Local/BraveSoftware/Brave-Browser/User Data"),
-    join(home, "AppData/Local/BraveSoftware/Brave-Browser-Beta/User Data"),
-    join(home, "AppData/Local/Microsoft/Edge/User Data"),
-    join(home, "AppData/Local/Microsoft/Edge Beta/User Data"),
-    join(home, "AppData/Local/Microsoft/Edge Dev/User Data"),
-    join(home, "AppData/Local/Microsoft/Edge SxS/User Data"),
-  ];
+/**
+ * A live CDP endpoint plus, when discovery went through a DevToolsActivePort
+ * file, the user-data-dir that file lives in. That directory is the browser's
+ * profile registry (`Local State`) — Chromium writes DevToolsActivePort to
+ * chrome::DIR_USER_DATA — so it is what profile selection enumerates.
+ * Undefined when the endpoint came from BU_CDP_WS or a bare port probe.
+ */
+export type CdpEndpoint = {
+  readonly wsUrl: string;
+  readonly userDataDir?: string;
 };
 
 const probePort = (port: number): Promise<Result<void, CdpError>> =>
@@ -144,10 +107,20 @@ const fallbackPorts = (): ReadonlyArray<number> => {
   return Array.from(ports);
 };
 
-type Candidate = { readonly port: number; readonly path: string; readonly mtimeMs: number };
+type Candidate = {
+  readonly port: number;
+  readonly path: string;
+  readonly mtimeMs: number;
+  /** The user-data-dir whose DevToolsActivePort produced this candidate. */
+  readonly userDataDir: string;
+};
 
-export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
-  const dirs = profileDirs();
+/**
+ * Locate a live CDP endpoint, reporting the user-data-dir it belongs to when
+ * that is knowable. `discoverWsUrl` is the URL-only view of the same walk.
+ */
+export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
+  const dirs = userDataDirCandidates();
 
   // Phase 1: collect every readable DevToolsActivePort candidate up front,
   // rather than committing to the first one found. A single browser writes one
@@ -190,7 +163,7 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
     // a Result error. Skip such entries.
     const portNum = Number(port);
     if (!Number.isInteger(portNum) || portNum <= 0 || portNum >= 65536) continue;
-    candidates.push({ port: portNum, path, mtimeMs });
+    candidates.push({ port: portNum, path, mtimeMs, userDataDir: base });
   }
 
   // Phase 2: no readable candidate — probe well-known ports directly. Covers
@@ -201,7 +174,9 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
     for (const port of fallbackPorts()) {
       if (!(await isPortLive(port))) continue;
       const live = await queryLiveWsUrl(port);
-      if (live) return ok(live);
+      // No DevToolsActivePort file was involved, so the user-data-dir behind
+      // this endpoint is unknown — profile selection stays unavailable.
+      if (live) return ok({ wsUrl: live });
     }
     const permHint = readErrors.length > 0
       ? `\n\nDevToolsActivePort reads were denied (${readErrors.join(", ")}); if you're running in a sandbox, grant read access to those files or set BU_CDP_WS / BU_CDP_PORTS to bypass file discovery.`
@@ -232,7 +207,7 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
   // /json/version. Some browsers disable that HTTP endpoint when remote
   // debugging is toggled only via chrome://inspect (rather than a launch flag),
   // so fall back to the WS path written in DevToolsActivePort.
-  let lastErr: Result<string, CdpError> | null = null;
+  let lastErr: Result<CdpEndpoint, CdpError> | null = null;
   for (const c of ordered) {
     const ready = await waitForPort(c.port);
     if (!ready.success) {
@@ -240,7 +215,7 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
       continue;
     }
     const liveUrl = await queryLiveWsUrl(c.port);
-    return ok(liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`);
+    return ok({ wsUrl: liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`, userDataDir: c.userDataDir });
   }
 
   // Every discovered candidate was stale/unreachable. Before giving up, try the
@@ -250,8 +225,17 @@ export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
   for (const port of fallbackPorts()) {
     if (byPort.has(port) || !(await isPortLive(port))) continue;
     const liveUrl = await queryLiveWsUrl(port);
-    if (liveUrl) return ok(liveUrl);
+    if (liveUrl) return ok({ wsUrl: liveUrl });
   }
 
   return lastErr ?? err(cdpError("discovery_failed", "no live DevTools endpoint among discovered candidates"));
+};
+
+/**
+ * URL-only view of {@link discoverEndpoint}, kept as the stable entry point for
+ * callers that don't care which user-data-dir answered.
+ */
+export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
+  const endpoint = await discoverEndpoint();
+  return endpoint.success ? ok(endpoint.data.wsUrl) : endpoint;
 };

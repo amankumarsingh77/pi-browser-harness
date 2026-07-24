@@ -1,12 +1,15 @@
 import { type Result, err, ok } from "./util/result";
 import { safeJs } from "./util/js-template";
 import { type Mutex, createMutex } from "./util/mutex";
-import { discoverWsUrl } from "./cdp/discovery";
+import { discoverEndpoint } from "./cdp/discovery";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/transport";
 import { createCdpTransport } from "./cdp/transport";
 import { type CdpSession, createCdpSession } from "./cdp/session";
 import { type OwnershipRegistry, createOwnershipRegistry } from "./cdp/ownership";
+import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";
+import { seedProfileWindow } from "./profile/bind";
+import type { ProfilePin } from "./profile/store";
 import type { DaemonStatus, DialogInfo, PageInfo, TabInfo } from "./cdp/types";
 
 export type BrowserClientOptions = {
@@ -18,6 +21,8 @@ export type BrowserClientOptions = {
     readonly harnessWindowTargetId?: string;
     readonly harnessWindowId?: number;
   };
+  /** Profile to pin this session to, loaded from the durable pin store. */
+  readonly profilePin?: ProfilePin | null;
   readonly onOwnershipChange?: (snapshot: {
     readonly ownedTargetIds: ReadonlyArray<string>;
     readonly harnessWindowTargetId: string | undefined;
@@ -49,6 +54,19 @@ export type BrowserClient = {
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   session(): CdpSession;
   transport(): CdpTransport;
+  /** User-data-dir of the connected browser, when discovery could determine it.
+   *  Undefined for BU_CDP_WS / bare-port connections, where profile selection
+   *  is unavailable. */
+  userDataDir(): string | undefined;
+  /** The profile this session is pinned to, or null when unpinned. */
+  profilePin(): ProfilePin | null;
+  setProfilePin(pin: ProfilePin | null): void;
+  /** browserContextId of the pinned profile, once a window has identified it.
+   *  Session-scoped: Chrome re-mints context ids on every browser run. */
+  profileContextId(): string | undefined;
+  setProfileContextId(contextId: string | undefined): void;
+  /** Open and adopt a window inside the pinned profile. Returns its seed tab. */
+  seedPinnedProfileWindow(): Promise<Result<string, CdpError>>;
   /** Returns the shared async mutex that serialized browser tools must acquire
    *  before performing mutations. Observation tools should not use this. */
   mutationMutex(): Mutex;
@@ -108,11 +126,33 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       });
     });
   }
-  const session = createCdpSession(transport, ownership);
+  // The seed provider routes attachFirstPage's fallback through the target
+  // factory, so a pinned profile is honoured on every path that can create the
+  // harness window.
+  const session = createCdpSession(transport, ownership, async () => {
+    const window = await ensureHarnessWindow(api);
+    return window.success ? ok(window.data.targetId) : window;
+  });
   const mutationMutex = createMutex();
   let lastHealth = 0;
   let pageCaches = new Map<string, { readonly info: PageInfo; readonly at: number }>();
   let remote: BrowserClientOptions["remote"] | null = opts.remote ?? null;
+  let userDataDir: string | undefined;
+  let profilePin: ProfilePin | null = opts.profilePin ?? null;
+  let profileContextId: string | undefined;
+
+  /**
+   * With a profile pinned, the harness window must exist BEFORE anything
+   * attaches: session.attachFirstPage() would otherwise fall back to a bare
+   * Target.createTarget, which lands in the focus-derived default profile.
+   * Seeding first means attachFirstPage always finds an owned tab to attach to.
+   */
+  const seedIfPinned = async (): Promise<Result<void, CdpError>> => {
+    if (!profilePin) return ok(undefined);
+    const window = await ensureHarnessWindow(api);
+    if (!window.success) return window;
+    return ok(undefined);
+  };
 
   const start = async (): Promise<Result<void, CdpError>> => {
     if (transport.state() === "open" && session.current()) return ok(undefined);
@@ -123,14 +163,22 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     } else if (envUrl) {
       wsUrl = envUrl;
     } else {
-      const discovered = await discoverWsUrl();
+      const discovered = await discoverEndpoint();
       if (!discovered.success) return discovered;
-      wsUrl = discovered.data;
+      wsUrl = discovered.data.wsUrl;
+      userDataDir = discovered.data.userDataDir;
     }
     const connected = await transport.connect(wsUrl, { timeoutMs: 10_000 });
     if (!connected.success) return connected;
     if (!remote) {
       remote = { cdpUrl: wsUrl, browserId: wsUrl.split("/").pop() ?? "unknown" };
+    }
+    // A fresh browser run invalidates any context id resolved earlier.
+    profileContextId = undefined;
+    const seeded = await seedIfPinned();
+    if (!seeded.success) {
+      await transport.close();
+      return seeded;
     }
     const attached = await session.attachFirstPage();
     if (!attached.success) {
@@ -166,6 +214,10 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       expression: "1", returnByValue: true,
     }, { timeoutMs: 2_000 });
     if (!jsProbe.success && jsProbe.error.kind === "session_not_found") {
+      // Re-seed first when pinned: if the user closed every harness tab,
+      // attachFirstPage would mint a window in the focus-derived profile.
+      const seeded = await seedIfPinned();
+      if (!seeded.success) return seeded;
       const reattached = await session.attachFirstPage();
       if (reattached.success) {
         pageCaches.clear();
@@ -265,60 +317,34 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return ok(undefined);
   };
 
-  // Ask Chrome for the real windowId hosting a target. Undefined on failure —
-  // callers treat the window binding as best-effort.
-  const getWindowId = async (targetId: string): Promise<number | undefined> => {
-    const r = await session.callBrowser("Browser.getWindowForTarget", { targetId });
-    if (!r.success) return undefined;
-    const wid = (r.data as { windowId?: number }).windowId;
-    return typeof wid === "number" ? wid : undefined;
-  };
-
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
-    // Verify the recorded harness window still exists. Querying the live
-    // target list also gives listTabs's reconciliation a chance to run.
+    // Reconcile ownership against live targets before deciding where to open.
     const tabsResult = await listTabs(true);
     if (!tabsResult.success) return tabsResult;
-    const live = new Set(tabsResult.data.map((t) => t.targetId));
-    const hw = ownership.harnessWindow();
-    // Pick an opener that keeps us inside the harness window. Prefer the seed
-    // tab; if the user closed it but other owned tabs survive, reuse one of
-    // those instead of spawning a second window (avoids window scatter).
-    const opener = hw && live.has(hw)
-      ? hw
-      : ownership.list().find((id) => live.has(id));
 
-    const params: Record<string, unknown> = { url: "about:blank" };
-    if (opener) {
-      // Open as a child of an owned tab — Chrome places it in the same window,
-      // giving us visual grouping for free and keeping the session single-window.
-      params["openerId"] = opener;
+    // ensureHarnessWindow reuses the seed tab, falls back to any surviving
+    // owned tab, and only then creates a window — which, when a profile is
+    // pinned, means launching one inside that profile.
+    const window = await ensureHarnessWindow(api);
+    if (!window.success) return window;
+    // A freshly created window IS the new tab; opening another would leave a
+    // stray blank tab behind.
+    let tabId: string;
+    if (window.data.freshlyCreated) {
+      tabId = window.data.targetId;
     } else {
-      // Fresh session, or the whole harness window was closed by the user.
-      // Spawn a new dedicated window and rebind to it.
-      params["newWindow"] = true;
+      const opened = await openHarnessTab(api, window.data.targetId);
+      if (!opened.success) return opened;
+      tabId = opened.data;
     }
-    const created = await session.callBrowser("Target.createTarget", params);
-    if (!created.success) return created;
-    const c = created.data as { targetId: string };
 
-    if (params["newWindow"]) {
-      ownership.setHarnessWindow(c.targetId);
-      const wid = await getWindowId(c.targetId);
-      if (wid !== undefined) ownership.setHarnessWindowId(wid);
-    } else if (opener && opener !== hw) {
-      // Re-seeded onto a surviving owned tab; keep the seed pointer live.
-      ownership.setHarnessWindow(opener);
-    }
-    ownership.add(c.targetId);
-
-    const switched = await switchTab(c.targetId);
+    const switched = await switchTab(tabId);
     if (!switched.success) return switched;
     if (url && url !== "about:blank") {
       const nav = await session.call("Page.navigate", { url });
       if (!nav.success) return nav;
     }
-    return ok(c.targetId);
+    return ok(tabId);
   };
 
   const closeTab = async (targetId: string): Promise<Result<void, CdpError>> => {
@@ -357,7 +383,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     await transport.request("Target.detachFromTarget", { sessionId: cur.sessionId }, { sessionId: null });
   };
 
-  return {
+  const api: BrowserClient = {
     namespace: opts.namespace,
     ensureAlive, status, start, stop, detach, closeOwnedTabs,
     evaluateJs, pageInfo,
@@ -368,6 +394,24 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     current: () => session.current(),
     session: () => session,
     transport: () => transport,
+    userDataDir: () => userDataDir,
+    profilePin: () => profilePin,
+    setProfilePin: (pin) => {
+      profilePin = pin;
+      // The old profile's context no longer describes where tabs should go.
+      profileContextId = undefined;
+    },
+    profileContextId: () => profileContextId,
+    setProfileContextId: (contextId) => {
+      profileContextId = contextId;
+    },
+    seedPinnedProfileWindow: async () => {
+      if (!profilePin) {
+        return err(cdpError("discovery_failed", "no browser profile is selected — run /browser-profile"));
+      }
+      return seedProfileWindow(api, profilePin);
+    },
     mutationMutex: () => mutationMutex,
   };
+  return api;
 };

@@ -34,3 +34,63 @@ jobs:
 
       - name: Verify npm package
         run: npm pack --dry-run > /dev/null
+
+  # Profile discovery and pinning are the only parts of the harness whose
+  # behavior differs per operating system: user-data-dir locations, how the
+  # running browser is identified, and whether a --profile-directory launch is
+  # handed to the running browser by Chromium's ProcessSingleton. Chromium's
+  # source says all three behave the same everywhere; this job is what turns
+  # that into evidence on real macOS and Windows machines.
+  profiles:
+    name: Profiles (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Pure path/parsing/storage logic. Each run exercises its own platform's
+      # branch — the matrix is what gives all three coverage.
+      - name: Unit tests
+        run: |
+          npx tsx test/profile/paths-test.ts
+          npx tsx test/profile/list-test.ts
+          npx tsx test/profile/store-test.ts
+          npx tsx test/profile/browser-process-test.ts
+        shell: bash
+
+      # The runner images ship Google Chrome on all three platforms. Linux has
+      # no display server, so the browser runs under Xvfb — the launch handshake
+      # needs a real (headful) browser, since headless Chrome does not honour
+      # --profile-directory window opening.
+      - name: Install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Profile end-to-end (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx tsx test/manual/profile-e2e-test.ts
+
+      - name: Profile end-to-end (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: npx tsx test/manual/profile-e2e-test.ts
+        shell: bash
+
+      # Tab-creation concurrency is pure JS coordination — the same on every
+      # OS — so one platform is enough to guard the invariant.
+      - name: Tab concurrency (Linux only)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npx tsx test/manual/profile-concurrency-test.ts

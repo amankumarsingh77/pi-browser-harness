@@ -2,6 +2,28 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.10.0 — 2026-07-24
+
+### Added
+
+- **`/browser-profile` — choose which browser profile the agent works in.** The command lists every profile in the connected browser, labelled `Name (email)` (or `Name (Profile 3)` when the profile has no signed-in account), marks the current selection, ordered the way the browser orders them. The choice is saved to `~/.pi/agent/browser-harness.json`, so it survives session termination, pi restarts, and applies across projects; a trailing `— Clear selection —` row restores the previous behavior. Picking a profile mid-session takes effect immediately — the harness closes its tabs and reopens its window in the chosen profile.
+- **First-run profile prompt.** When no profile has been chosen, `/browser-setup` and the agent-callable `browser_setup` show the same picker before connecting, and report the result as `Browser profile: <label>`. With no interactive UI (print/RPC mode) or when the user cancels, setup continues with a one-line note and the pre-existing behavior, so non-interactive usage is unaffected.
+- **`/browser-status` reports the selected profile.**
+
+### Fixed
+
+- **The agent no longer lands in an arbitrary browser profile.** Harness tabs were created with a bare `Target.createTarget`, which places them in Chrome's `defaultBrowserContextId` — a value that follows window focus. The profile the agent acted as therefore depended on which browser window the user last clicked, so the same task could run as a work account on one run and a personal account on the next. With a profile pinned, the harness opens its window inside that profile and keeps every tab there. Chrome offers no direct route for this: `Target.createTarget` rejects another profile's `browserContextId` outright, and `openerId` does not inherit the opener's context. The window is opened through the browser's own command line (`--profile-directory`, which Chromium's ProcessSingleton hands to the already-running browser) and identified by a unique `file://` sentinel page; subsequent tabs come from `window.open` evaluated with `userGesture: true`, which is the only CDP-reachable way to place a tab in a non-default browser context. When the window cannot be opened, the harness reports it and stops rather than silently using another profile.
+- **Tab creation is funnelled through one place** (`src/cdp/target-factory.ts`). `browser_open_urls` and the isolated tabs behind `browser_web_search` / `browser_read_page` previously called `Target.createTarget` themselves, so under a pinned profile they would have run with a different profile's cookies than the visible tabs.
+- **Snap-installed Chromium is discovered.** Ubuntu's default Chromium keeps its user data in `~/snap/chromium/common/chromium`, which was absent from the discovery list, making it invisible to the harness.
+- **Windows profile discovery honours `%LOCALAPPDATA%`** instead of assuming `AppData\Local` under the home directory — the two diverge on roaming and managed accounts. Browsers launched with an explicit `--user-data-dir` (and Linux's `$CHROME_USER_DATA_DIR`) are now found as well.
+- **The right browser is identified when several are running.** Browser detection now ranks candidate processes against the user-data-dir the harness is actually connected to, instead of taking the first Chromium-family process it finds; with Chrome and Brave both open, a profile window could otherwise be opened in a browser the harness is not attached to. Detection also reports the executable path and any explicit `--user-data-dir`, and on Windows uses PowerShell CIM plus the App Paths registry key rather than `wmic`, which Microsoft removed by default in Windows 11 24H2.
+- **Installed-but-closed browsers are no longer mistaken for running ones** — liveness is derived only from live-process evidence.
+
+### Tests
+
+- Fixture-driven unit suites for profile enumeration, pin persistence, per-OS path resolution, and browser-process ranking (`test/profile/`), plus a real-browser end-to-end test (`test/manual/profile-e2e-test.ts`) that creates two profiles in a throwaway user-data-dir and asserts distinct browser contexts, sentinel-based window identification, and that spawned tabs stay in the pinned profile and window.
+- CI now runs the profile suites and the end-to-end test on **ubuntu, macOS, and Windows** (Linux under Xvfb). Profile discovery is the one part of the harness whose behavior genuinely differs per OS, and the runner images ship real Chrome, so the cross-platform launch handshake is verified rather than assumed.
+
 ## 0.9.0 — 2026-07-24
 
 ### Added

@@ -46,6 +46,21 @@ or relaunch the browser with `--remote-debugging-port=9222`.
 Finally, run `/browser-setup` in pi to connect. It's a one-time step — the connection survives across
 pi sessions and reconnects on its own when Chrome restarts.
 
+The first time you connect, you'll be asked which browser profile the agent should work in:
+
+```
+Select the browser profile the agent should use
+    vertexcover.io (aman@vertexcover.io)
+  ✓ Aman (personal@gmail.com)
+    Harness (harness@gmail.com)
+    — Clear selection (use whichever window is focused) —
+```
+
+That choice is saved to `~/.pi/agent/browser-harness.json` and reused by every project until you
+change it with `/browser-profile`. It decides which logins, cookies, and extensions the agent works
+with, so pinning it keeps runs reproducible. Skip the prompt and the harness behaves as it always
+did: tabs open in whichever profile currently has focus.
+
 **Requires:** pi (latest) · Node.js ≥ 22 · Chrome, Chromium, Brave, or Edge
 
 ---
@@ -293,7 +308,8 @@ re-runnable.
 | Command | Purpose |
 |---|---|
 | `/browser-setup` | Connect pi to your browser. Run once; idempotent. |
-| `/browser-status` | Connection state and current page. |
+| `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
+| `/browser-status` | Connection state, selected profile, and current page. |
 | `/deep-research <question>` | Multi-source web research → cited Markdown report. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
 
@@ -349,6 +365,8 @@ harness process with direct daemon and Node access.
 | Actions all hang | A JS dialog is blocking. `browser_page_info` reports it; `browser_handle_dialog` clears it. |
 | No `[eN]` ref for your target | The element wasn't exposed as interactive. Fall back to a CSS `selector`, or `browser_execute_js` with `getBoundingClientRect()`. |
 | Connected but the wrong browser responds | A stale `DevToolsActivePort` file. Quit every Chromium-family browser, reopen one, then `/browser-setup`. |
+| Agent acts as the wrong account | No profile is pinned, so tabs open in whichever profile has focus. Run `/browser-profile` and pick one. |
+| `couldn't open a window in "…" automatically` | The profile window couldn't be opened for you. Open that profile from the browser's profile menu, then retry — the harness never falls back to a different profile silently. |
 
 ---
 

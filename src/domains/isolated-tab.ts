@@ -13,7 +13,7 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
-import { bindHarnessWindowId } from "../cdp/window-binding";
+import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 import type { ToolErr } from "../util/tool";
 
 /** A tab attached by its own sessionId, ready to drive via callOnTarget. */
@@ -32,20 +32,19 @@ const toToolErr = (message: string, kind: ToolErr["kind"] = "cdp_error"): ToolEr
  * sessionId. Does not navigate. The caller MUST `closeIsolatedTab` when done.
  */
 export const openIsolatedTab = async (client: BrowserClient): Promise<Result<IsolatedTab, ToolErr>> => {
-  const hw = client.ownership().harnessWindow();
-  const createParams: Record<string, unknown> = hw
-    ? { url: "about:blank", openerId: hw }
-    : { url: "about:blank", newWindow: true };
-
-  const created = await client.session().callBrowser("Target.createTarget", createParams);
-  if (!created.success) return err(toToolErr(created.error.message));
-  const { targetId } = created.data as { targetId: string };
-
-  if (createParams["newWindow"]) {
-    client.ownership().setHarnessWindow(targetId);
-    await bindHarnessWindowId(client, targetId);
+  // Routed through the target factory so an isolated tab lands in the pinned
+  // profile like every other harness tab — otherwise a search or page read
+  // would run with a different profile's cookies than the visible tabs.
+  const window = await ensureHarnessWindow(client);
+  if (!window.success) return err(toToolErr(window.error.message));
+  let targetId: string;
+  if (window.data.freshlyCreated) {
+    targetId = window.data.targetId;
+  } else {
+    const opened = await openHarnessTab(client, window.data.targetId);
+    if (!opened.success) return err(toToolErr(opened.error.message));
+    targetId = opened.data;
   }
-  client.ownership().add(targetId);
 
   const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
   if (!attached.success) {
