@@ -2,6 +2,34 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.9.0 — 2026-07-24
+
+### Added
+
+- **`browser_web_search`** — new tool. Query → ranked links by scraping a real Google SERP in the user's own Chrome, so no API key or search subscription is involved. Runs in an isolated tab whose lifecycle mirrors `browser_open_urls` (never touches the user's current tab). The SERP parser is pure and fixture-tested (9 scenarios), extracts results semantically (`a h3`) and unwraps redirect URLs. CAPTCHA walls and empty result sets surface as `invalid_state` with `details.reason` rather than an empty list.
+- **`browser_read_page`** — new tool. URL (or an owned `targetId`) → clean main-article text with nav/ad/footer boilerplate stripped, via a dependency-free readability heuristic. The DOM walk runs as an in-page capture expression; scoring and selection are a pure, fixture-tested function (link-density plus boilerplate-ancestor filtering, with a body-text fallback for pages that have no article structure). Registered unserialized, so concurrent reads are safe.
+- **`deep-research` skill and `/deep-research` command.** Fans out to isolated `web-search-researcher` subagents, runs a coverage-driven loop with a hard iteration ceiling, and synthesizes a cited Markdown report. The researcher agent now uses `browser_web_search` + `browser_read_page`; it previously referenced `web_search`/`web_fetch` tools that do not exist in this harness.
+- **Forms domain with a universal field setter.** `browser_fill`, `browser_fill_form`, `browser_select_option`, and `browser_set_checked` now live in `src/domains/forms.ts` behind one setter that auto-detects the element type and fires framework-compatible input events (the React native-setter trick), so controlled inputs register the change instead of silently reverting.
+- **Durable window binding.** Every new-window code path now captures the real Chrome `windowId` and binds it as the session's window identity, so per-session tab ownership survives navigation and tab churn instead of being inferred fresh each time.
+- **Brave support and additional Chrome channels.** `checkChromeRunning()` recognizes Brave (macOS `brave browser`, Linux `brave`/`brave-browser`, Windows `brave.exe`) alongside Chrome/Chromium/Edge, and now excludes `gpu`/`updater` sub-processes that linger after a browser quits. Profile discovery covers Brave Stable/Beta/Nightly/Dev and Chrome Beta/Dev/Canary/Chromium across macOS, Linux, and Windows.
+- **Expand/collapse (Ctrl+O) rendering for `browser_web_search` and `browser_read_page`,** via a shared `renderExpandableText` helper (`src/domains/render.ts`) mirroring `browser_execute_js`. Compact preview by default, full body on expand; the complete text still reaches the model regardless of render state. The `web_search` summary line surfaces engine and result count.
+
+### Fixed
+
+- **Daemon setup now works on Windows.** The Unix-socket daemon introduced in 0.6.0 carried several POSIX-only assumptions that broke setup entirely on Windows: `DAEMON_SOCKET_PATH` is now a named pipe (`\\.\pipe\pi-browser-daemon`) on win32, since a `/tmp` path is not a valid `net` listen/connect target there; `spawnDaemon()` resolves `tsx.cmd`/`npx.cmd` and runs them through a shell with per-token quoting (paths with spaces) and `windowsVerbatimArguments`, because npm's `.cmd` shims fail with EINVAL/ENOENT when spawned directly; `isDaemonRunning()` skips the `fs.access` pre-check and probes the pipe directly, as named pipes are not filesystem entries and `access()` always fails on them; and stale-socket `unlink()` is a no-op on Windows, where pipes self-clean. (#7)
+- **Stale `DevToolsActivePort` files no longer break CDP discovery.** Discovery previously trusted the first readable port file — a browser that has quit leaves its file behind, so when another browser later bound the same port (e.g. 9222), discovery returned a WS URL carrying the dead browser's UUID against the live browser's server and the connection failed. `discoverWsUrl()` now collects all readable candidates, keeps the most recently written file when candidates share a port, skips ports that aren't live via a fast single-shot probe (no 30s `waitForPort` block on stale files), and asks each live browser for its canonical `webSocketDebuggerUrl` via `/json/version`, falling back to the file's WS path when that endpoint is disabled. Well-known ports (9222, plus `BU_CDP_PORTS`) are probed both when no profile file is readable — covering sandboxed harnesses hitting EPERM/EACCES and non-default install locations — and after all discovered candidates prove stale. Ports parsed from a truncated or corrupt file are validated before use, since `net.connect` throws `ERR_SOCKET_BAD_PORT` synchronously for `NaN`/out-of-range values, which previously escaped as an unhandled rejection. (#4)
+- **Footer browser status indicator removed.** The chip set during `session_start` went stale: a successful `/browser-setup` only called `ctx.ui.notify()` and never updated `ctx.ui.setStatus("browser", …)`, so the red "Browser — run /browser-setup" nudge persisted while the browser was in fact connected. Browser control is on-demand and setup already reports its own outcome, so the persistent chip was removed rather than resynced. (#10)
+
+### Changed
+
+- **Setup guidance** now mentions `brave://inspect` / `edge://inspect` and the `--remote-debugging-port` launch flag.
+
+## 0.8.3 — 2026-07-08
+
+### Fixed
+
+- **Stale socket detection no longer blocks daemon spawn after a crash.** `isDaemonRunning()` only checked that the Unix socket file existed; a dead daemon leaves a stale socket behind, so `ensureDaemon()` skipped spawning and `client.start()` failed with "Chrome not connected". It now runs a liveness probe — connect, register, verify the ack, disconnect — and cleans up the stale socket on failure. The bridge's `handleRequest` is also async, polling for a Chrome connection for up to 15s before rejecting.
+
 ## 0.8.1 — 2026-07-05
 
 ### Fixed
