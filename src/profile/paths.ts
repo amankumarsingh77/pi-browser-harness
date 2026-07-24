@@ -30,17 +30,34 @@ import { join } from "node:path";
 /** pi's env override for the agent dir (APP_NAME.toUpperCase() + "_CODING_AGENT_DIR"). */
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 
-/** Expand a leading `~` the way pi's expandTildePath does. */
-const expandTilde = (path: string): string => {
+/**
+ * Expand a leading `~` exactly as pi's expandTildePath does — `~` and `~/…`
+ * only, never `~\…`, on every platform. This deliberately mirrors pi rather
+ * than improving on it: the pin has to land in the directory pi itself resolves
+ * from the same variable, so being more lenient here would put the file
+ * somewhere pi does not look.
+ */
+const expandTildePiCompatible = (path: string): string => {
   if (path === "~") return homedir();
   if (path.startsWith("~/")) return homedir() + path.slice(1);
+  return path;
+};
+
+/**
+ * Tilde expansion for values this package interprets on its own. Windows users
+ * write `~\dir` as naturally as `~/dir`, and no compatibility constraint
+ * applies, so both are accepted.
+ */
+const expandTildeLenient = (path: string): string => {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
   return path;
 };
 
 /** pi's agent config directory — `$PI_CODING_AGENT_DIR` or `~/.pi/agent`. */
 export const agentDir = (): string => {
   const fromEnv = process.env[ENV_AGENT_DIR];
-  if (fromEnv) return expandTilde(fromEnv);
+  if (fromEnv) return expandTildePiCompatible(fromEnv);
   return join(homedir(), ".pi", "agent");
 };
 
@@ -71,7 +88,7 @@ export const userDataDirCandidates = (): ReadonlyArray<string> => {
 
   // A user-set override wins a spot at the front regardless of platform.
   const envOverride = process.env["CHROME_USER_DATA_DIR"];
-  if (envOverride) dirs.push(expandTilde(envOverride));
+  if (envOverride) dirs.push(expandTildeLenient(envOverride));
 
   if (process.platform === "darwin") {
     const support = join(home, "Library", "Application Support");

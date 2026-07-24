@@ -44,9 +44,22 @@ async function main(): Promise<void> {
     check(agentDir() === join(homedir(), ".pi", "agent"), "A1: default agent dir is ~/.pi/agent");
     check(pinFilePath() === join(homedir(), ".pi", "agent", "browser-harness.json"), "A1: pin file sits in it");
   });
-  await withEnv("PI_CODING_AGENT_DIR", join("~", "custom-agent"), async () => {
-    check((await freshImport()).agentDir() === join(homedir(), "custom-agent"), "A1: tilde in the override expands");
+  // pi's own expandTildePath only understands "~/" — never "~\" — so the agent
+  // dir must resolve identically or the pin lands where pi does not look.
+  await withEnv("PI_CODING_AGENT_DIR", "~/custom-agent", async () => {
+    check(
+      (await freshImport()).agentDir() === `${homedir()}/custom-agent`,
+      "A1: '~/' in the agent-dir override expands like pi",
+    );
   });
+  if (process.platform === "win32") {
+    await withEnv("PI_CODING_AGENT_DIR", "~\\custom-agent", async () => {
+      check(
+        (await freshImport()).agentDir() === "~\\custom-agent",
+        "A1 win: '~\\' is left alone, matching pi's own resolution",
+      );
+    });
+  }
 
   // A2: platform candidate list
   await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
@@ -81,10 +94,15 @@ async function main(): Promise<void> {
     });
   }
 
-  // A4: $CHROME_USER_DATA_DIR override leads the list
+  // A4: $CHROME_USER_DATA_DIR override leads the list. This value is ours to
+  // interpret, so both tilde separators are accepted.
   await withEnv("CHROME_USER_DATA_DIR", join("~", "my-chrome-data"), async () => {
     const dirs = (await freshImport()).userDataDirCandidates();
     check(dirs[0] === join(homedir(), "my-chrome-data"), "A4: env override is first and tilde-expanded");
+  });
+  await withEnv("CHROME_USER_DATA_DIR", "~/my-chrome-data", async () => {
+    const dirs = (await freshImport()).userDataDirCandidates();
+    check(dirs[0] === join(homedir(), "my-chrome-data"), "A4: forward-slash tilde expands on every platform");
   });
 
   // A5: browser naming
