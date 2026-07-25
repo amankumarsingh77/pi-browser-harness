@@ -2,7 +2,7 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
-## 0.10.0 — 2026-07-24
+## 0.10.0 — 2026-07-25
 
 ### Added
 
