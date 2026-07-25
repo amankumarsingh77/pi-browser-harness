@@ -2,6 +2,14 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.10.1 — 2026-07-26
+
+### Fixed
+
+- **Chrome process leak on profile seed failure.** When a profile is pinned and `seedProfileWindow` spawns Chrome via `openProfileWindow`, the spawned child is kept as `detached: true` + `unref()`. If Chromium's ProcessSingleton fails to delegate (user-data-dir mismatch, multiple browsers, Chrome busy/crashed), the spawned process starts a full second browser instance. The sentinel never appears, the seed times out, but the spawned Chrome process was never killed — accumulating zombie browser instances that consume RAM. The fix stores the child process reference, exposes a `kill()` on the returned handle, and calls it on seed timeout.
+- **Unnecessary Chrome re-spawns on every `start()`.** `profileContextId` was unconditionally cleared on every `start()`, forcing a new profile-window launch via ProcessSingleton even when Chrome hadn't restarted and the context was still valid. Now the context is cleared only when the browser UUID in the WebSocket URL changes — which Chrome re-mints on every launch.
+- **`setProfilePin` no longer clears context when the pin hasn't changed.** Loading the same pin from disk on `session_start` was clearing `profileContextId`, forcing yet another Chrome spawn on the next `start()`.
+
 ## 0.10.0 — 2026-07-25
 
 ### Added

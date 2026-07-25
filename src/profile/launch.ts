@@ -15,7 +15,7 @@
  * identification correct when the user opens tabs at the same moment.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -42,6 +42,7 @@ export type ProfileWindowHandle = {
   readonly sentinelUrl: string;
   /** Remove the sentinel file. Safe to call more than once. */
   readonly cleanup: () => Promise<void>;
+  readonly kill: () => void;
 };
 
 const SENTINEL_HTML = (token: string): string =>
@@ -68,10 +69,11 @@ export const openProfileWindow = async (
   if (req.explicitUserDataDir) args.push(`--user-data-dir=${req.explicitUserDataDir}`);
   args.push(`--profile-directory=${req.profileDir}`, "--new-window", sentinelUrl);
 
+  let child: ChildProcess | null = null;
   try {
     // No shell: arguments are passed as an array, so profile names and paths
     // containing spaces survive intact on every platform.
-    const child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
+    child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
     child.unref();
     // The launcher process exits as soon as the running browser takes over the
     // command line; an error here means the binary itself could not be started.
@@ -85,6 +87,12 @@ export const openProfileWindow = async (
     sentinelUrl,
     cleanup: async () => {
       await rm(file, { force: true }).catch(() => {});
+    },
+    kill: () => {
+      if (child) {
+        try { child.kill("SIGTERM"); } catch {}
+        child = null;
+      }
     },
   });
 };

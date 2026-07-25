@@ -93,7 +93,7 @@ export const seedProfileWindow = async (
     return err(cdpError("discovery_failed", `${launched.error} — ${manualFallbackHint(pin)}`));
   }
 
-  const { sentinelUrl, cleanup } = launched.data;
+  const { sentinelUrl, cleanup, kill } = launched.data;
   const deadline = Date.now() + SEED_DEADLINE_MS;
   let seed: PageTarget | undefined;
   while (Date.now() < deadline && !seed) {
@@ -102,6 +102,7 @@ export const seedProfileWindow = async (
   }
 
   if (!seed) {
+    kill();
     await cleanup();
     return err(cdpError(
       "timeout",

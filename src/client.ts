@@ -170,11 +170,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     }
     const connected = await transport.connect(wsUrl, { timeoutMs: 10_000 });
     if (!connected.success) return connected;
-    if (!remote) {
-      remote = { cdpUrl: wsUrl, browserId: wsUrl.split("/").pop() ?? "unknown" };
+
+    const newBrowserId: string = wsUrl.split("/").pop() ?? "unknown";
+    if (!remote || remote.browserId !== newBrowserId) {
+      profileContextId = undefined;
     }
-    // A fresh browser run invalidates any context id resolved earlier.
-    profileContextId = undefined;
+    remote = { cdpUrl: wsUrl, browserId: newBrowserId };
     const seeded = await seedIfPinned();
     if (!seeded.success) {
       await transport.close();
@@ -397,9 +398,13 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     userDataDir: () => userDataDir,
     profilePin: () => profilePin,
     setProfilePin: (pin) => {
+      const changed = pin === null
+        ? profilePin !== null
+        : profilePin === null || profilePin.userDataDir !== pin.userDataDir || profilePin.profileDir !== pin.profileDir;
       profilePin = pin;
-      // The old profile's context no longer describes where tabs should go.
-      profileContextId = undefined;
+      if (changed) {
+        profileContextId = undefined;
+      }
     },
     profileContextId: () => profileContextId,
     setProfileContextId: (contextId) => {
