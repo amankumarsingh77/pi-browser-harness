@@ -50,9 +50,9 @@ The first time you connect, you'll be asked which browser profile the agent shou
 
 ```
 Select the browser profile the agent should use
-    vertexcover.io (aman@vertexcover.io)
-  ✓ Aman (personal@gmail.com)
-    Harness (harness@gmail.com)
+    Work (work@example.com)
+  ✓ Personal (personal@example.com)
+    Testing (test@example.com)
     — Clear selection (use whichever window is focused) —
 ```
 
