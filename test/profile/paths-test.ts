@@ -4,22 +4,12 @@
  * Only the branch for the host platform can be exercised, so each assertion is
  * guarded by process.platform; the CI matrix is what gives all three coverage.
  *
- * Run: npx tsx test/profile/paths-test.ts
+ * Run: npm test
  */
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
-let passed = 0;
-let failed = 0;
-const check = (cond: boolean, label: string): void => {
-  if (cond) {
-    passed++;
-    console.log(`  ✓ ${label}`);
-  } else {
-    failed++;
-    console.error(`  ✗ ${label}`);
-  }
-};
 
 /** Re-import with a fresh module identity so env changes are picked up. */
 const freshImport = async (): Promise<typeof import("../../src/profile/paths")> =>
@@ -37,94 +27,154 @@ const withEnv = async (key: string, value: string | undefined, fn: () => Promise
   }
 };
 
-async function main(): Promise<void> {
+describe("path resolution", () => {
   // A1: agent dir default and override
-  await withEnv("PI_CODING_AGENT_DIR", undefined, async () => {
-    const { agentDir, pinFilePath } = await freshImport();
-    check(agentDir() === join(homedir(), ".pi", "agent"), "A1: default agent dir is ~/.pi/agent");
-    check(pinFilePath() === join(homedir(), ".pi", "agent", "browser-harness.json"), "A1: pin file sits in it");
+  test("A1: default agent dir is ~/.pi/agent", async () => {
+    await withEnv("PI_CODING_AGENT_DIR", undefined, async () => {
+      const { agentDir } = await freshImport();
+      assert.equal(agentDir(), join(homedir(), ".pi", "agent"));
+    });
   });
+
+  test("A1: pin file sits in it", async () => {
+    await withEnv("PI_CODING_AGENT_DIR", undefined, async () => {
+      const { pinFilePath } = await freshImport();
+      assert.equal(pinFilePath(), join(homedir(), ".pi", "agent", "browser-harness.json"));
+    });
+  });
+
   // pi's own expandTildePath only understands "~/" — never "~\" — so the agent
   // dir must resolve identically or the pin lands where pi does not look.
-  await withEnv("PI_CODING_AGENT_DIR", "~/custom-agent", async () => {
-    check(
-      (await freshImport()).agentDir() === `${homedir()}/custom-agent`,
-      "A1: '~/' in the agent-dir override expands like pi",
-    );
-  });
-  if (process.platform === "win32") {
-    await withEnv("PI_CODING_AGENT_DIR", "~\\custom-agent", async () => {
-      check(
-        (await freshImport()).agentDir() === "~\\custom-agent",
-        "A1 win: '~\\' is left alone, matching pi's own resolution",
-      );
+  test("A1: '~/' in the agent-dir override expands like pi", async () => {
+    await withEnv("PI_CODING_AGENT_DIR", "~/custom-agent", async () => {
+      assert.equal((await freshImport()).agentDir(), `${homedir()}/custom-agent`);
     });
-  }
+  });
+
+  test("A1 win: '~\\' is left alone, matching pi's own resolution", { skip: process.platform !== "win32" }, async () => {
+    await withEnv("PI_CODING_AGENT_DIR", "~\\custom-agent", async () => {
+      assert.equal((await freshImport()).agentDir(), "~\\custom-agent");
+    });
+  });
 
   // A2: platform candidate list
-  await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
-    const dirs = (await freshImport()).userDataDirCandidates();
-    check(dirs.length > 0, "A2: candidates are non-empty on this platform");
-    check(new Set(dirs).size === dirs.length, "A2: candidate list is de-duplicated");
+  test("A2: candidates are non-empty on this platform", async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.ok(dirs.length > 0);
+    });
+  });
 
-    if (process.platform === "linux") {
-      check(dirs.includes(join(homedir(), ".config/google-chrome")), "A2 linux: Chrome stable dir present");
-      check(dirs.includes(join(homedir(), "snap/chromium/common/chromium")), "A2 linux: snap Chromium dir present");
-      check(dirs.includes(join(homedir(), ".config/BraveSoftware/Brave-Browser")), "A2 linux: Brave dir present");
-    } else if (process.platform === "darwin") {
+  test("A2: candidate list is de-duplicated", async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.equal(new Set(dirs).size, dirs.length);
+    });
+  });
+
+  test("A2 linux: Chrome stable dir present", { skip: process.platform !== "linux" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.ok(dirs.includes(join(homedir(), ".config/google-chrome")));
+    });
+  });
+
+  test("A2 linux: snap Chromium dir present", { skip: process.platform !== "linux" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.ok(dirs.includes(join(homedir(), "snap/chromium/common/chromium")));
+    });
+  });
+
+  test("A2 linux: Brave dir present", { skip: process.platform !== "linux" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.ok(dirs.includes(join(homedir(), ".config/BraveSoftware/Brave-Browser")));
+    });
+  });
+
+  test("A2 macos: Chrome dir present", { skip: process.platform !== "darwin" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
       const support = join(homedir(), "Library", "Application Support");
-      check(dirs.includes(join(support, "Google/Chrome")), "A2 macos: Chrome dir present");
-      check(dirs.includes(join(support, "BraveSoftware/Brave-Browser")), "A2 macos: Brave dir present");
-      check(dirs.includes(join(support, "Microsoft Edge")), "A2 macos: Edge dir present");
-    } else if (process.platform === "win32") {
+      assert.ok(dirs.includes(join(support, "Google/Chrome")));
+    });
+  });
+
+  test("A2 macos: Brave dir present", { skip: process.platform !== "darwin" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      const support = join(homedir(), "Library", "Application Support");
+      assert.ok(dirs.includes(join(support, "BraveSoftware/Brave-Browser")));
+    });
+  });
+
+  test("A2 macos: Edge dir present", { skip: process.platform !== "darwin" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      const support = join(homedir(), "Library", "Application Support");
+      assert.ok(dirs.includes(join(support, "Microsoft Edge")));
+    });
+  });
+
+  test("A2 win: Chrome dir derives from %LOCALAPPDATA%", { skip: process.platform !== "win32" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
       const lad = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
-      check(dirs.includes(join(lad, "Google/Chrome/User Data")), "A2 win: Chrome dir derives from %LOCALAPPDATA%");
-      check(dirs.includes(join(lad, "Microsoft/Edge/User Data")), "A2 win: Edge dir present");
-    }
+      assert.ok(dirs.includes(join(lad, "Google/Chrome/User Data")));
+    });
+  });
+
+  test("A2 win: Edge dir present", { skip: process.platform !== "win32" }, async () => {
+    await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      const lad = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
+      assert.ok(dirs.includes(join(lad, "Microsoft/Edge/User Data")));
+    });
   });
 
   // A3: %LOCALAPPDATA% redirection is honoured (Windows-only behaviour)
-  if (process.platform === "win32") {
+  test("A3 win: redirected LOCALAPPDATA is used", { skip: process.platform !== "win32" }, async () => {
     await withEnv("LOCALAPPDATA", "D:\\Redirected\\Local", async () => {
       const dirs = (await freshImport()).userDataDirCandidates();
-      check(
-        dirs.some((d) => d.startsWith("D:\\Redirected\\Local") || d.startsWith("D:/Redirected/Local")),
-        "A3 win: redirected LOCALAPPDATA is used",
-      );
+      assert.ok(dirs.some((d) => d.startsWith("D:\\Redirected\\Local") || d.startsWith("D:/Redirected/Local")));
     });
-  }
+  });
 
   // A4: $CHROME_USER_DATA_DIR override leads the list. This value is ours to
   // interpret, so both tilde separators are accepted.
-  await withEnv("CHROME_USER_DATA_DIR", join("~", "my-chrome-data"), async () => {
-    const dirs = (await freshImport()).userDataDirCandidates();
-    check(dirs[0] === join(homedir(), "my-chrome-data"), "A4: env override is first and tilde-expanded");
+  test("A4: env override is first and tilde-expanded", async () => {
+    await withEnv("CHROME_USER_DATA_DIR", join("~", "my-chrome-data"), async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.equal(dirs[0], join(homedir(), "my-chrome-data"));
+    });
   });
-  await withEnv("CHROME_USER_DATA_DIR", "~/my-chrome-data", async () => {
-    const dirs = (await freshImport()).userDataDirCandidates();
-    check(dirs[0] === join(homedir(), "my-chrome-data"), "A4: forward-slash tilde expands on every platform");
+
+  test("A4: forward-slash tilde expands on every platform", async () => {
+    await withEnv("CHROME_USER_DATA_DIR", "~/my-chrome-data", async () => {
+      const dirs = (await freshImport()).userDataDirCandidates();
+      assert.equal(dirs[0], join(homedir(), "my-chrome-data"));
+    });
   });
 
   // A5: browser naming
-  {
+  test("A5: Chrome recognised", async () => {
     const { browserNameForUserDataDir } = await freshImport();
-    check(browserNameForUserDataDir("/home/u/.config/google-chrome") === "Chrome", "A5: Chrome recognised");
-    check(
-      browserNameForUserDataDir("/home/u/.config/BraveSoftware/Brave-Browser") === "Brave",
-      "A5: Brave recognised",
-    );
-    check(
-      browserNameForUserDataDir("C:\\Users\\u\\AppData\\Local\\Microsoft\\Edge\\User Data") === "Edge",
-      "A5: Edge recognised through Windows separators",
-    );
-    check(browserNameForUserDataDir("/home/u/.config/chromium") === "Chromium", "A5: Chromium beats Chrome");
-  }
+    assert.equal(browserNameForUserDataDir("/home/u/.config/google-chrome"), "Chrome");
+  });
 
-  console.log(`\n${passed} passed, ${failed} failed`);
-  process.exit(failed === 0 ? 0 : 1);
-}
+  test("A5: Brave recognised", async () => {
+    const { browserNameForUserDataDir } = await freshImport();
+    assert.equal(browserNameForUserDataDir("/home/u/.config/BraveSoftware/Brave-Browser"), "Brave");
+  });
 
-main().catch((e) => {
-  console.error("profile paths test failed:", e);
-  process.exit(1);
+  test("A5: Edge recognised through Windows separators", async () => {
+    const { browserNameForUserDataDir } = await freshImport();
+    assert.equal(browserNameForUserDataDir("C:\\Users\\u\\AppData\\Local\\Microsoft\\Edge\\User Data"), "Edge");
+  });
+
+  test("A5: Chromium beats Chrome", async () => {
+    const { browserNameForUserDataDir } = await freshImport();
+    assert.equal(browserNameForUserDataDir("/home/u/.config/chromium"), "Chromium");
+  });
 });
