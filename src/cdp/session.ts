@@ -180,16 +180,22 @@ export const createCdpSession = (
     }
   };
 
-  // Internal helper: the session's own CDP calls (attach/switch bookkeeping)
-  // go through the same decode-on-call path as the public call/callOnTarget/
-  // callBrowser — the session is where `unknown` ends, including for its own
-  // requests, not just the ones exposed to callers.
+  // The one place `unknown` ends for every CDP call this session makes — its
+  // own internal bookkeeping calls (attach/switch) and the public
+  // call/callOnTarget/callBrowser all funnel through here. A single
+  // transport-then-decode implementation means a future change (tracing,
+  // error wrapping, the short-circuit on failure) lands in one place, and a
+  // new internal call site can't forget to decode.
   const req = async <M extends CdpMethod>(
     method: M,
-    params: ParamsOf<M>,
+    params: ParamsOf<M> | undefined,
     sid: string | null,
+    opts: { timeoutMs?: number } = {},
   ): Promise<Result<ResultOf<M>, CdpError>> => {
-    const raw = await transport.request(method, { ...params }, { sessionId: sid });
+    const raw = await transport.request(method, { ...(params ?? {}) }, {
+      sessionId: sid,
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    });
     if (!raw.success) return raw;
     return decodeResult(method, raw.data);
   };
@@ -358,29 +364,14 @@ export const createCdpSession = (
       const tab = targetId ? tabs.get(targetId) : undefined;
       return tab?.refSig ?? new Map();
     },
-    async call(method, params, opts = {}) {
-      const raw = await transport.request(method, { ...(params ?? {}) }, {
-        sessionId,
-        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      });
-      if (!raw.success) return raw;
-      return decodeResult(method, raw.data);
+    call(method, params, opts) {
+      return req(method, params, sessionId, opts);
     },
-    async callOnTarget(method, params, sid, opts = {}) {
-      const raw = await transport.request(method, { ...params }, {
-        sessionId: sid,
-        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      });
-      if (!raw.success) return raw;
-      return decodeResult(method, raw.data);
+    callOnTarget(method, params, sid, opts) {
+      return req(method, params, sid, opts);
     },
-    async callBrowser(method, params, opts = {}) {
-      const raw = await transport.request(method, { ...(params ?? {}) }, {
-        sessionId: null,
-        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-      });
-      if (!raw.success) return raw;
-      return decodeResult(method, raw.data);
+    callBrowser(method, params, opts) {
+      return req(method, params, null, opts);
     },
     takeDialog() {
       const tab = targetId ? tabs.get(targetId) : undefined;
