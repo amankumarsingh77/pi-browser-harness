@@ -256,7 +256,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     const currentTid = session.current()?.targetId;
     const cached = currentTid ? pageCaches.get(currentTid) : undefined;
     if (cached && !dirty && Date.now() - cached.at < PAGE_INFO_TTL_MS) return ok(cached.info);
-    const expr = safeJs`JSON.stringify({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})`;
+    const expr = safeJs`JSON.stringify((function(){var e=document.documentElement||{scrollWidth:0,scrollHeight:0};return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:e.scrollWidth,ph:e.scrollHeight};})())`;
     const raw = await evaluateJs(expr);
     if (!raw.success) return raw;
     if (typeof raw.data !== "string") return err(cdpError("invalid_response", "page info evaluation did not return a string"));
