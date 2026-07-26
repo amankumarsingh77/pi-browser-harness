@@ -56,8 +56,7 @@ type PageTarget = {
 const listPageTargets = async (client: BrowserClient): Promise<Result<ReadonlyArray<PageTarget>, CdpError>> => {
   const r = await client.session().callBrowser("Target.getTargets");
   if (!r.success) return r;
-  const data = r.data as { targetInfos: ReadonlyArray<PageTarget> };
-  return ok(data.targetInfos.filter((t) => t.type === "page"));
+  return ok(r.data.targetInfos.filter((t) => t.type === "page"));
 };
 
 /** A CDP session id for driving `targetId`, reusing the active one when possible. */
@@ -66,7 +65,7 @@ const sessionForTarget = async (client: BrowserClient, targetId: string): Promis
   if (current?.targetId === targetId) return ok(current.sessionId);
   const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
   if (!attached.success) return attached;
-  return ok((attached.data as { sessionId: string }).sessionId);
+  return ok(attached.data.sessionId);
 };
 
 /**
@@ -92,8 +91,7 @@ const spawnTabViaOpener = async (
     session.data,
   );
   if (!opened.success) return opened;
-  const result = opened.data as { result?: { value?: unknown } };
-  if (result.result?.value !== true) {
+  if (opened.data.result.value !== true) {
     return err(cdpError(
       "invalid_response",
       "the browser blocked window.open in the pinned profile's window — the page may have navigated away; retry, or run /browser-profile to re-seed",
@@ -187,15 +185,12 @@ const ensureHarnessWindowUncoordinated = async (
 const createDedicatedWindow = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
   const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true });
   if (!created.success) return created;
-  const { targetId } = created.data as { targetId: string };
+  const { targetId } = created.data;
   const ownership = client.ownership();
   ownership.setHarnessWindow(targetId);
   ownership.add(targetId);
   const win = await client.session().callBrowser("Browser.getWindowForTarget", { targetId });
-  if (win.success) {
-    const windowId = (win.data as { windowId?: number }).windowId;
-    if (typeof windowId === "number") ownership.setHarnessWindowId(windowId);
-  }
+  if (win.success) ownership.setHarnessWindowId(win.data.windowId);
   return ok(targetId);
 };
 
@@ -215,7 +210,7 @@ export const openHarnessTab = async (
           openerId: openerTargetId,
         });
         if (!created.success) return created;
-        return ok((created.data as { targetId: string }).targetId);
+        return ok(created.data.targetId);
       })();
   if (!spawned.success) return spawned;
   client.ownership().add(spawned.data);

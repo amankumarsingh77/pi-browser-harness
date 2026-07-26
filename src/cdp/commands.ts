@@ -57,6 +57,7 @@ export const COMMANDS = {
       newWindow: Type.Optional(Type.Boolean()),
       background: Type.Optional(Type.Boolean()),
       windowId: Type.Optional(Type.Number()),
+      openerId: Type.Optional(Type.String()),
     }),
     Type.Object({ targetId: Type.String() }),
   ),
@@ -129,7 +130,12 @@ export const COMMANDS = {
   // --- Runtime ---
   "Runtime.evaluate": cmd(
     Type.Object(
-      { expression: Type.String(), returnByValue: Type.Optional(Type.Boolean()), awaitPromise: Type.Optional(Type.Boolean()) },
+      {
+        expression: Type.String(),
+        returnByValue: Type.Optional(Type.Boolean()),
+        awaitPromise: Type.Optional(Type.Boolean()),
+        userGesture: Type.Optional(Type.Boolean()),
+      },
       { additionalProperties: true },
     ),
     Type.Object({ result: RemoteObject, exceptionDetails: Type.Optional(ExceptionDetails) }),

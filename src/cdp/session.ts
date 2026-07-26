@@ -3,6 +3,7 @@ import type { CdpError } from "./errors";
 import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./transport";
+import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
 
@@ -36,9 +37,9 @@ export type CdpSession = {
   resolveRef(ref: string): number | undefined;
   /** The active tab's prior ref signatures — baseline for the post-mutation diff. */
   refSignatures(): ReadonlyMap<string, string>;
-  call(method: string, params?: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
-  callOnTarget(method: string, params: Record<string, unknown>, sessionId: string, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
-  callBrowser(method: string, params?: Record<string, unknown>, opts?: { timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
+  call<M extends CdpMethod>(method: M, params?: ParamsOf<M>, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
+  callOnTarget<M extends CdpMethod>(method: M, params: ParamsOf<M>, sessionId: string, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
+  callBrowser<M extends CdpMethod>(method: M, params?: ParamsOf<M>, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
   takeDialog(): DialogInfo | null;
   drainPageInfoInvalidations(): boolean;
   drainNetworkBuffer(filter: NetworkFilter): DrainResult;
@@ -179,22 +180,29 @@ export const createCdpSession = (
     }
   };
 
-  // CDP response shapes are documented in chromedevtools.github.io but not
-  // available as TypeScript types. We cast `as` from `unknown` only in this
-  // file (the CDP boundary). Each cast is paired with the CDP method that
-  // produced the response. Adding runtime guards for every shape would be
-  // noise — Chrome's protocol is stable enough that a wrong cast surfaces
-  // as a clear Error in normal use.
+  // Internal helper: the session's own CDP calls (attach/switch bookkeeping)
+  // go through the same decode-on-call path as the public call/callOnTarget/
+  // callBrowser — the session is where `unknown` ends, including for its own
+  // requests, not just the ones exposed to callers.
+  const req = async <M extends CdpMethod>(
+    method: M,
+    params: ParamsOf<M>,
+    sid: string | null,
+  ): Promise<Result<ResultOf<M>, CdpError>> => {
+    const raw = await transport.request(method, { ...params }, { sessionId: sid });
+    if (!raw.success) return raw;
+    return decodeResult(method, raw.data);
+  };
+
   return {
     async attachFirstPage() {
       // Subscribe to Target.* events so we can react to targetDestroyed.
       // Best-effort: failing to enable discovery is not fatal for attach.
-      await transport.request("Target.setDiscoverTargets", { discover: true }, { sessionId: null });
+      await req("Target.setDiscoverTargets", { discover: true }, null);
 
-      const targets = await transport.request("Target.getTargets", {}, { sessionId: null });
+      const targets = await req("Target.getTargets", {}, null);
       if (!targets.success) return targets;
-      const data = targets.data as { targetInfos: ReadonlyArray<{ targetId: string; type: string; url: string }> };
-      const allPages = data.targetInfos.filter((t) => t.type === "page");
+      const allPages = targets.data.targetInfos.filter((t) => t.type === "page");
       // Reconcile the persisted ownership set against live targets — drop dead IDs.
       if (ownership) {
         const live = new Set(allPages.map((p) => p.targetId));
@@ -217,25 +225,23 @@ export const createCdpSession = (
           // persisted integer (which Chrome may reassign to a user window on
           // restart — anchoring on a survivor makes that misfire impossible).
           const anchorId = survivors[0]!;
-          const anchorWin = await transport.request("Browser.getWindowForTarget", { targetId: anchorId }, { sessionId: null });
+          const anchorWin = await req("Browser.getWindowForTarget", { targetId: anchorId }, null);
           if (anchorWin.success) {
-            const anchorWindowId = (anchorWin.data as { windowId?: number }).windowId;
-            if (typeof anchorWindowId === "number") {
-              ownership.setHarnessWindowId(anchorWindowId); // refresh to the live id
-              const windows = await Promise.all(
-                allPages.map((p) =>
-                  p.targetId === anchorId
-                    ? Promise.resolve(anchorWin)
-                    : transport.request("Browser.getWindowForTarget", { targetId: p.targetId }, { sessionId: null }),
-                ),
-              );
-              allPages.forEach((p, i) => {
-                const r = windows[i];
-                if (r?.success && (r.data as { windowId?: number }).windowId === anchorWindowId) {
-                  ownership.add(p.targetId);
-                }
-              });
-            }
+            const anchorWindowId = anchorWin.data.windowId;
+            ownership.setHarnessWindowId(anchorWindowId); // refresh to the live id
+            const windows = await Promise.all(
+              allPages.map((p) =>
+                p.targetId === anchorId
+                  ? Promise.resolve(anchorWin)
+                  : req("Browser.getWindowForTarget", { targetId: p.targetId }, null),
+              ),
+            );
+            allPages.forEach((p, i) => {
+              const r = windows[i];
+              if (r?.success && r.data.windowId === anchorWindowId) {
+                ownership.add(p.targetId);
+              }
+            });
           }
           if (!ownership.harnessWindow()) ownership.setHarnessWindow(anchorId);
         }
@@ -266,28 +272,26 @@ export const createCdpSession = (
         pickTargetId = seeded.data;
       }
       if (!pickTargetId) {
-        const createParams: Record<string, unknown> = { url: "about:blank" };
-        if (ownership) createParams["newWindow"] = true;
-        const created = await transport.request("Target.createTarget", createParams, { sessionId: null });
+        const created = await req(
+          "Target.createTarget",
+          { url: "about:blank", ...(ownership ? { newWindow: true } : {}) },
+          null,
+        );
         if (!created.success) return created;
-        const c = created.data as { targetId: string };
-        pickTargetId = c.targetId;
+        pickTargetId = created.data.targetId;
         if (ownership) {
-          ownership.setHarnessWindow(c.targetId);
-          ownership.add(c.targetId);
+          ownership.setHarnessWindow(created.data.targetId);
+          ownership.add(created.data.targetId);
           // Capture the real Chrome windowId — the durable identity of the
           // window this session initialized (survives seed-tab closure).
-          const win = await transport.request("Browser.getWindowForTarget", { targetId: c.targetId }, { sessionId: null });
-          if (win.success) {
-            const wid = (win.data as { windowId?: number }).windowId;
-            if (typeof wid === "number") ownership.setHarnessWindowId(wid);
-          }
+          const win = await req("Browser.getWindowForTarget", { targetId: created.data.targetId }, null);
+          if (win.success) ownership.setHarnessWindowId(win.data.windowId);
         }
       }
 
-      const attached = await transport.request("Target.attachToTarget", { targetId: pickTargetId, flatten: true }, { sessionId: null });
+      const attached = await req("Target.attachToTarget", { targetId: pickTargetId, flatten: true }, null);
       if (!attached.success) return attached;
-      const a = attached.data as { sessionId: string };
+      const a = attached.data;
       sessionId = a.sessionId;
       targetId = pickTargetId;
       await enableDomains(a.sessionId);
@@ -305,11 +309,11 @@ export const createCdpSession = (
       return ok({ targetId: pickTargetId, sessionId: a.sessionId });
     },
     async switchTo(tid) {
-      const activated = await transport.request("Target.activateTarget", { targetId: tid }, { sessionId: null });
+      const activated = await req("Target.activateTarget", { targetId: tid }, null);
       if (!activated.success) return activated;
-      const attached = await transport.request("Target.attachToTarget", { targetId: tid, flatten: true }, { sessionId: null });
+      const attached = await req("Target.attachToTarget", { targetId: tid, flatten: true }, null);
       if (!attached.success) return attached;
-      const a = attached.data as { sessionId: string };
+      const a = attached.data;
       // Reuse existing TabSession or create one on first visit
       const existing = tabs.get(tid);
       const tab: TabSession = existing ?? {
@@ -354,14 +358,29 @@ export const createCdpSession = (
       const tab = targetId ? tabs.get(targetId) : undefined;
       return tab?.refSig ?? new Map();
     },
-    call(method, params = {}, opts = {}) {
-      return transport.request(method, params, { sessionId, ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) });
+    async call(method, params, opts = {}) {
+      const raw = await transport.request(method, { ...(params ?? {}) }, {
+        sessionId,
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
+      if (!raw.success) return raw;
+      return decodeResult(method, raw.data);
     },
-    callOnTarget(method, params, sid, opts = {}) {
-      return transport.request(method, params, { sessionId: sid, ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) });
+    async callOnTarget(method, params, sid, opts = {}) {
+      const raw = await transport.request(method, { ...params }, {
+        sessionId: sid,
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
+      if (!raw.success) return raw;
+      return decodeResult(method, raw.data);
     },
-    callBrowser(method, params = {}, opts = {}) {
-      return transport.request(method, params, { sessionId: null, ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) });
+    async callBrowser(method, params, opts = {}) {
+      const raw = await transport.request(method, { ...(params ?? {}) }, {
+        sessionId: null,
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      });
+      if (!raw.success) return raw;
+      return decodeResult(method, raw.data);
     },
     takeDialog() {
       const tab = targetId ? tabs.get(targetId) : undefined;
