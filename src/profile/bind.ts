@@ -19,7 +19,9 @@
  */
 
 import type { BrowserClient } from "../client";
+import { attachTo } from "../cdp/attach";
 import { type CdpError, cdpError } from "../cdp/errors";
+import { getWindowId } from "../cdp/window";
 import { type Result, err, ok } from "../util/result";
 import { detectRunningBrowser, resolveBrowserExecutable } from "./browser-process";
 import { openProfileWindow } from "./launch";
@@ -116,22 +118,15 @@ export const seedProfileWindow = async (
   const ownership = client.ownership();
   ownership.setHarnessWindow(seed.targetId);
   ownership.add(seed.targetId);
-  const win = await client.session().callBrowser("Browser.getWindowForTarget", { targetId: seed.targetId });
-  if (win.success) {
-    const windowId = (win.data as { windowId?: number }).windowId;
-    if (typeof windowId === "number") ownership.setHarnessWindowId(windowId);
-  }
+  const win = await getWindowId(client.session(), seed.targetId);
+  if (win.success) ownership.setHarnessWindowId(win.data);
 
   // Blank the handshake page so the seed tab behaves like any other fresh tab,
   // then remove the sentinel file. Best-effort: a failure here costs nothing
   // beyond the placeholder page staying visible.
-  const attached = await client.session().callBrowser("Target.attachToTarget", {
-    targetId: seed.targetId,
-    flatten: true,
-  });
+  const attached = await attachTo(client.session(), seed.targetId);
   if (attached.success) {
-    const sessionId = (attached.data as { sessionId: string }).sessionId;
-    await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, sessionId);
+    await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, attached.data);
   }
   await cleanup();
 

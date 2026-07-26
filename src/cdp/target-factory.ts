@@ -30,7 +30,9 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
+import { attachTo } from "./attach";
 import { type CdpError, cdpError } from "./errors";
+import { getWindowId } from "./window";
 
 /** How long to wait for a window.open-spawned target to appear. */
 const SPAWN_DEADLINE_MS = 8_000;
@@ -63,9 +65,7 @@ const listPageTargets = async (client: BrowserClient): Promise<Result<ReadonlyAr
 const sessionForTarget = async (client: BrowserClient, targetId: string): Promise<Result<string, CdpError>> => {
   const current = client.current();
   if (current?.targetId === targetId) return ok(current.sessionId);
-  const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
-  if (!attached.success) return attached;
-  return ok(attached.data.sessionId);
+  return attachTo(client.session(), targetId);
 };
 
 /**
@@ -189,8 +189,8 @@ const createDedicatedWindow = async (client: BrowserClient): Promise<Result<stri
   const ownership = client.ownership();
   ownership.setHarnessWindow(targetId);
   ownership.add(targetId);
-  const win = await client.session().callBrowser("Browser.getWindowForTarget", { targetId });
-  if (win.success) ownership.setHarnessWindowId(win.data.windowId);
+  const win = await getWindowId(client.session(), targetId);
+  if (win.success) ownership.setHarnessWindowId(win.data);
   return ok(targetId);
 };
 
