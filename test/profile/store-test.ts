@@ -60,13 +60,20 @@ describe("profile pin store", () => {
     await writePin({ ...pin, profileDir: "Default", label: "Work (work@example.com)" });
     const read = await readPin();
     assert.equal(read?.profileDir, "Default");
+  });
+
+  test("P5: one pin file on disk", () => {
     assert.equal(readdirSync(sandbox).filter((f) => f === "browser-harness.json").length, 1);
   });
 
-  test("P6: clear succeeds and cleared pin reads as none", async () => {
-    const { readPin, clearPin } = await import("../../src/profile/store");
+  test("P6: clear succeeds", async () => {
+    const { clearPin } = await import("../../src/profile/store");
     const cleared = await clearPin();
     assert.equal(cleared.success, true);
+  });
+
+  test("P6: cleared pin reads as none", async () => {
+    const { readPin } = await import("../../src/profile/store");
     assert.equal(await readPin(), null);
   });
 
@@ -92,10 +99,14 @@ describe("profile pin store", () => {
   });
 
   test("P10: write recreates a missing agent dir", async () => {
-    const { readPin, writePin } = await import("../../src/profile/store");
+    const { writePin } = await import("../../src/profile/store");
     rmSync(sandbox, { recursive: true, force: true });
     const written = await writePin(pin);
     assert.equal(written.success, true);
+  });
+
+  test("P10: pin readable after dir recreation", async () => {
+    const { readPin } = await import("../../src/profile/store");
     assert.equal((await readPin())?.profileDir, "Profile 1");
   });
 
