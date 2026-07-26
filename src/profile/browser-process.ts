@@ -92,6 +92,47 @@ export type BrowserCandidate = {
   readonly explicitUserDataDir?: string;
 };
 
+/**
+ * Linux marks a replaced binary in `/proc/<pid>/exe`: once the file behind a
+ * running process is unlinked — which is exactly what a `google-chrome` package
+ * upgrade does while the browser keeps running — the symlink reads
+ * "/opt/google/chrome/chrome (deleted)". Spawning that string fails with
+ * ENOENT, so the marker has to come off.
+ *
+ * It is stripped only as a fallback, and only when the stripped path exists: a
+ * binary genuinely named "… (deleted)" must still win.
+ */
+const DELETED_SUFFIX = " (deleted)";
+
+/** The path without Linux's deleted-binary marker, or undefined if unmarked. */
+export const stripDeletedSuffix = (path: string): string | undefined =>
+  path.endsWith(DELETED_SUFFIX) && path.length > DELETED_SUFFIX.length
+    ? path.slice(0, -DELETED_SUFFIX.length)
+    : undefined;
+
+const exists = async (path: string): Promise<boolean> => {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * A spawnable executable path for a raw readlink/argv value: the value itself
+ * when it exists, else the same value with the deleted-binary marker removed.
+ * Undefined when neither form is on disk — a path we cannot spawn must never be
+ * handed on as if it were usable.
+ */
+export const spawnableExePath = async (raw: string): Promise<string | undefined> => {
+  if (raw.length === 0) return undefined;
+  if (await exists(raw)) return raw;
+  const stripped = stripDeletedSuffix(raw);
+  if (stripped && (await exists(stripped))) return stripped;
+  return undefined;
+};
+
 /** Path comparison that tolerates separator and case differences per platform. */
 const samePath = (a: string, b: string): boolean => {
   const norm = (p: string): string => {
@@ -163,14 +204,19 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
       continue;
     }
     if (!cmdline || hasChildProcessType(cmdline)) continue;
-    let exePath: string | undefined;
+    let link: string | undefined;
     try {
-      exePath = await readlink(`/proc/${pid}/exe`);
+      link = await readlink(`/proc/${pid}/exe`);
     } catch {
-      // /proc/<pid>/exe is unreadable for processes we don't own; argv[0] is
-      // the next best thing.
-      exePath = cmdline.split(" ")[0];
+      // /proc/<pid>/exe is unreadable for processes we don't own.
     }
+    // argv[0] backs up the symlink in both directions: unreadable for a process
+    // we don't own, and pointing at an unlinked binary after an in-place
+    // upgrade. Chrome's browser process rewrites its argv to the bare
+    // executable path, so on Linux argv[0] is the live install location.
+    const exePath =
+      (link ? await spawnableExePath(link) : undefined) ??
+      (await spawnableExePath(cmdline.split(" ")[0] ?? ""));
     const explicit = parseUserDataDirFlag(cmdline);
     candidates.push({
       ...(exePath ? { exePath } : {}),
@@ -354,7 +400,11 @@ export const isBrowserRunning = async (): Promise<boolean> => (await detectRunni
  */
 export const resolveBrowserExecutable = async (running?: RunningBrowser): Promise<string | undefined> => {
   const detected = running ?? (await detectRunningBrowser());
-  if (detected.exePath) return detected.exePath;
+  // Re-check spawnability here too: this function is the single gate every
+  // launch passes through, and a caller may hand us a RunningBrowser collected
+  // before the binary was replaced on disk.
+  const usable = detected.exePath ? await spawnableExePath(detected.exePath) : undefined;
+  if (usable) return usable;
   if (process.platform !== "win32") return undefined;
 
   const fromRegistry = await winRegistryExecutable();

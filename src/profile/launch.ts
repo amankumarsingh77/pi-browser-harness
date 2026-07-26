@@ -69,19 +69,37 @@ export const openProfileWindow = async (
   if (req.explicitUserDataDir) args.push(`--user-data-dir=${req.explicitUserDataDir}`);
   args.push(`--profile-directory=${req.profileDir}`, "--new-window", sentinelUrl);
 
-  let child: ChildProcess | null = null;
+  let child: ChildProcess;
   try {
     // No shell: arguments are passed as an array, so profile names and paths
     // containing spaces survive intact on every platform.
     child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
-    child.unref();
-    // The launcher process exits as soon as the running browser takes over the
-    // command line; an error here means the binary itself could not be started.
-    child.on("error", () => {});
   } catch (e) {
     await rm(file, { force: true }).catch(() => {});
     return err(`could not launch ${req.exePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
+
+  // spawn() reports a missing or non-executable binary ASYNCHRONOUSLY, as an
+  // 'error' event — it does not throw. Ignoring that event made an ENOENT
+  // indistinguishable from a browser that simply never opened the window, so
+  // the caller's 15s sentinel poll reported a timeout for what was really a bad
+  // executable path. Node guarantees exactly one of 'spawn' or 'error', so
+  // waiting for it costs nothing and turns the failure into a named cause.
+  const spawnFailure = await new Promise<string | undefined>((resolve) => {
+    child.once("spawn", () => resolve(undefined));
+    child.once("error", (e: Error) => resolve(e.message));
+  });
+  // A later 'error' event with no listener would throw; keep one attached for
+  // the lifetime of the detached launcher.
+  child.on("error", () => {});
+  child.unref();
+
+  if (spawnFailure) {
+    await rm(file, { force: true }).catch(() => {});
+    return err(`could not launch ${req.exePath}: ${spawnFailure}`);
+  }
+
+  let live: ChildProcess | null = child;
 
   return ok({
     sentinelUrl,
@@ -89,9 +107,9 @@ export const openProfileWindow = async (
       await rm(file, { force: true }).catch(() => {});
     },
     kill: () => {
-      if (child) {
-        try { child.kill("SIGTERM"); } catch {}
-        child = null;
+      if (live) {
+        try { live.kill("SIGTERM"); } catch {}
+        live = null;
       }
     },
   });

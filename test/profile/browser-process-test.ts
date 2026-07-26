@@ -9,9 +9,16 @@
  *
  * Run: npx tsx test/profile/browser-process-test.ts
  */
-import { homedir } from "node:os";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseUserDataDirFlag, rankBrowserCandidate } from "../../src/profile/browser-process";
+import {
+  parseUserDataDirFlag,
+  rankBrowserCandidate,
+  resolveBrowserExecutable,
+  spawnableExePath,
+  stripDeletedSuffix,
+} from "../../src/profile/browser-process";
 
 let passed = 0;
 let failed = 0;
@@ -25,7 +32,7 @@ const check = (cond: boolean, label: string): void => {
   }
 };
 
-function main(): void {
+async function main(): Promise<void> {
   // B1: --user-data-dir parsing
   {
     check(
@@ -101,8 +108,64 @@ function main(): void {
     );
   }
 
+  // B6: Linux's deleted-binary marker. An in-place `google-chrome` upgrade
+  // unlinks the running binary, after which /proc/<pid>/exe reads
+  // "…/chrome (deleted)" — a path spawn() rejects with ENOENT.
+  {
+    check(
+      stripDeletedSuffix("/opt/google/chrome/chrome (deleted)") === "/opt/google/chrome/chrome",
+      "B6: marker stripped from a replaced binary's path",
+    );
+    check(stripDeletedSuffix("/opt/google/chrome/chrome") === undefined, "B6: unmarked path left alone");
+    check(stripDeletedSuffix(" (deleted)") === undefined, "B6: marker alone is not a path");
+  }
+
+  // B7: only a path that is actually on disk may be handed on as spawnable.
+  {
+    const root = mkdtempSync(join(tmpdir(), "pi-exe-"));
+    try {
+      const real = join(root, "chrome");
+      writeFileSync(real, "#!/bin/sh\n");
+      chmodSync(real, 0o755);
+
+      check(await spawnableExePath(real) === real, "B7: an existing path is returned unchanged");
+      check(
+        await spawnableExePath(`${real} (deleted)`) === real,
+        "B7: a replaced binary resolves to the live install path",
+      );
+      check(await spawnableExePath(join(root, "absent")) === undefined, "B7: a missing path yields undefined");
+      check(await spawnableExePath("") === undefined, "B7: an empty path yields undefined");
+
+      // The launch gate must never pass on a path it cannot spawn — that is
+      // what produced a 15s "couldn't open a window" timeout instead of a
+      // named error.
+      check(
+        await resolveBrowserExecutable({ running: true, exePath: `${real} (deleted)` }) === real,
+        "B7: resolveBrowserExecutable repairs a replaced-binary path",
+      );
+      if (process.platform !== "win32") {
+        check(
+          await resolveBrowserExecutable({ running: true, exePath: join(root, "absent") }) === undefined,
+          "B7: an unspawnable path is not passed on as usable",
+        );
+      }
+
+      // A binary genuinely named "… (deleted)" must win over the stripped form.
+      // Created last, so the checks above see only the ordinary case.
+      const literal = join(root, "chrome (deleted)");
+      writeFileSync(literal, "#!/bin/sh\n");
+      chmodSync(literal, 0o755);
+      check(
+        await spawnableExePath(literal) === literal,
+        "B7: a real file named '… (deleted)' is preferred over stripping",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
 }
 
-main();
+void main();
