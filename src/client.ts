@@ -244,11 +244,10 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       ? await session.callOnTarget("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true }, sessionId)
       : await session.call("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true });
     if (!r.success) return r;
-    const data = r.data as { result?: { value?: unknown }; exceptionDetails?: unknown };
-    if (data.exceptionDetails) {
-      return err(cdpError("remote_error", `JS evaluation failed: ${JSON.stringify(data.exceptionDetails)}`, "Runtime.evaluate"));
+    if (r.data.exceptionDetails !== undefined) {
+      return err(cdpError("remote_error", `JS evaluation failed: ${JSON.stringify(r.data.exceptionDetails)}`, "Runtime.evaluate"));
     }
-    return ok(data.result?.value);
+    return ok(r.data.result.value);
   };
 
   const readPageInfo = async (): Promise<Result<PageInfo, CdpError>> => {

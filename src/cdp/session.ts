@@ -6,6 +6,8 @@ import type { CdpTransport } from "./transport";
 import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
+import { attachTo } from "./attach";
+import { getWindowId } from "./window";
 
 // Per-tab state. One TabSession exists per known targetId.
 // Dialog, page-info dirty flag, and CDP buffers are per-tab — switching
@@ -200,7 +202,7 @@ export const createCdpSession = (
     return decodeResult(method, raw.data);
   };
 
-  return {
+  const session: CdpSession = {
     async attachFirstPage() {
       // Subscribe to Target.* events so we can react to targetDestroyed.
       // Best-effort: failing to enable discovery is not fatal for attach.
@@ -231,20 +233,20 @@ export const createCdpSession = (
           // persisted integer (which Chrome may reassign to a user window on
           // restart — anchoring on a survivor makes that misfire impossible).
           const anchorId = survivors[0]!;
-          const anchorWin = await req("Browser.getWindowForTarget", { targetId: anchorId }, null);
+          const anchorWin = await getWindowId(session, anchorId);
           if (anchorWin.success) {
-            const anchorWindowId = anchorWin.data.windowId;
+            const anchorWindowId = anchorWin.data;
             ownership.setHarnessWindowId(anchorWindowId); // refresh to the live id
             const windows = await Promise.all(
               allPages.map((p) =>
                 p.targetId === anchorId
                   ? Promise.resolve(anchorWin)
-                  : req("Browser.getWindowForTarget", { targetId: p.targetId }, null),
+                  : getWindowId(session, p.targetId),
               ),
             );
             allPages.forEach((p, i) => {
               const r = windows[i];
-              if (r?.success && r.data.windowId === anchorWindowId) {
+              if (r?.success && r.data === anchorWindowId) {
                 ownership.add(p.targetId);
               }
             });
@@ -290,19 +292,19 @@ export const createCdpSession = (
           ownership.add(created.data.targetId);
           // Capture the real Chrome windowId — the durable identity of the
           // window this session initialized (survives seed-tab closure).
-          const win = await req("Browser.getWindowForTarget", { targetId: created.data.targetId }, null);
-          if (win.success) ownership.setHarnessWindowId(win.data.windowId);
+          const win = await getWindowId(session, created.data.targetId);
+          if (win.success) ownership.setHarnessWindowId(win.data);
         }
       }
 
-      const attached = await req("Target.attachToTarget", { targetId: pickTargetId, flatten: true }, null);
+      const attached = await attachTo(session, pickTargetId);
       if (!attached.success) return attached;
-      const a = attached.data;
-      sessionId = a.sessionId;
+      const attachedSessionId = attached.data;
+      sessionId = attachedSessionId;
       targetId = pickTargetId;
-      await enableDomains(a.sessionId);
+      await enableDomains(attachedSessionId);
       tabs.set(pickTargetId, {
-        sessionId: a.sessionId,
+        sessionId: attachedSessionId,
         targetId: pickTargetId,
         dialog: null,
         pageInfoDirty: false,
@@ -311,19 +313,19 @@ export const createCdpSession = (
         refMap: new Map(),
         refSig: new Map(),
       });
-      sessionIdToTargetId.set(a.sessionId, pickTargetId);
-      return ok({ targetId: pickTargetId, sessionId: a.sessionId });
+      sessionIdToTargetId.set(attachedSessionId, pickTargetId);
+      return ok({ targetId: pickTargetId, sessionId: attachedSessionId });
     },
     async switchTo(tid) {
       const activated = await req("Target.activateTarget", { targetId: tid }, null);
       if (!activated.success) return activated;
-      const attached = await req("Target.attachToTarget", { targetId: tid, flatten: true }, null);
+      const attached = await attachTo(session, tid);
       if (!attached.success) return attached;
-      const a = attached.data;
+      const attachedSessionId = attached.data;
       // Reuse existing TabSession or create one on first visit
       const existing = tabs.get(tid);
       const tab: TabSession = existing ?? {
-        sessionId: a.sessionId,
+        sessionId: attachedSessionId,
         targetId: tid,
         dialog: null,
         pageInfoDirty: true,
@@ -335,12 +337,12 @@ export const createCdpSession = (
       if (existing) {
         // Each Target.attachToTarget produces a new sessionId — update it.
         sessionIdToTargetId.delete(existing.sessionId);
-        existing.sessionId = a.sessionId;
-        sessionIdToTargetId.set(a.sessionId, tid);
+        existing.sessionId = attachedSessionId;
+        sessionIdToTargetId.set(attachedSessionId, tid);
       } else {
         tabs.set(tid, tab);
-        await enableDomains(a.sessionId);
-        sessionIdToTargetId.set(a.sessionId, tid);
+        await enableDomains(attachedSessionId);
+        sessionIdToTargetId.set(attachedSessionId, tid);
       }
       // Update global pointers to point at the new active tab
       sessionId = tab.sessionId;
@@ -398,4 +400,5 @@ export const createCdpSession = (
       return tab.consoleBuffer.drain(filter);
     },
   };
+  return session;
 };

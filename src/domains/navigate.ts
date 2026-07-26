@@ -4,6 +4,7 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
+import { attachTo } from "../cdp/attach";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 
 const NavigateArgs = Type.Object({
@@ -110,9 +111,9 @@ export const openUrlsTool = defineBrowserTool({
     const settled = await Promise.all(
       created.filter((t) => t.ok).map(async (tab): Promise<TabResult> => {
         try {
-          const attached = await client.session().callBrowser("Target.attachToTarget", { targetId: tab.targetId, flatten: true });
+          const attached = await attachTo(client.session(), tab.targetId);
           if (!attached.success) return { ...tab, ok: false, error: attached.error.message };
-          const sid = (attached.data as { sessionId: string }).sessionId; // CDP boundary cast: Target.attachToTarget returns { sessionId: string }
+          const sid = attached.data;
           const enabled = await client.session().callOnTarget("Page.enable", {}, sid);
           if (!enabled.success) return { ...tab, ok: false, error: enabled.error.message };
           const nav = await client.session().callOnTarget("Page.navigate", { url: tab.url }, sid);
