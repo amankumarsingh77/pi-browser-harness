@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.10.2 — 2026-07-26
+
+### Fixed
+
+- **Page info no longer fails on a missing `documentElement`.** The page-info probe read `document.documentElement.scrollWidth`/`scrollHeight` directly, which throws when `documentElement` is absent — leaving every caller with an evaluation error instead of a page snapshot. The probe now falls back to zeroed scroll dimensions and returns a usable `PageInfo`.
+
 ## 0.10.1 — 2026-07-26
 
 ### Fixed
