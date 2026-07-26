@@ -2,6 +2,13 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.10.3 — 2026-07-26
+
+### Fixed
+
+- **Profile binding after an in-place browser upgrade.** Linux appends `" (deleted)"` to `/proc/<pid>/exe` once the running binary is unlinked — which is exactly what a `google-chrome` package update does while the browser stays open. `detectRunningBrowser` returned that literal string as the executable path, so every profile launch tried to spawn `/opt/google/chrome/chrome (deleted)` and failed with `ENOENT`. Executable paths are now validated against disk, with the marker stripped (and argv[0] used) when the linked binary is gone.
+- **A failed browser launch no longer reports as a sentinel timeout.** `spawn()` signals a missing or non-executable binary asynchronously via an `error` event rather than by throwing, and that event was discarded — so `openProfileWindow` returned success, no window ever opened, and the caller blamed the browser 15 seconds later with `couldn't open a window in "<profile>" automatically`. The launch now waits for `spawn`/`error` and returns the real cause, and removes its handshake page on the failure path.
+
 ## 0.10.2 — 2026-07-26
 
 ### Fixed
