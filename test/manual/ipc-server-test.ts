@@ -7,7 +7,7 @@ import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { createIpcServer } from "../../src/daemon/server";
 import { DAEMON_SOCKET_PATH } from "../../src/daemon/protocol";
-import type { WireMessage } from "../../src/daemon/protocol";
+import type { WireEvent, WireMessage } from "../../src/daemon/protocol";
 
 const TEST_CLIENT_ID = "pi-test-001";
 
@@ -76,7 +76,11 @@ async function main() {
 
   // ── Test 4: Broadcast ─────────────────────────────────────────────────
   receivedByClient.length = 0;
-  const broadcastMsg = { type: "event", method: "Target.targetCreated", params: { targetInfo: { type: "page" } } };
+  const broadcastMsg: WireEvent = {
+    type: "event",
+    method: "Target.targetCreated",
+    params: { targetInfo: { type: "page" } },
+  };
   server.broadcast(broadcastMsg);
   await sleep(200);
 
@@ -93,7 +97,6 @@ async function main() {
 
   // ── Test 6: Re-registration (same clientId after disconnect) ──────────
   const socket2 = createConnection(DAEMON_SOCKET_PATH);
-  const rl2 = createInterface({ input: socket2, crlfDelay: Infinity });
   await new Promise<void>((resolve) => socket2.on("connect", resolve));
 
   socket2.write(JSON.stringify({ type: "control", action: "register", clientId: TEST_CLIENT_ID }) + "\n");

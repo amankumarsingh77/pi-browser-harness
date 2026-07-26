@@ -3,7 +3,7 @@
  * Requires: Chrome with remote debugging enabled (chrome://inspect/#remote-debugging).
  * Run: npx tsx test/manual/bridge-test.ts
  */
-import { createCdpBridge, type SendToClient, type CdpBridge } from "../../src/daemon/bridge";
+import { createCdpBridge, type SendToClient } from "../../src/daemon/bridge";
 import type { WireRequest, WireResponse, WireEvent } from "../../src/daemon/protocol";
 
 let passed = 0;
@@ -35,12 +35,12 @@ async function main() {
   const events: WireEvent[] = [];
   let eventCount = 0;
 
-  const send: SendToClient = (clientId, msg) => {
+  const send: SendToClient = (_clientId, msg) => {
     if (msg.type === "response") responses.push(msg);
     else events.push(msg);
   };
 
-  bridge.onEvent((evt, _targets) => { eventCount++; });
+  bridge.onEvent((_evt, _targets) => { eventCount++; });
 
   const req1: WireRequest = { type: "request", id: 1, method: "Target.getTargets" };
   bridge.handleRequest(req1, "pi-test", send);

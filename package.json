@@ -57,7 +57,8 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --import tsx --test \"test/{profile,deep-research,domains,cdp,util}/**/*-test.ts\"",
     "prepublishOnly": "tsc --noEmit"
   },
   "publishConfig": {
