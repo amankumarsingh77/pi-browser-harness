@@ -27,10 +27,6 @@ export const typeTool = defineBrowserTool({
   ],
   parameters: TypeArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    // Guard against silent text loss: Input.insertText succeeds regardless of
-    // whether an editable element is focused, so without this check typed text
-    // can vanish into the void with no error. Fail loudly with an actionable
-    // message instead. IIFE starts with "(" so evaluateJs returns it directly.
     const focused = await client.evaluateJs(safeJs`
       (() => {
         const el = document.activeElement;
@@ -39,8 +35,8 @@ export const typeTool = defineBrowserTool({
         return { ok, tag: el ? el.tagName : null };
       })()
     `);
-    if (focused.success && isFocusProbe(focused.data)) {
-      const f = focused.data;
+    if (focused.success) {
+      const f: FocusProbe = isFocusProbe(focused.data) ? focused.data : { ok: false, tag: null };
       if (!f.ok) {
         return err({
           kind: "invalid_state",
