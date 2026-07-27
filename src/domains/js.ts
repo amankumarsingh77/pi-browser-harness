@@ -8,6 +8,7 @@ import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
+import { asNumber, asRecord, asString, isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_BYTES = 120;
 
@@ -80,10 +81,14 @@ export const executeJsTool = defineBrowserTool({
   },
 
   renderResult(result, expanded, theme) {
-    const details = result.details as
-      | { valueLength?: number; full?: string; pretty?: string; fullOutputPath?: string }
-      | undefined;
-    if (!details) return new Text(theme.fg("error", "execute_js: no details"), 0, 0);
+    const raw = asRecord(result.details);
+    if (raw === undefined) return new Text(theme.fg("error", "execute_js: no details"), 0, 0);
+    const details = {
+      valueLength: asNumber(raw["valueLength"]),
+      full: asString(raw["full"]),
+      pretty: asString(raw["pretty"]),
+      fullOutputPath: asString(raw["fullOutputPath"]),
+    };
 
     const len = details.valueLength ?? 0;
     const full = details.full ?? "";
@@ -141,9 +146,7 @@ const MAX_SOURCE_BYTES = 1_000_000;
 type ContentItem = { readonly type: "text"; readonly text: string };
 
 const isContentItem = (v: unknown): v is ContentItem =>
-  typeof v === "object" && v !== null
-    && (v as Readonly<Record<string, unknown>>)["type"] === "text"
-    && typeof (v as Readonly<Record<string, unknown>>)["text"] === "string";
+  isRecord(v) && v["type"] === "text" && typeof v["text"] === "string";
 
 export const runScriptTool = defineBrowserTool({
   name: "browser_run_script",
@@ -211,12 +214,12 @@ export const runScriptTool = defineBrowserTool({
         requireFromHere,
         ac.signal,
         (u: unknown) => {
-          if (typeof u !== "object" || u === null) return;
-          const content = (u as Readonly<Record<string, unknown>>)["content"];
+          if (!isRecord(u)) return;
+          const content = u["content"];
           if (!Array.isArray(content) || content.length === 0) return;
-          const first = content[0];
-          if (typeof first !== "object" || first === null) return;
-          const txt = (first as Readonly<Record<string, unknown>>)["text"];
+          const first: unknown = content[0];
+          if (!isRecord(first)) return;
+          const txt = first["text"];
           if (typeof txt !== "string") return;
           try { onUpdate({ text: txt }); } catch { /* swallow */ }
         },
@@ -230,10 +233,10 @@ export const runScriptTool = defineBrowserTool({
       clearTimeout(timeoutTimer);
       if (signal !== undefined) signal.removeEventListener("abort", onAbort);
 
-      if (typeof result !== "object" || result === null) {
+      if (!isRecord(result)) {
         return err({ kind: "invalid_state", message: `Script must return an object; got ${JSON.stringify(result)}` });
       }
-      const content = (result as Readonly<Record<string, unknown>>)["content"];
+      const content = result["content"];
       if (!Array.isArray(content)) {
         return err({ kind: "invalid_state", message: "Script return value must have a content array" });
       }
@@ -241,11 +244,8 @@ export const runScriptTool = defineBrowserTool({
         return err({ kind: "invalid_state", message: "Script content array must contain { type: 'text', text: string } items" });
       }
       const textOut = content.map((c) => c.text).join("\n");
-      const details = (result as Readonly<Record<string, unknown>>)["details"];
-      const isPlainObject = typeof details === "object" && details !== null && !Array.isArray(details);
-      return isPlainObject
-        ? ok({ text: textOut, details: details as Readonly<Record<string, unknown>> })
-        : ok({ text: textOut });
+      const details = result["details"];
+      return isRecord(details) ? ok({ text: textOut, details }) : ok({ text: textOut });
     } catch (e) {
       clearTimeout(timeoutTimer);
       if (signal !== undefined) signal.removeEventListener("abort", onAbort);

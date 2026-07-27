@@ -67,21 +67,23 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
         resolve(r);
       };
 
+      let sock: Socket;
       try {
-        socket = createConnection(DAEMON_SOCKET_PATH);
+        sock = createConnection(DAEMON_SOCKET_PATH);
       } catch (e) {
         settle(err(cdpError("transport_closed", e instanceof Error ? e.message : String(e))));
         return;
       }
+      socket = sock;
 
       const connectTimer = setTimeout(() => {
         cleanup("Connection timeout");
         settle(err(cdpError("timeout", `Daemon connection timed out after ${timeoutMs}ms`)));
       }, timeoutMs);
 
-      socket.on("connect", () => {
+      sock.on("connect", () => {
         clearTimeout(connectTimer);
-        rl = createInterface({ input: socket!, crlfDelay: Infinity });
+        rl = createInterface({ input: sock, crlfDelay: Infinity });
 
         rl.on("line", (line: string) => {
           const msg = deserialize(line);
@@ -130,11 +132,11 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
           }
         });
 
-        socket!.on("error", () => {
+        sock.on("error", () => {
           // Errors are surfaced via 'close'
         });
 
-        socket!.on("close", () => {
+        sock.on("close", () => {
           clearTimeout(connectTimer);
           cleanup("Daemon socket closed");
           // If connect hasn't settled yet, settle with error
@@ -143,10 +145,10 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
 
         // Send registration
         const regMsg: WireControl = { type: "control", action: "register", clientId };
-        socket!.write(serialize(regMsg) + "\n");
+        sock.write(serialize(regMsg) + "\n");
       });
 
-      socket.on("error", (e: NodeJS.ErrnoException) => {
+      sock.on("error", (e: NodeJS.ErrnoException) => {
         clearTimeout(connectTimer);
         const msg = e.code === "ENOENT"
           ? "Daemon not running — socket not found"
@@ -176,7 +178,8 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     const timeoutMs = opts?.timeoutMs ?? 15_000;
     const sessionId = opts?.sessionId ?? null;
 
-    if (!socket || socket.destroyed || !registered) {
+    const sock = socket;
+    if (sock === null || sock.destroyed || !registered) {
       return Promise.resolve(err(cdpError("transport_closed", "Daemon not connected", method)));
     }
 
@@ -189,7 +192,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
       ...(sessionId !== null && sessionId !== undefined ? { sessionId } : {}),
     };
 
-    return sendWithTimeout(pending, id, method, timeoutMs, "Daemon", () => socket!.write(serialize(req) + "\n"));
+    return sendWithTimeout(pending, id, method, timeoutMs, "Daemon", () => sock.write(serialize(req) + "\n"));
   };
 
   // ── Events ─────────────────────────────────────────────────────────────

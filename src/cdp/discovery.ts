@@ -8,6 +8,7 @@ import { parseJson } from "../schemas/parse";
 import { type Result, err, ok } from "../util/result";
 import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
+import { errnoCode } from "../util/guards";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
@@ -149,7 +150,7 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
       // dir is on our list but the user hasn't installed that browser. EPERM/
       // EACCES is common under sandboxes; remember it and fall back to network
       // probing rather than failing the whole discovery.
-      const code = (e as NodeJS.ErrnoException).code;
+      const code = errnoCode(e);
       if (code === "ENOENT" || code === undefined) continue;
       if (code === "EPERM" || code === "EACCES") {
         readErrors.push(`${portFile}: ${code}`);

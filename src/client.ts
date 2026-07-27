@@ -280,8 +280,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   const listTabs = async (includeInternal = true): Promise<Result<ReadonlyArray<TabInfo>, CdpError>> => {
     const r = await session.callBrowser("Target.getTargets");
     if (!r.success) return r;
-    const data = r.data as { targetInfos: ReadonlyArray<{ targetId: string; type: string; title: string; url: string }> };
-    const tabs = data.targetInfos
+    const tabs = r.data.targetInfos
       .filter((t) => t.type === "page")
       .filter((t) => includeInternal || !t.url.startsWith("chrome://"))
       .map((t): TabInfo => ({

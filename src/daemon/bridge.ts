@@ -16,6 +16,7 @@ import { isCdpRawMessage } from "../cdp/types";
 import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
 import { CDP_CONNECT_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS } from "./protocol";
+import { asString, isRecord } from "../util/guards";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -179,9 +180,9 @@ export const createCdpBridge = (): CdpBridge => {
       } else {
         // Track session ownership for attach responses
         if (cb.isAttach && msg.result) {
-          const result = msg.result as { sessionId?: string };
-          if (result.sessionId) {
-            router.record(cb.clientId, result.sessionId);
+          const sessionId = isRecord(msg.result) ? asString(msg.result["sessionId"]) : undefined;
+          if (sessionId) {
+            router.record(cb.clientId, sessionId);
           }
         }
         cb.send(cb.clientId, { type: "response", id: localId, result: msg.result });
@@ -238,12 +239,15 @@ export const createCdpBridge = (): CdpBridge => {
       if (ws && ws.readyState === WebSocket.OPEN) return;
 
       // Resolve URL (discover if not cached, or clear cache on retry)
-      let url = wsUrl;
-      if (!url || reconnectAttempt > 0) {
+      const cachedUrl = wsUrl;
+      let url: string;
+      if (cachedUrl === null || cachedUrl === "" || reconnectAttempt > 0) {
         const d = await discoverWsUrl();
         if (!d.success) { scheduleRetry(); return; }
         url = d.data;
         wsUrl = url;
+      } else {
+        url = cachedUrl;
       }
 
       const settledPromise = new Promise<void>((settle) => {
@@ -256,7 +260,7 @@ export const createCdpBridge = (): CdpBridge => {
 
         let sock: WebSocket;
         try {
-          sock = new WebSocket(url!, { perMessageDeflate: false });
+          sock = new WebSocket(url, { perMessageDeflate: false });
         } catch {
           scheduleRetry();
           return;

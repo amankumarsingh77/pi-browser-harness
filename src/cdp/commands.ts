@@ -50,6 +50,33 @@ const ExceptionDetails = Type.Object(
   { additionalProperties: true },
 );
 
+const AxValue = Type.Object({ value: Type.Optional(Type.Unknown()) }, { additionalProperties: true });
+
+const AxNode = Type.Object(
+  {
+    nodeId: Type.String(),
+    parentId: Type.Optional(Type.String()),
+    childIds: Type.Optional(Type.Array(Type.String())),
+    ignored: Type.Optional(Type.Boolean()),
+    role: Type.Optional(AxValue),
+    name: Type.Optional(AxValue),
+    value: Type.Optional(AxValue),
+    description: Type.Optional(AxValue),
+    properties: Type.Optional(
+      Type.Array(
+        Type.Object(
+          { name: Type.Optional(Type.String()), value: Type.Optional(AxValue) },
+          { additionalProperties: true },
+        ),
+      ),
+    ),
+    backendDOMNodeId: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: true },
+);
+
+export type AxNodeResult = Static<typeof AxNode>;
+
 export const COMMANDS = {
   // --- Target ---
   "Target.attachToTarget": cmd(
@@ -211,7 +238,7 @@ export const COMMANDS = {
   "Emulation.setDeviceMetricsOverride": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Accessibility.getFullAXTree": cmd(
     Type.Object({ depth: Type.Optional(Type.Number()) }, { additionalProperties: true }),
-    Type.Object({ nodes: Type.Array(Type.Unknown()) }),
+    Type.Object({ nodes: Type.Array(AxNode) }),
   ),
 };
 

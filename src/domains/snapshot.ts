@@ -3,12 +3,14 @@ import { Type } from "typebox";
 import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { CdpSession } from "../cdp/session";
+import type { AxNodeResult } from "../cdp/commands";
 import { type Box, boxOf } from "./box";
 import { cdpCall } from "./cdp-call";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { screenshotPath } from "../util/paths";
+import { asBoolean, asNumber, asRecord, asString } from "../util/guards";
 
 const SnapshotArgs = Type.Object({
   includeScreenshot: Type.Optional(
@@ -28,20 +30,8 @@ const SnapshotArgs = Type.Object({
   ),
 });
 
-// Raw shapes from CDP Accessibility.getFullAXTree. Cast at this boundary only.
-type AxValue = { value?: unknown };
-export type RawAxNode = {
-  nodeId: string;
-  parentId?: string;
-  childIds?: ReadonlyArray<string>;
-  ignored?: boolean;
-  role?: AxValue;
-  name?: AxValue;
-  value?: AxValue;
-  description?: AxValue;
-  properties?: ReadonlyArray<{ name?: string; value?: AxValue }>;
-  backendDOMNodeId?: number;
-};
+export type RawAxNode = AxNodeResult;
+type AxValue = NonNullable<RawAxNode["role"]>;
 
 export type SlimNode = {
   role: string;
@@ -322,7 +312,7 @@ export const snapshotTool = defineBrowserTool({
     // 1. AX tree
     const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
     if (!axRes.success) return axRes;
-    const rawNodes = (axRes.data as { nodes: ReadonlyArray<RawAxNode> }).nodes;
+    const rawNodes = axRes.data.nodes;
 
     // 2. Page url/title
     const piRes = await client.pageInfo();
@@ -412,10 +402,17 @@ export const snapshotTool = defineBrowserTool({
   },
 
   renderResult(result, expanded, theme) {
-    const details = result.details as
-      | (SnapshotDetails & { summary?: string; ok?: boolean })
-      | undefined;
-    if (!details) return new Text(theme.fg("error", "snapshot: no details"), 0, 0);
+    const raw = asRecord(result.details);
+    if (raw === undefined) return new Text(theme.fg("error", "snapshot: no details"), 0, 0);
+    const details = {
+      nodeCount: asNumber(raw["nodeCount"]),
+      truncated: asBoolean(raw["truncated"]),
+      fullOutputPath: asString(raw["fullOutputPath"]),
+      screenshotPath: asString(raw["screenshotPath"]),
+      url: asString(raw["url"]),
+      title: asString(raw["title"]),
+      summary: asString(raw["summary"]),
+    };
 
     const titleLine = details.title ? ` "${details.title}"` : "";
     const summary = details.summary ?? "";

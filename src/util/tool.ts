@@ -1,7 +1,6 @@
 import type { TSchema, Static } from "typebox";
 import type {
   AgentToolResult,
-  AgentToolUpdateCallback,
   ExtensionAPI,
   ExtensionContext,
   Theme,
@@ -75,10 +74,12 @@ export const defineBrowserTool = <S extends TSchema>(
 type OkDetails = { readonly ok: true } & Readonly<Record<string, unknown>>;
 type ErrDetails = { readonly ok: false; readonly kind: ToolErrKind; readonly message: string } & Readonly<Record<string, unknown>>;
 
+type ErrorFlagged<D> = AgentToolResult<D> & { readonly isError?: boolean };
+
 const toToolResult = (
   r: Result<ToolOk, ToolErr>,
   toolName: string,
-): AgentToolResult<OkDetails | ErrDetails> => {
+): ErrorFlagged<OkDetails | ErrDetails> => {
   if (r.success) {
     const details: OkDetails = { ok: true, ...(r.data.details ?? {}) };
     return {
@@ -93,10 +94,7 @@ const toToolResult = (
     ...(r.error.details ?? {}),
   };
   return {
-    // isError is an extension the pi-coding-agent runtime picks up from the result object;
-    // AgentToolResult<T> itself doesn't declare it but the runtime reads it via duck-typing.
-    // We cast through unknown to avoid widening the return type.
-    ...(({ isError: true }) as unknown as object),
+    isError: true,
     content: [{ type: "text", text: `${toolName} failed (${r.error.kind}): ${r.error.message}` }],
     details,
   };
@@ -111,6 +109,8 @@ export const registerBrowserTool = (
   // by casting def to the generic form. The cast is safe because defineBrowserTool
   // ensures the handler, parameters, and renderCall were all created with the same S.
   type S = TSchema;
+  const defRenderCall = def.renderCall;
+  const defRenderResult = def.renderResult;
   const td: ToolDefinition<S> = {
     name: def.name,
     label: def.label,
@@ -118,25 +118,22 @@ export const registerBrowserTool = (
     promptSnippet: def.promptSnippet,
     promptGuidelines: [...def.promptGuidelines],
     parameters: def.parameters,
-    ...(def.renderCall
+    ...(defRenderCall
       ? {
           renderCall: (args: Static<S>, theme: Theme, _ctx: Parameters<NonNullable<ToolDefinition<S>["renderCall"]>>[2]) =>
-            // Non-null assertion safe: this branch only runs when renderCall was provided.
             // Cast from never->Component to unknown->Component: safe because at runtime
             // args is always the concrete Static<S> value the tool was defined with.
-            (def.renderCall as (args: unknown, theme: Theme) => Component)(args, theme),
+            (defRenderCall as (args: unknown, theme: Theme) => Component)(args, theme),
         }
       : {}),
-    ...(def.renderResult
+    ...(defRenderResult
       ? {
           renderResult: (
             result: AgentToolResult<unknown>,
             options: ToolRenderResultOptions,
             theme: Theme,
             _ctx: Parameters<NonNullable<ToolDefinition<S>["renderResult"]>>[3],
-          ) =>
-            // Non-null assertion safe: this branch only runs when renderResult was provided.
-            def.renderResult!(result, options.expanded ?? false, theme),
+          ) => defRenderResult(result, options.expanded ?? false, theme),
         }
       : {}),
     async execute(_toolCallId, args, signal, onUpdate, extensionCtx) {
@@ -184,13 +181,11 @@ export const registerBrowserTool = (
           signal,
           onUpdate: (u) => {
             if (onUpdate) {
-              // AgentToolUpdateCallback expects AgentToolResult<TDetails>; we use unknown for TDetails.
               const update: AgentToolResult<OkDetails> = {
                 content: [{ type: "text", text: u.text }],
                 details: { ok: true, ...(u.details ?? {}) },
               };
-              // Cast needed: onUpdate is AgentToolUpdateCallback<unknown> (generic TDetails).
-              (onUpdate as AgentToolUpdateCallback<OkDetails>)(update);
+              onUpdate(update);
             }
           },
           extensionCtx,
