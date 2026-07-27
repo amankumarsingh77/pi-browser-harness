@@ -67,6 +67,7 @@ export const clickTool = defineBrowserTool({
     "If a click doesn't register, set BH_DEBUG_CLICKS=1 to get annotated screenshots (debug only). For React/Vue components ignoring clicks, try browser_dispatch_key.",
   ],
   parameters: ClickArgs,
+  concurrency: "serialized",
   renderCall: (a) => new Text(`🖱️ Click ${a.ref ? `[${a.ref}]` : `(${a.x}, ${a.y})`}`, 0, 0),
   async handler(args, { client }) {
     const button = args.button ?? "left";

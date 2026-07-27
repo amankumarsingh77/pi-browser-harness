@@ -50,6 +50,7 @@ export const webSearchTool = defineBrowserTool({
     "Runs in its own isolated tab and never disturbs the user's current tab.",
   ],
   parameters: WebSearchArgs,
+  concurrency: "serialized",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     const limit = args.limit ?? 10;
     const serpUrl = buildSerpUrl(args.query, limit);

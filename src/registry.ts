@@ -22,53 +22,47 @@ import { setupTool } from "./domains/setup";
 import { webSearchTool } from "./domains/search/web-search";
 import { readPageTool } from "./domains/readpage/read-page";
 
-// Mutation tools that modify page / browser state are marked `serialized: true`
-// so they run through a shared async mutex.  Observation / read-only tools are
-// left unmarked and can execute in parallel.
-const TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
-  // setup comes first — the agent calls this to self-recover from not-initialized
+export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   setupTool,
-  { ...clickTool, serialized: true },
-  { ...typeTool, serialized: true },
-  { ...fillTool, serialized: true },
-  { ...selectOptionTool, serialized: true },
-  { ...focusTool, serialized: true },
-  { ...pressKeyTool, serialized: true },
-  { ...dispatchKeyTool, serialized: true },
-  { ...scrollTool, serialized: true },
+  clickTool,
+  typeTool,
+  fillTool,
+  selectOptionTool,
+  focusTool,
+  pressKeyTool,
+  dispatchKeyTool,
+  scrollTool,
   pageInfoTool,
   waitTool,
   waitForTool,
-  { ...waitForLoadTool, serialized: true },
-  { ...handleDialogTool, serialized: true },
+  waitForLoadTool,
+  handleDialogTool,
   screenshotTool,
-  { ...navigateTool, serialized: true },
-  { ...openUrlsTool, serialized: true },
-  { ...goBackTool, serialized: true },
-  { ...goForwardTool, serialized: true },
-  { ...reloadTool, serialized: true },
+  navigateTool,
+  openUrlsTool,
+  goBackTool,
+  goForwardTool,
+  reloadTool,
   listTabsTool,
   currentTabTool,
-  { ...switchTabTool, serialized: true },
-  { ...newTabTool, serialized: true },
-  { ...closeTabTool, serialized: true },
-  { ...uploadFileTool, serialized: true },
-  { ...downloadTool, serialized: true },
-  { ...printToPdfTool, serialized: true },
-  { ...viewportResizeTool, serialized: true },
-  { ...dragAndDropTool, serialized: true },
+  switchTabTool,
+  newTabTool,
+  closeTabTool,
+  uploadFileTool,
+  downloadTool,
+  printToPdfTool,
+  viewportResizeTool,
+  dragAndDropTool,
   httpGetTool,
   networkRequestsTool,
   consoleTool,
   snapshotTool,
   executeJsTool,
   runScriptTool,
-  // Opens and owns an isolated tab to scrape a SERP — same class as openUrlsTool.
-  { ...webSearchTool, serialized: true },
-  // Pure isolated read (own sessionId, own tab) — safe concurrent, like executeJsTool.
+  webSearchTool,
   readPageTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
-  for (const t of TOOLS) registerBrowserTool(pi, client, t);
+  for (const t of ALL_TOOLS) registerBrowserTool(pi, client, t);
 };

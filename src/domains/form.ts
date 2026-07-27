@@ -136,6 +136,7 @@ export const fillTool = defineBrowserTool({
     "The result reports the field's value after writing and an appended page-changes diff — confirm both match what you intended before moving on.",
   ],
   parameters: FillArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FILL_FN, arg: args.value });
     if (!r.success) return r;
@@ -198,6 +199,7 @@ export const focusTool = defineBrowserTool({
     "For simply setting a value, prefer browser_fill (it doesn't need a separate focus step).",
   ],
   parameters: FocusArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FOCUS_FN, arg: "" });
     if (!r.success) return r;
@@ -277,6 +279,7 @@ export const selectOptionTool = defineBrowserTool({
     "If no option matches, the error details list the available options so you can retry.",
   ],
   parameters: SelectOptionArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     if (args.value === undefined && args.label === undefined && args.index === undefined) {
       return err({ kind: "invalid_state", message: "Provide one of value, label, or index." });

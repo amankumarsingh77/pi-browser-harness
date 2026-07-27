@@ -55,10 +55,7 @@ export type BrowserToolDefinition<S extends TSchema> = {
   readonly handler: ToolHandler<S>;
   readonly renderCall?: (args: Static<S>, theme: Theme) => Component;
   readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
-  /** If true, the tool acquires the client's mutation mutex before executing.
-   *  This ensures that two serialized tools never run concurrently,
-   *  preventing race conditions on shared CDP session/page state. */
-  readonly serialized?: boolean;
+  readonly concurrency: "serialized" | "parallel";
   readonly ensureAlive?: boolean;
 };
 
@@ -169,12 +166,8 @@ export const registerBrowserTool = (
           );
         }
       }
-      // Serialized tools acquire the client's mutation mutex so that only one
-      // mutation tool runs at a time. Observation tools skip this and run freely
-      // in parallel. AbortSignal is checked after acquiring the lock so that a
-      // cancelled task doesn't hold the mutex forever.
       let release: (() => void) | undefined;
-      if (def.serialized) {
+      if (def.concurrency !== "parallel") {
         const acquire = await client.mutationMutex().acquire();
         release = acquire;
         if (signal?.aborted) {

@@ -74,6 +74,7 @@ export const screenshotTool = defineBrowserTool({
     "format='jpeg' with quality 60-90 keeps screenshots small for photo-heavy pages. Use maxDim if the page is huge.",
   ],
   parameters: ScreenshotArgs,
+  concurrency: "parallel",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const cap = await captureBase(client, args);
     if (!cap.success) return cap;

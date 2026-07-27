@@ -17,6 +17,7 @@ export const pageInfoTool = defineBrowserTool({
     "browser_page_info auto-detects alert, confirm, prompt, and beforeunload dialogs.",
   ],
   parameters: Type.Object({}),
+  concurrency: "parallel",
   async handler(_args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.pageInfo();
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
@@ -46,6 +47,7 @@ export const waitTool = defineBrowserTool({
   promptSnippet: "Wait N seconds",
   promptGuidelines: ["Use sparingly — prefer browser_wait_for_load when waiting for a page load."],
   parameters: WaitArgs,
+  concurrency: "parallel",
   async handler(args, { signal }): Promise<Result<ToolOk, ToolErr>> {
     try {
       await sleep(Math.round(args.seconds * 1000), signal);
@@ -71,6 +73,7 @@ export const waitForLoadTool = defineBrowserTool({
     "Returns when readyState becomes 'complete' OR the timeout elapses.",
   ],
   parameters: WaitForLoadArgs,
+  concurrency: "serialized",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     const timeoutMs = (args.timeout ?? 15) * 1000;
     const start = Date.now();
@@ -106,6 +109,7 @@ export const waitForTool = defineBrowserTool({
     "Returns a typed timeout error if the condition isn't met within the timeout.",
   ],
   parameters: WaitForArgs,
+  concurrency: "parallel",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     if (args.selector === undefined && args.text === undefined) {
       return err({ kind: "invalid_state", message: "Provide a selector or text to wait for." });

@@ -119,6 +119,7 @@ export const consoleTool = defineBrowserTool({
     "Don't use as a default observation tool — prefer browser_snapshot for page structure.",
   ],
   parameters: ConsoleArgs,
+  concurrency: "parallel",
 
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const session = client.session();

@@ -20,6 +20,7 @@ export const viewportResizeTool = defineBrowserTool({
     "Pass deviceScaleFactor=2 to simulate retina displays.",
   ],
   parameters: ViewportArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.session().call("Emulation.setDeviceMetricsOverride", {
       width: args.width,

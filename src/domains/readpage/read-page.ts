@@ -109,6 +109,7 @@ export const readPageTool = defineBrowserTool({
     "Boilerplate-heavy or structure-less pages fall back to bounded body text rather than erroring.",
   ],
   parameters: ReadPageArgs,
+  concurrency: "parallel",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     if (args.url !== undefined && args.url.length > 0) return readOpenedUrl(client, args.url, signal);
     if (args.targetId !== undefined && args.targetId.length > 0) return readOwnedTab(client, args.targetId);
