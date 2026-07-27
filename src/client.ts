@@ -1,3 +1,6 @@
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "./schemas/parse";
 import { type Result, err, ok } from "./util/result";
 import { safeJs } from "./util/js-template";
 import { type Mutex, createMutex } from "./util/mutex";
@@ -75,31 +78,34 @@ export type BrowserClient = {
 const HEALTH_TTL_MS = 30_000;
 const PAGE_INFO_TTL_MS = 1_000;
 
-const parsePageInfoPayload = (v: unknown): Result<PageInfo, CdpError> => {
-  if (typeof v !== "object" || v === null) {
-    return err(cdpError("invalid_response", "page info payload is not an object"));
+const PageInfoPayload = Type.Object({
+  url: Type.String(),
+  title: Type.String(),
+  w: Type.Number(),
+  h: Type.Number(),
+  sx: Type.Number(),
+  sy: Type.Number(),
+  pw: Type.Number(),
+  ph: Type.Number(),
+});
+
+const pageInfoValidator = Compile(PageInfoPayload);
+
+const parsePageInfoPayload = (raw: string): Result<PageInfo, CdpError> => {
+  const parsed = parseJson(raw, pageInfoValidator);
+  if (!parsed.success) {
+    return err(cdpError("invalid_response", `page info payload is invalid: ${parsed.error}`));
   }
-  const o = v as Readonly<Record<string, unknown>>;
-  const fields: ReadonlyArray<readonly [string, "string" | "number"]> = [
-    ["url", "string"], ["title", "string"],
-    ["w", "number"], ["h", "number"],
-    ["sx", "number"], ["sy", "number"],
-    ["pw", "number"], ["ph", "number"],
-  ];
-  for (const [k, t] of fields) {
-    if (typeof o[k] !== t) {
-      return err(cdpError("invalid_response", `page info field ${k} has wrong type (expected ${t})`));
-    }
-  }
+  const o = parsed.data;
   return ok({
-    url: o["url"] as string,
-    title: o["title"] as string,
-    width: o["w"] as number,
-    height: o["h"] as number,
-    scrollX: o["sx"] as number,
-    scrollY: o["sy"] as number,
-    pageWidth: o["pw"] as number,
-    pageHeight: o["ph"] as number,
+    url: o.url,
+    title: o.title,
+    width: o.w,
+    height: o.h,
+    scrollX: o.sx,
+    scrollY: o.sy,
+    pageWidth: o.pw,
+    pageHeight: o.ph,
   });
 };
 
@@ -259,13 +265,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     const raw = await evaluateJs(expr);
     if (!raw.success) return raw;
     if (typeof raw.data !== "string") return err(cdpError("invalid_response", "page info evaluation did not return a string"));
-    let parsedRaw: unknown;
-    try {
-      parsedRaw = JSON.parse(raw.data);
-    } catch (e) {
-      return err(cdpError("invalid_response", `page info JSON.parse failed: ${e instanceof Error ? e.message : String(e)}`));
-    }
-    const info = parsePageInfoPayload(parsedRaw);
+    const info = parsePageInfoPayload(raw.data);
     if (!info.success) return info;
     if (currentTid) pageCaches.set(currentTid, { info: info.data, at: Date.now() });
     return ok(info.data);

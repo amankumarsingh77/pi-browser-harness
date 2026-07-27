@@ -61,7 +61,7 @@ export const executeJsTool = defineBrowserTool({
     // to the raw string if parse fails (e.g. value is "undefined" sentinel).
     let pretty: string | undefined;
     try {
-      const parsed = JSON.parse(valueStr);
+      const parsed: unknown = JSON.parse(valueStr);
       pretty = JSON.stringify(parsed, null, 2);
     } catch {
       pretty = undefined;
