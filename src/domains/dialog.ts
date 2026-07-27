@@ -19,9 +19,10 @@ export const handleDialogTool = defineBrowserTool({
   ],
   parameters: HandleDialogArgs,
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const params: Record<string, unknown> = { accept: args.accept };
-    if (args.promptText !== undefined) params["promptText"] = args.promptText;
-    const r = await client.session().call("Page.handleJavaScriptDialog", params);
+    const r = await client.session().call("Page.handleJavaScriptDialog", {
+      accept: args.accept,
+      ...(args.promptText !== undefined ? { promptText: args.promptText } : {}),
+    });
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
     return ok({
       text: `Dialog ${args.accept ? "accepted" : "dismissed"}`,

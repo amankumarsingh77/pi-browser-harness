@@ -47,12 +47,9 @@ const tryCdpUpload = async (
 ): Promise<Result<void, ToolErr>> => {
   const doc = await client.session().call("DOM.getDocument", { depth: -1 });
   if (!doc.success) return err({ kind: "cdp_error", message: doc.error.message });
-  // CDP boundary cast: DOM.getDocument returns { root: { nodeId: number } }
-  const root = (doc.data as { root: { nodeId: number } }).root;
-  const q = await client.session().call("DOM.querySelector", { nodeId: root.nodeId, selector });
+  const q = await client.session().call("DOM.querySelector", { nodeId: doc.data.root.nodeId, selector });
   if (!q.success) return err({ kind: "cdp_error", message: q.error.message });
-  // CDP boundary cast: DOM.querySelector returns { nodeId: number }
-  const nodeId = (q.data as { nodeId: number }).nodeId;
+  const nodeId = q.data.nodeId;
   if (!nodeId) return err({ kind: "invalid_state", message: `Selector matched 0 file inputs: ${selector}` });
   const set = await client.session().call("DOM.setFileInputFiles", { files: [filePath], nodeId });
   if (!set.success) return err({ kind: "cdp_error", message: set.error.message });
@@ -214,10 +211,8 @@ export const printToPdfTool = defineBrowserTool({
       preferCSSPageSize: true,
     });
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-    // CDP boundary cast: Page.printToPDF returns { data: string } (base64-encoded PDF)
-    const data = (r.data as { data: string }).data;
     const path = args.outputPath ?? pdfPath(client.namespace);
-    await writeFile(path, Buffer.from(data, "base64"));
+    await writeFile(path, Buffer.from(r.data.data, "base64"));
     return ok({ text: `PDF saved: ${path}`, details: { path } });
   },
 });

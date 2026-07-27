@@ -5,6 +5,7 @@ import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
 import {
   closeIsolatedTab,
   evalInIsolatedTab,
+  isJsonText,
   type IsolatedTab,
   navigateIsolatedTab,
   openIsolatedTab,
@@ -73,7 +74,7 @@ const readOpenedUrl = async (
     if (!navigated.success) return err(navigated.error);
     const loaded = await waitForIsolatedLoad(client, tab, LOAD_TIMEOUT_MS, signal);
     if (!loaded.success) return err(loaded.error);
-    const captured = await evalInIsolatedTab(client, tab, buildPageCaptureExpr());
+    const captured = await evalInIsolatedTab(client, tab, buildPageCaptureExpr(), isJsonText);
     if (!captured.success) return err(captured.error);
     return captureToResult(captured.data);
   } finally {
@@ -90,7 +91,7 @@ const readOwnedTab = async (
   }
   const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
   if (!attached.success) return err({ kind: "cdp_error", message: attached.error.message });
-  const sessionId = (attached.data as { sessionId: string }).sessionId;
+  const sessionId = attached.data.sessionId;
   const captured = await client.evaluateJs(buildPageCaptureExpr(), sessionId);
   if (!captured.success) return err({ kind: "cdp_error", message: captured.error.message });
   return captureToResult(captured.data);

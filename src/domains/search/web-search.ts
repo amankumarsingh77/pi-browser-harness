@@ -5,6 +5,7 @@ import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
 import {
   closeIsolatedTab,
   evalInIsolatedTab,
+  isJsonText,
   navigateIsolatedTab,
   openIsolatedTab,
   waitForIsolatedLoad,
@@ -64,10 +65,10 @@ export const webSearchTool = defineBrowserTool({
       const loaded = await waitForIsolatedLoad(client, tab, LOAD_TIMEOUT_MS, signal);
       if (!loaded.success) return err(loaded.error);
 
-      const extracted = await evalInIsolatedTab(client, tab, buildSerpExtractionExpr());
+      const extracted = await evalInIsolatedTab(client, tab, buildSerpExtractionExpr(), isJsonText);
       if (!extracted.success) return err(extracted.error);
 
-      const parsedJson = typeof extracted.data === "string" ? safeParse(extracted.data) : extracted.data;
+      const parsedJson = safeParse(extracted.data);
       if (!isSerpExtraction(parsedJson)) {
         return err({ kind: "internal", message: "SERP extraction returned an unexpected shape" });
       }

@@ -35,11 +35,12 @@ export const dragAndDropTool = defineBrowserTool({
         }
       : { items: [], dragOperationsMask: 1 };
     const cdp = client.session();
-    const calls: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+    type InputCall = readonly ["Input.dispatchMouseEvent" | "Input.dispatchDragEvent", Record<string, unknown>];
+    const calls: ReadonlyArray<InputCall> = [
       ["Input.dispatchMouseEvent", { type: "mousePressed", x: args.startX, y: args.startY, button: "left", clickCount: 1 }],
       ["Input.dispatchDragEvent", { type: "dragEnter", x: args.startX, y: args.startY, data, modifiers: 0 }],
       // 5 interpolated dragOver steps from start → end so the page sees a smooth drag.
-      ...Array.from({ length: 5 }, (_, i): readonly [string, Record<string, unknown>] => {
+      ...Array.from({ length: 5 }, (_, i): InputCall => {
         const t = (i + 1) / 5;
         return [
           "Input.dispatchDragEvent",

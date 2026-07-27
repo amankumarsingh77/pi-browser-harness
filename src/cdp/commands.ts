@@ -36,6 +36,15 @@ const RemoteObject = Type.Object(
   { additionalProperties: true },
 );
 
+const CallArgument = Type.Object(
+  {
+    value: Type.Optional(Type.Unknown()),
+    objectId: Type.Optional(Type.String()),
+    unserializableValue: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
 const ExceptionDetails = Type.Object(
   { text: Type.String(), exception: Type.Optional(RemoteObject) },
   { additionalProperties: true },
@@ -142,7 +151,14 @@ export const COMMANDS = {
   ),
   "Runtime.callFunctionOn": cmd(
     Type.Object(
-      { functionDeclaration: Type.String(), objectId: Type.Optional(Type.String()) },
+      {
+        functionDeclaration: Type.String(),
+        objectId: Type.Optional(Type.String()),
+        arguments: Type.Optional(Type.Array(CallArgument)),
+        returnByValue: Type.Optional(Type.Boolean()),
+        awaitPromise: Type.Optional(Type.Boolean()),
+        userGesture: Type.Optional(Type.Boolean()),
+      },
       { additionalProperties: true },
     ),
     Type.Object({ result: RemoteObject, exceptionDetails: Type.Optional(ExceptionDetails) }),

@@ -55,7 +55,7 @@ export const currentTabTool = defineBrowserTool({
     if (!cur) return err({ kind: "invalid_state", message: "No tab attached." });
     const ti = await client.session().callBrowser("Target.getTargetInfo", { targetId: cur.targetId });
     if (!ti.success) return err({ kind: "cdp_error", message: ti.error.message });
-    const info = (ti.data as { targetInfo: { targetId: string; url: string; title: string } }).targetInfo; // CDP boundary cast: Target.getTargetInfo returns { targetInfo: { targetId, url, title } }
+    const info = ti.data.targetInfo;
     const owned = client.owns(info.targetId);
     return ok({
       text: `Current tab${owned ? " (owned)" : " (NOT owned by this session)"}:\n  ${info.targetId}\n  ${info.url}\n  ${info.title}`,
@@ -104,7 +104,9 @@ export const switchTabTool = defineBrowserTool({
             details: { matches: matches.map((t) => ({ targetId: t.targetId, url: t.url })) },
           });
         }
-        resolved = matches[0]!.targetId;
+        const first = matches[0];
+        if (first === undefined) return err({ kind: "invalid_state", message: "no matching tab" });
+        resolved = first.targetId;
       }
       if (!client.owns(resolved)) {
         return err({
@@ -172,7 +174,8 @@ export const closeTabTool = defineBrowserTool({
       if (isHexPrefix) {
         const owned = client.ownership().list();
         const matches = owned.filter((id) => id.startsWith(args.targetId));
-        if (matches.length === 1) resolved = matches[0]!;
+        const first = matches[0];
+        if (matches.length === 1 && first !== undefined) resolved = first;
         else if (matches.length > 1) {
           return err({
             kind: "invalid_state",
