@@ -2,7 +2,7 @@ import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
 import { type Box, boxOf } from "./box";
-import { buildTree, collectInteractiveTargets, type RawAxNode, type SlimNode } from "./snapshot";
+import { buildTree, collectInteractiveTargets, type SlimNode } from "./snapshot";
 
 const staleErr = (ref: string): ToolErr => ({
   kind: "invalid_state",
@@ -78,7 +78,7 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
 
   const axRes = await session.call("Accessibility.getFullAXTree", {});
   if (!axRes.success) return "";
-  const rawNodes = (axRes.data as { nodes: ReadonlyArray<RawAxNode> }).nodes;
+  const rawNodes = axRes.data.nodes;
   const slim = buildTree(rawNodes, { interestingOnly: true, maxNodes: 1000 });
   const targets = collectInteractiveTargets(slim);
 

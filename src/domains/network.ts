@@ -4,6 +4,7 @@ import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
+import { asArrayOf, asBoolean, asNumber, asRecord, asString } from "../util/guards";
 import type { NetworkRecord } from "../cdp/network-buffer";
 
 const HttpGetArgs = Type.Object({
@@ -168,6 +169,57 @@ type NetworkDetails = {
   includeBodies: boolean;
 };
 
+const asNetworkRecord = (v: unknown): NetworkRecord | undefined => {
+  const o = asRecord(v);
+  if (o === undefined) return undefined;
+  const method = asString(o["method"]);
+  const url = asString(o["url"]);
+  const type = asString(o["type"]);
+  if (method === undefined || url === undefined || type === undefined) return undefined;
+  const status = asNumber(o["status"]);
+  const statusText = asString(o["statusText"]);
+  const mimeType = asString(o["mimeType"]);
+  const durationMs = asNumber(o["durationMs"]);
+  const responseBodySize = asNumber(o["responseBodySize"]);
+  const failed = asBoolean(o["failed"]);
+  const errorText = asString(o["errorText"]);
+  const bodyRaw = o["body"];
+  const body = typeof bodyRaw === "string" || bodyRaw === null ? bodyRaw : undefined;
+  return {
+    requestId: asString(o["requestId"]) ?? "",
+    method,
+    url,
+    type,
+    requestStartedMs: asNumber(o["requestStartedMs"]) ?? 0,
+    requestBodySize: asNumber(o["requestBodySize"]) ?? 0,
+    ...(status !== undefined ? { status } : {}),
+    ...(statusText !== undefined ? { statusText } : {}),
+    ...(mimeType !== undefined ? { mimeType } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(responseBodySize !== undefined ? { responseBodySize } : {}),
+    ...(failed !== undefined ? { failed } : {}),
+    ...(errorText !== undefined ? { errorText } : {}),
+    ...(body !== undefined ? { body } : {}),
+  };
+};
+
+const asNetworkDetails = (v: unknown): NetworkDetails | undefined => {
+  const o = asRecord(v);
+  if (o === undefined) return undefined;
+  const requests = asArrayOf(o["requests"], asNetworkRecord);
+  if (requests === undefined) return undefined;
+  const fullOutputPath = asString(o["fullOutputPath"]);
+  return {
+    total: asNumber(o["total"]) ?? requests.length,
+    returned: asNumber(o["returned"]) ?? requests.length,
+    bufferOverflowed: asBoolean(o["bufferOverflowed"]) ?? false,
+    truncated: asBoolean(o["truncated"]) ?? false,
+    requests,
+    includeBodies: asBoolean(o["includeBodies"]) ?? false,
+    ...(fullOutputPath !== undefined ? { fullOutputPath } : {}),
+  };
+};
+
 export const networkRequestsTool = defineBrowserTool({
   name: "browser_network_requests",
   label: "Browser Network Requests",
@@ -235,7 +287,7 @@ export const networkRequestsTool = defineBrowserTool({
   },
 
   renderResult(result, expanded, theme) {
-    const details = result.details as NetworkDetails | undefined;
+    const details = asNetworkDetails(result.details);
     if (!details) return new Text(theme.fg("error", "network: no details"), 0, 0);
 
     const md = renderNetworkMarkdown(details.requests, {

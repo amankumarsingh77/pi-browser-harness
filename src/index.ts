@@ -33,9 +33,10 @@ import { type BrowserState, defaultState, persistState, restoreState } from "./s
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
 import { createDaemonTransport } from "./cdp/daemon-transport";
+import { asString } from "./util/guards";
 
 export default function browserHarnessExtension(pi: ExtensionAPI): void {
-  const flagNs = pi.getFlag("browser-namespace") as string | undefined;
+  const flagNs = asString(pi.getFlag("browser-namespace"));
   const namespace = flagNs ?? `pi-${Math.random().toString(36).slice(2, 10)}`;
 
   let state: BrowserState = defaultState(namespace);

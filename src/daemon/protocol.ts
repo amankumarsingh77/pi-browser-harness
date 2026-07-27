@@ -10,6 +10,8 @@
  *   - readline line-delimited: https://nodejs.org/docs/latest-v22.x/api/readline.html#event-line
  */
 
+import { isRecord } from "../util/guards";
+
 // ── Message types ──────────────────────────────────────────────────────────────
 
 /** A CDP command sent from a pi client to the daemon. */
@@ -60,15 +62,12 @@ export type WireMessage = WireRequest | WireResponse | WireEvent | WireControl;
 
 // ── Type guard ─────────────────────────────────────────────────────────────────
 
-const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
 /**
  * Validates that an unknown parsed-JSON value is a well-formed WireMessage.
  * Does NOT validate the full CDP semantics — only structural shape.
  */
 export const isWireMessage = (v: unknown): v is WireMessage => {
-  if (!isObject(v)) return false;
+  if (!isRecord(v)) return false;
   const t = v["type"];
   if (typeof t !== "string") return false;
 
@@ -84,7 +83,7 @@ export const isWireMessage = (v: unknown): v is WireMessage => {
       if (typeof v["id"] !== "number") return false;
       const errVal = v["error"];
       if (errVal !== undefined) {
-        if (!isObject(errVal)) return false;
+        if (!isRecord(errVal)) return false;
         if (typeof errVal["message"] !== "string") return false;
         if (typeof errVal["code"] !== "number") return false;
       }

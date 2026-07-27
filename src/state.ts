@@ -6,6 +6,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { asArrayOf, asNumber, asString, isRecord } from "./util/guards";
 
 export type BrowserState = {
   readonly namespace: string;
@@ -31,13 +32,29 @@ export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
  * If `currentNamespace` is supplied (e.g. from the --browser-namespace flag),
  * it overrides whatever is in the persisted entry.
  */
+const asPersistedState = (v: unknown): Partial<BrowserState> | undefined => {
+  if (!isRecord(v)) return undefined;
+  const namespace = asString(v["namespace"]);
+  const remoteBrowserId = asString(v["remoteBrowserId"]);
+  const ownedTargetIds = asArrayOf(v["ownedTargetIds"], asString);
+  const harnessWindowTargetId = asString(v["harnessWindowTargetId"]);
+  const harnessWindowId = asNumber(v["harnessWindowId"]);
+  return {
+    ...(namespace !== undefined ? { namespace } : {}),
+    ...(remoteBrowserId !== undefined ? { remoteBrowserId } : {}),
+    ...(ownedTargetIds !== undefined ? { ownedTargetIds } : {}),
+    ...(harnessWindowTargetId !== undefined ? { harnessWindowTargetId } : {}),
+    ...(harnessWindowId !== undefined ? { harnessWindowId } : {}),
+  };
+};
+
 export const restoreState = (ctx: ExtensionContext, currentNamespace?: string): BrowserState => {
   const branchEntries = ctx.sessionManager.getBranch();
   const fallback = defaultState(currentNamespace);
   for (let i = branchEntries.length - 1; i >= 0; i--) {
     const entry = branchEntries[i];
     if (entry?.type === "custom" && entry.customType === "browser-harness-state") {
-      const data = entry.data as Partial<BrowserState> | undefined;
+      const data = asPersistedState(entry.data);
       if (data) {
         return {
           ...fallback,

@@ -43,3 +43,62 @@ describe("cdp command table", () => {
     assert.equal(r.success, false);
   });
 });
+
+describe("Accessibility.getFullAXTree schema", () => {
+  test("accepts a realistic Chrome AX node with unmodelled extra fields", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", {
+      nodes: [
+        {
+          nodeId: "1",
+          ignored: false,
+          role: { type: "role", value: "RootWebArea" },
+          chromeRole: { type: "internalRole", value: 144 },
+          name: { type: "computedString", value: "Example", sources: [{ type: "relatedElement" }] },
+          properties: [
+            { name: "focusable", value: { type: "booleanOrUndefined", value: true } },
+            { name: "level", value: { type: "integer", value: 2 } },
+          ],
+          childIds: ["2", "3"],
+          backendDOMNodeId: 7,
+          frameId: "F1",
+        },
+        { nodeId: "2", parentId: "1", ignored: true, ignoredReasons: [{ name: "notRendered" }] },
+      ],
+    });
+    assert.equal(r.success, true);
+    if (r.success) {
+      assert.equal(r.data.nodes.length, 2);
+      assert.equal(r.data.nodes[0]?.role?.value, "RootWebArea");
+      assert.equal(r.data.nodes[0]?.backendDOMNodeId, 7);
+      assert.deepEqual(r.data.nodes[0]?.childIds, ["2", "3"]);
+    }
+  });
+
+  test("accepts an empty node list", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", { nodes: [] });
+    assert.equal(r.success, true);
+  });
+
+  test("rejects a node whose nodeId is not a string", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", { nodes: [{ nodeId: 5 }] });
+    assert.equal(r.success, false);
+    if (!r.success) assert.equal(r.error.kind, "invalid_response");
+  });
+
+  test("rejects childIds that are not strings", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", { nodes: [{ nodeId: "1", childIds: [2] }] });
+    assert.equal(r.success, false);
+  });
+
+  test("rejects a missing nodes array", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", {});
+    assert.equal(r.success, false);
+  });
+
+  test("keeps an AxValue's value untyped so any Chrome value type decodes", () => {
+    const r = decodeResult("Accessibility.getFullAXTree", {
+      nodes: [{ nodeId: "1", value: { type: "number", value: 42 } }, { nodeId: "2", name: { type: "x", value: null } }],
+    });
+    assert.equal(r.success, true);
+  });
+});

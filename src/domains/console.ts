@@ -5,6 +5,7 @@ import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import type { ConsoleRecord, ConsoleLevel } from "../cdp/console-buffer";
+import { asArrayOf, asBoolean, asNumber, asRecord, asString } from "../util/guards";
 
 const ConsoleArgs = Type.Object({
   levels: Type.Optional(
@@ -106,6 +107,50 @@ type ConsoleDetails = {
   nextCursor?: number;
 };
 
+const CONSOLE_LEVELS: ReadonlyArray<ConsoleLevel> = ["log", "info", "warn", "error", "debug"];
+
+const asConsoleLevel = (v: unknown): ConsoleLevel | undefined =>
+  CONSOLE_LEVELS.find((l) => l === v);
+
+const asConsoleRecord = (v: unknown): ConsoleRecord | undefined => {
+  const o = asRecord(v);
+  if (o === undefined) return undefined;
+  const level = asConsoleLevel(o["level"]);
+  const text = asString(o["text"]);
+  if (level === undefined || text === undefined) return undefined;
+  const url = asString(o["url"]);
+  const lineNumber = asNumber(o["lineNumber"]);
+  const stackTrace = asString(o["stackTrace"]);
+  return {
+    seq: asNumber(o["seq"]) ?? 0,
+    timestampMs: asNumber(o["timestampMs"]) ?? 0,
+    level,
+    text,
+    source: o["source"] === "log-entry" ? "log-entry" : "console-api",
+    ...(url !== undefined ? { url } : {}),
+    ...(lineNumber !== undefined ? { lineNumber } : {}),
+    ...(stackTrace !== undefined ? { stackTrace } : {}),
+  };
+};
+
+const asConsoleDetails = (v: unknown): ConsoleDetails | undefined => {
+  const o = asRecord(v);
+  if (o === undefined) return undefined;
+  const records = asArrayOf(o["records"], asConsoleRecord);
+  if (records === undefined) return undefined;
+  const fullOutputPath = asString(o["fullOutputPath"]);
+  const nextCursor = asNumber(o["nextCursor"]);
+  return {
+    total: asNumber(o["total"]) ?? records.length,
+    returned: asNumber(o["returned"]) ?? records.length,
+    bufferOverflowed: asBoolean(o["bufferOverflowed"]) ?? false,
+    truncated: asBoolean(o["truncated"]) ?? false,
+    records,
+    ...(fullOutputPath !== undefined ? { fullOutputPath } : {}),
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
+};
+
 export const consoleTool = defineBrowserTool({
   name: "browser_console",
   label: "Browser Console",
@@ -156,7 +201,7 @@ export const consoleTool = defineBrowserTool({
   },
 
   renderResult(result, expanded, theme) {
-    const details = result.details as ConsoleDetails | undefined;
+    const details = asConsoleDetails(result.details);
     if (!details) return new Text(theme.fg("error", "console: no details"), 0, 0);
 
     const md = renderConsoleMarkdown(details.records, {

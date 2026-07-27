@@ -7,6 +7,7 @@ import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
+import { asRecord, asString } from "../util/guards";
 import { safeJs } from "../util/js-template";
 import { cdpCall } from "./cdp-call";
 
@@ -91,15 +92,16 @@ export const screenshotTool = defineBrowserTool({
   },
 
   renderResult(result, _expanded, theme) {
-    const details = result.details as { path?: string; format?: string } | undefined;
-    const filePath = details?.path;
+    const raw = asRecord(result.details);
+    const filePath = raw === undefined ? undefined : asString(raw["path"]);
     if (!filePath) {
       return new Text(theme.fg("error", "Screenshot path missing"), 0, 0);
     }
+    const format = raw === undefined ? undefined : asString(raw["format"]);
     try {
       const buf = readFileSync(filePath);
       const b64 = buf.toString("base64");
-      const mimeType = details?.format === "jpeg" ? "image/jpeg" : "image/png";
+      const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
       const imageTheme: ImageTheme = {
         fallbackColor: (str: string) => theme.fg("dim", str),
       };

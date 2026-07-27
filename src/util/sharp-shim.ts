@@ -20,21 +20,21 @@ export type SharpLoad =
   | { readonly kind: "missing" }
   | { readonly kind: "error"; readonly message: string };
 
+const SHARP_SPECIFIER: string = "sharp";
+
+const MISSING_MODULE_MARKERS: ReadonlyArray<string> = [
+  "Cannot find module",
+  "MODULE_NOT_FOUND",
+  "ERR_MODULE_NOT_FOUND",
+];
+
 export const loadSharp = async (): Promise<SharpLoad> => {
   let mod: unknown;
   try {
-    // sharp is an optional dependency; it may not be installed.
-    // @ts-ignore — optional peer dependency not required at compile time
-    mod = await import("sharp");
+    mod = await import(SHARP_SPECIFIER);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (
-      msg.includes("Cannot find module") ||
-      msg.includes("MODULE_NOT_FOUND") ||
-      msg.includes("ERR_MODULE_NOT_FOUND")
-    ) {
-      return { kind: "missing" };
-    }
+    if (MISSING_MODULE_MARKERS.some((marker) => msg.includes(marker))) return { kind: "missing" };
     return { kind: "error", message: msg };
   }
   if (mod === null || mod === undefined) return { kind: "missing" };

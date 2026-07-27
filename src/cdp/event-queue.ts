@@ -30,7 +30,7 @@ export type EventQueue = {
 
 export const makeEventQueue = (): EventQueue => {
   const buf: CdpEvent[] = [];
-  const waiters: Array<(v: IteratorResult<CdpEvent>) => void> = [];
+  const waiters: Array<(v: IteratorResult<CdpEvent, undefined>) => void> = [];
   let ended = false;
   return {
     push(e) {
@@ -41,19 +41,16 @@ export const makeEventQueue = (): EventQueue => {
     },
     end() {
       ended = true;
-      // value: undefined as unknown as CdpEvent is the correct iterator-protocol
-      // pattern: when done=true the value field is conventionally undefined but
-      // the TS type still requires CdpEvent.
-      for (const w of waiters.splice(0)) w({ value: undefined as unknown as CdpEvent, done: true });
+      for (const w of waiters.splice(0)) w({ value: undefined, done: true });
     },
     iter: {
-      [Symbol.asyncIterator]() {
+      [Symbol.asyncIterator](): AsyncIterator<CdpEvent, undefined, undefined> {
         return {
-          next: (): Promise<IteratorResult<CdpEvent>> =>
+          next: (): Promise<IteratorResult<CdpEvent, undefined>> =>
             new Promise((resolve) => {
               const next = buf.shift();
               if (next) resolve({ value: next, done: false });
-              else if (ended) resolve({ value: undefined as unknown as CdpEvent, done: true });
+              else if (ended) resolve({ value: undefined, done: true });
               else waiters.push(resolve);
             }),
         };

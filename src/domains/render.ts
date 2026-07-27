@@ -11,6 +11,7 @@ import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
 import type { Theme } from "@mariozechner/pi-coding-agent";
+import { isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_LINES = 6;
 
@@ -24,16 +25,11 @@ export type ExpandableText = {
   readonly fullOutputPath?: string;
 };
 
-const isExpandableText = (value: unknown): value is ExpandableText => {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return typeof v["summary"] === "string" && typeof v["body"] === "string";
-};
+const isExpandableText = (value: unknown): value is ExpandableText =>
+  isRecord(value) && typeof value["summary"] === "string" && typeof value["body"] === "string";
 
-const extractRender = (details: unknown): unknown => {
-  if (typeof details !== "object" || details === null) return undefined;
-  return (details as Record<string, unknown>)["render"];
-};
+const extractRender = (details: unknown): unknown =>
+  isRecord(details) ? details["render"] : undefined;
 
 /**
  * Build a renderResult over an ExpandableText stored in `details.render`.

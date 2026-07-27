@@ -250,7 +250,8 @@ export const createCdpSession = (
         const hw = ownership.harnessWindow();
         if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
 
-        if (survivors.length === 0) {
+        const anchorId = survivors[0];
+        if (anchorId === undefined) {
           // No owned tab survived — the harness window is gone (user closed it,
           // or Chrome restarted and reassigned all ids). The persisted windowId
           // is now meaningless and could even collide with one of the user's
@@ -263,7 +264,6 @@ export const createCdpSession = (
           // Ownership is thus DERIVED from the real window, never from the bare
           // persisted integer (which Chrome may reassign to a user window on
           // restart — anchoring on a survivor makes that misfire impossible).
-          const anchorId = survivors[0]!;
           const anchorWin = await getWindowId(session, anchorId);
           if (anchorWin.success) {
             const anchorWindowId = anchorWin.data;
