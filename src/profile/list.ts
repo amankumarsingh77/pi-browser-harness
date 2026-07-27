@@ -21,6 +21,9 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../schemas/parse";
 
 export type BrowserProfile = {
   /** Profile subdirectory name, e.g. "Default" or "Profile 1". */
@@ -48,21 +51,23 @@ const NON_PROFILE_DIRS: ReadonlySet<string> = new Set([
 export const formatProfileLabel = (name: string, email: string | undefined, dir: string): string =>
   `${name} (${email && email.length > 0 ? email : dir})`;
 
+const JsonObject = Type.Record(Type.String(), Type.Unknown());
+
+const jsonObjectValidator = Compile(JsonObject);
+
 const readJsonFile = async (path: string): Promise<Record<string, unknown> | null> => {
+  let raw: string;
   try {
-    const raw = await readFile(path, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    return parsed as Record<string, unknown>;
+    raw = await readFile(path, "utf8");
   } catch {
-    // Missing file, permission error, or malformed JSON — the caller falls
-    // back to the next tier, and ultimately to an empty list.
     return null;
   }
+  const parsed = parseJson(raw, jsonObjectValidator);
+  return parsed.success ? parsed.data : null;
 };
 
 const asRecord = (v: unknown): Record<string, unknown> | null =>
-  typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  jsonObjectValidator.Check(v) ? v : null;
 
 const asString = (v: unknown): string | undefined =>
   typeof v === "string" && v.length > 0 ? v : undefined;

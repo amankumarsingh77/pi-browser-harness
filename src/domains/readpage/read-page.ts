@@ -1,4 +1,6 @@
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
@@ -24,23 +26,39 @@ const ReadPageArgs = Type.Object({
   ),
 });
 
-const isPageCapture = (value: unknown): value is PageCapture => {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return typeof v["url"] === "string" && typeof v["title"] === "string" && Array.isArray(v["blocks"]) && typeof v["bodyText"] === "string";
-};
+const ContentBlockSchema = Type.Object({
+  kind: Type.Union([
+    Type.Literal("paragraph"),
+    Type.Literal("heading"),
+    Type.Literal("listitem"),
+    Type.Literal("blockquote"),
+    Type.Literal("other"),
+  ]),
+  text: Type.String(),
+  linkTextLength: Type.Number(),
+  inBoilerplate: Type.Boolean(),
+});
 
-const safeParse = (text: string): unknown => {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
+const PageCaptureSchema = Type.Object({
+  url: Type.String(),
+  title: Type.String(),
+  blocks: Type.Array(ContentBlockSchema),
+  bodyText: Type.String(),
+});
+
+const pageCaptureValidator = Compile(PageCaptureSchema);
+
+const toPageCapture = (raw: unknown): PageCapture | undefined => {
+  if (typeof raw === "string") {
+    const parsed = parseJson(raw, pageCaptureValidator);
+    return parsed.success ? parsed.data : undefined;
   }
+  return pageCaptureValidator.Check(raw) ? raw : undefined;
 };
 
 const captureToResult = async (raw: unknown): Promise<Result<ToolOk, ToolErr>> => {
-  const parsed = typeof raw === "string" ? safeParse(raw) : raw;
-  if (!isPageCapture(parsed)) return err({ kind: "internal", message: "page capture returned an unexpected shape" });
+  const parsed = toPageCapture(raw);
+  if (parsed === undefined) return err({ kind: "internal", message: "page capture returned an unexpected shape" });
   const page: ReadablePage = extractReadable(parsed);
   const header = `# ${page.title}\n${page.url}\n(${page.wordCount} words)\n\n`;
   const truncated = await applyTruncation(header + page.text, "readpage");

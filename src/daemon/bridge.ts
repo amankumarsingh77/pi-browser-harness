@@ -12,6 +12,7 @@
 
 import WebSocket from "ws";
 import { discoverWsUrl } from "../cdp/discovery";
+import { isCdpRawMessage } from "../cdp/types";
 import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
 import { CDP_CONNECT_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS } from "./protocol";
@@ -150,8 +151,10 @@ export const createCdpBridge = (): CdpBridge => {
   // ── Handle raw CDP messages from Chrome ─────────────────────────────────
 
   const onChromeMessage = (raw: string): void => {
-    let msg: CdpRawMessage;
-    try { msg = JSON.parse(raw); } catch { return; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { return; }
+    if (!isCdpRawMessage(parsed)) return;
+    const msg: CdpRawMessage = parsed;
 
     // ---- Response (has id) ----
     if (msg.id !== undefined) {

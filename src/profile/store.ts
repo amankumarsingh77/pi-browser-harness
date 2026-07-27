@@ -18,6 +18,9 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../schemas/parse";
 import { type Result, err, ok } from "../util/result";
 import { pinFilePath } from "./paths";
 
@@ -39,22 +42,26 @@ type PinFile = {
 
 const CURRENT_VERSION = 1;
 
-const parsePin = (value: unknown): ProfilePin | null => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const o = value as Record<string, unknown>;
-  const userDataDir = o["userDataDir"];
-  const profileDir = o["profileDir"];
-  const label = o["label"];
-  const savedAt = o["savedAt"];
-  if (typeof userDataDir !== "string" || userDataDir.length === 0) return null;
-  if (typeof profileDir !== "string" || profileDir.length === 0) return null;
-  return {
-    userDataDir,
-    profileDir,
-    label: typeof label === "string" && label.length > 0 ? label : profileDir,
-    savedAt: typeof savedAt === "string" ? savedAt : "",
-  };
-};
+const PinFileSchema = Type.Object(
+  {
+    version: Type.Literal(CURRENT_VERSION),
+    profile: Type.Union([
+      Type.Object(
+        {
+          userDataDir: Type.String({ minLength: 1 }),
+          profileDir: Type.String({ minLength: 1 }),
+          label: Type.Optional(Type.Unknown()),
+          savedAt: Type.Optional(Type.Unknown()),
+        },
+        { additionalProperties: true },
+      ),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: true },
+);
+
+const pinFileValidator = Compile(PinFileSchema);
 
 /**
  * The persisted pin, or null when nothing is pinned, the file is missing, or
@@ -68,15 +75,17 @@ export const readPin = async (): Promise<ProfilePin | null> => {
   } catch {
     return null;
   }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const file = parsed as Record<string, unknown>;
-    if (file["version"] !== CURRENT_VERSION) return null;
-    return parsePin(file["profile"]);
-  } catch {
-    return null;
-  }
+  const parsed = parseJson(raw, pinFileValidator);
+  if (!parsed.success) return null;
+  const profile = parsed.data.profile;
+  if (profile === null) return null;
+  const { userDataDir, profileDir, label, savedAt } = profile;
+  return {
+    userDataDir,
+    profileDir,
+    label: typeof label === "string" && label.length > 0 ? label : profileDir,
+    savedAt: typeof savedAt === "string" ? savedAt : "",
+  };
 };
 
 /**

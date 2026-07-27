@@ -1,4 +1,6 @@
 import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
@@ -26,11 +28,14 @@ const WebSearchArgs = Type.Object({
 const buildSerpUrl = (query: string, limit: number): string =>
   `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${limit}&hl=en`;
 
-const isSerpExtraction = (value: unknown): value is SerpExtraction => {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return Array.isArray(v["anchors"]) && typeof v["pageText"] === "string";
-};
+const SerpExtractionSchema = Type.Object({
+  anchors: Type.Array(
+    Type.Object({ href: Type.String(), heading: Type.String(), snippet: Type.String() }),
+  ),
+  pageText: Type.String(),
+});
+
+const serpExtractionValidator = Compile(SerpExtractionSchema);
 
 const formatResults = (query: string, results: ReadonlyArray<SearchResult>): string => {
   const lines = results.map((r) => `${r.rank}. ${r.title}\n   ${r.url}\n   ${r.snippet}`);
@@ -69,13 +74,14 @@ export const webSearchTool = defineBrowserTool({
       const extracted = await evalInIsolatedTab(client, tab, buildSerpExtractionExpr(), isJsonText);
       if (!extracted.success) return err(extracted.error);
 
-      const parsedJson = safeParse(extracted.data);
-      if (!isSerpExtraction(parsedJson)) {
-        return err({ kind: "internal", message: "SERP extraction returned an unexpected shape" });
+      const parsedJson = parseJson(extracted.data, serpExtractionValidator);
+      if (!parsedJson.success) {
+        return err({ kind: "internal", message: `SERP extraction returned an unexpected shape: ${parsedJson.error}` });
       }
+      const extraction: SerpExtraction = parsedJson.data;
 
-      const results = parseGoogleSerp(parsedJson.anchors, limit);
-      const verdict = classifySerp(parsedJson.pageText, results.length);
+      const results = parseGoogleSerp(extraction.anchors, limit);
+      const verdict = classifySerp(extraction.pageText, results.length);
       if (verdict !== "ok") {
         return err({
           kind: "invalid_state",
@@ -108,11 +114,3 @@ export const webSearchTool = defineBrowserTool({
     return renderExpandableText("web_search", result, expanded, theme);
   },
 });
-
-const safeParse = (text: string): unknown => {
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
-};

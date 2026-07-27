@@ -2,12 +2,22 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { connect as netConnect } from "node:net";
 import { request as httpRequest } from "node:http";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../schemas/parse";
 import { type Result, err, ok } from "../util/result";
 import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
+
+const VersionResponse = Type.Object(
+  { webSocketDebuggerUrl: Type.Optional(Type.String()) },
+  { additionalProperties: true },
+);
+
+const versionValidator = Compile(VersionResponse);
 
 /**
  * A live CDP endpoint plus, when discovery went through a DevToolsActivePort
@@ -76,13 +86,8 @@ const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null>
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
         res.on("end", () => {
-          try {
-            const json = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-            const ws = json["webSocketDebuggerUrl"];
-            resolve(typeof ws === "string" ? ws : null);
-          } catch {
-            resolve(null);
-          }
+          const parsed = parseJson(Buffer.concat(chunks).toString("utf8"), versionValidator);
+          resolve(parsed.success ? parsed.data.webSocketDebuggerUrl ?? null : null);
         });
       },
     );

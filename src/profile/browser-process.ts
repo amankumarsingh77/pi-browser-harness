@@ -34,6 +34,9 @@ import { execFile } from "node:child_process";
 import { access, readFile, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { Type } from "typebox";
+import { Compile } from "typebox/compile";
+import { parseJson } from "../schemas/parse";
 import { browserNameForUserDataDir } from "./paths";
 
 // execFile, not exec: arguments are passed as an array, with no shell involved.
@@ -275,7 +278,17 @@ const POWERSHELL_QUERY = [
   "| ConvertTo-Json -Compress",
 ].join(" ");
 
-type WinProcess = { ExecutablePath?: string | null; CommandLine?: string | null };
+const WinProcessSchema = Type.Object(
+  {
+    ExecutablePath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    CommandLine: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  },
+  { additionalProperties: true },
+);
+
+const WinProcessesSchema = Type.Union([WinProcessSchema, Type.Array(WinProcessSchema)]);
+
+const winProcessesValidator = Compile(WinProcessesSchema);
 
 const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   try {
@@ -286,19 +299,20 @@ const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
     );
     const trimmed = stdout.trim();
     if (trimmed) {
-      const parsed: unknown = JSON.parse(trimmed);
-      // ConvertTo-Json emits an object for a single row, an array for many.
-      const rows: WinProcess[] = Array.isArray(parsed) ? (parsed as WinProcess[]) : [parsed as WinProcess];
-      const candidates = rows
-        .filter((row) => !hasChildProcessType(row.CommandLine ?? ""))
-        .map((row): BrowserCandidate => {
-          const explicit = parseUserDataDirFlag(row.CommandLine ?? "");
-          return {
-            ...(row.ExecutablePath ? { exePath: row.ExecutablePath } : {}),
-            ...(explicit ? { explicitUserDataDir: explicit } : {}),
-          };
-        });
-      if (candidates.length > 0) return candidates;
+      const parsed = parseJson(trimmed, winProcessesValidator);
+      if (parsed.success) {
+        const rows = Array.isArray(parsed.data) ? parsed.data : [parsed.data];
+        const candidates = rows
+          .filter((row) => !hasChildProcessType(row.CommandLine ?? ""))
+          .map((row): BrowserCandidate => {
+            const explicit = parseUserDataDirFlag(row.CommandLine ?? "");
+            return {
+              ...(row.ExecutablePath ? { exePath: row.ExecutablePath } : {}),
+              ...(explicit ? { explicitUserDataDir: explicit } : {}),
+            };
+          });
+        if (candidates.length > 0) return candidates;
+      }
     }
   } catch {
     // PowerShell missing or blocked by policy — fall through to tasklist.
