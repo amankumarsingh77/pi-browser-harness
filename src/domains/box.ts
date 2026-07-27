@@ -41,7 +41,10 @@ export const boxOf = async (
     return err({ kind: "invalid_state", message: "DOM.getBoxModel returned an incomplete content quad" });
   }
   if (model.width <= 0 || model.height <= 0) {
-    return err({ kind: "invalid_state", message: "element has a zero-size box and cannot be clicked" });
+    return err({
+      kind: "invalid_state",
+      message: "element has a zero-size box and cannot be clicked",
+    });
   }
   return ok(centreOf(model));
 };

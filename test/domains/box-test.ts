@@ -5,6 +5,8 @@ import { centreOf } from "../../src/domains/box";
 describe("box centre", () => {
   test("computes the centre from a content quad", () => {
     const b = centreOf({ content: [10, 20, 110, 20, 110, 70, 10, 70], width: 100, height: 50 });
+    assert.equal(b.x, 10);
+    assert.equal(b.y, 20);
     assert.equal(b.cx, 60);
     assert.equal(b.cy, 45);
     assert.equal(b.width, 100);
