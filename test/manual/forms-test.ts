@@ -15,12 +15,6 @@ import { createBrowserClient } from "../../src/client";
 import { fillTool, selectOptionTool, setCheckedTool } from "../../src/domains/form";
 import { fillFormTool } from "../../src/domains/form-batch";
 
-// NOTE: we intentionally do NOT import snapshotTool here — it pulls in pi-tui /
-// pi-coding-agent value imports that don't resolve under bare tsx. Instead we
-// publish an 'eN' ref map onto the session from Accessibility.getFullAXTree,
-// which is what browser_snapshot does when it prints [eN]. The snapshot's own
-// ref rendering is covered by `npm run typecheck` + the real-page smoke test.
-
 let passed = 0;
 let failed = 0;
 const check = (cond: boolean, label: string): void => {
@@ -60,8 +54,6 @@ const FIXTURE = `
   </script>
 </body></html>`;
 
-// Publish an 'eN' ref map onto the session for the given accessible names and
-// return name → ref, mirroring what browser_snapshot does.
 const publishRefs = async (client: any, names: ReadonlyArray<string>): Promise<Record<string, string | undefined>> => {
   const ax = await client.session().call("Accessibility.getFullAXTree", {});
   if (!ax.success) return {};

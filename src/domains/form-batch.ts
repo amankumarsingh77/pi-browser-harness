@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { type Result, ok } from "../util/result";
+import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { detailsOf, resolveAndCall } from "./form";
 
@@ -99,7 +99,7 @@ export const fillFormTool = defineBrowserTool({
       const res = r.data;
       const wanted = typeof f.value === "boolean" ? undefined : String(f.value);
       const got = res.value !== undefined ? String(res.value) : undefined;
-      const mismatch = wanted !== undefined && got !== undefined && got !== wanted;
+      const mismatch = wanted !== undefined && got !== undefined && got !== wanted && res.text !== wanted;
       const fieldOk = res.ok === true && !mismatch;
       if (fieldOk) okCount++;
       else issues.push(`ref ${f.ref} (${res.ok === false ? (res.reason ?? "failed") : "value mismatch"})`);
@@ -108,6 +108,9 @@ export const fillFormTool = defineBrowserTool({
     const text =
       `Filled ${okCount}/${args.fields.length} fields` +
       (issues.length > 0 ? `; issues: ${issues.join(", ")}` : "");
+    if (okCount === 0) {
+      return err({ kind: "invalid_state", message: text, details: { results } });
+    }
     return ok({ text, details: { results } });
   },
 });
