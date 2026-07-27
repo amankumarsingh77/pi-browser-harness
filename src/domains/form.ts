@@ -40,7 +40,7 @@ const runOnElement = async (
       returnByValue: true,
     });
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-    return ok((r.data as { result?: { value?: unknown } }).result?.value);
+    return ok(r.data.result.value);
   }
   if (opts.selector === undefined) {
     return err({ kind: "invalid_state", message: "Provide either `ref` or `selector`." });
@@ -68,6 +68,18 @@ type FillResult =
   | { status: "ok"; tag: string; kind: string; value: string }
   | { status: "not_found" }
   | { status: "not_fillable"; tag: string };
+
+const isFillResult = (v: unknown): v is FillResult => {
+  if (typeof v !== "object" || v === null || !("status" in v)) return false;
+  if (v.status === "not_found") return true;
+  if (v.status === "not_fillable") return "tag" in v && typeof v.tag === "string";
+  if (v.status === "ok") {
+    return "tag" in v && typeof v.tag === "string"
+      && "kind" in v && typeof v.kind === "string"
+      && "value" in v && typeof v.value === "string";
+  }
+  return false;
+};
 
 // Element-scoped fill logic. `this` is the target element, `arg` is the value.
 // Write via the native prototype value setter so React's _valueTracker
@@ -127,7 +139,7 @@ export const fillTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FILL_FN, arg: args.value });
     if (!r.success) return r;
-    const res = r.data as FillResult | undefined;
+    const res = isFillResult(r.data) ? r.data : undefined;
     const target = args.ref ?? args.selector ?? "";
     if (res === undefined || res.status === "not_found") {
       return err({
@@ -160,6 +172,13 @@ const FocusArgs = Type.Object({
 
 type FocusResult = { status: "ok"; tag: string } | { status: "not_found" } | { status: "not_focusable"; tag: string };
 
+const isFocusResult = (v: unknown): v is FocusResult => {
+  if (typeof v !== "object" || v === null || !("status" in v)) return false;
+  if (v.status === "not_found") return true;
+  if (v.status === "ok" || v.status === "not_focusable") return "tag" in v && typeof v.tag === "string";
+  return false;
+};
+
 const FOCUS_FN = `
   const el = this;
   if (typeof el.focus !== "function") return { status: "not_focusable", tag: el.tagName };
@@ -182,7 +201,7 @@ export const focusTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FOCUS_FN, arg: "" });
     if (!r.success) return r;
-    const res = r.data as FocusResult | undefined;
+    const res = isFocusResult(r.data) ? r.data : undefined;
     const target = args.ref ?? args.selector ?? "";
     if (res === undefined || res.status === "not_found") {
       return err({ kind: "invalid_state", message: `No element matched: ${target}`, details: { ref: args.ref, selector: args.selector } });
@@ -209,6 +228,24 @@ type SelectResult =
   | { status: "not_found" }
   | { status: "not_select"; tag: string }
   | { status: "no_match"; options: ReadonlyArray<{ value: string; label: string }> };
+
+const isSelectOption = (v: unknown): v is { value: string; label: string } =>
+  typeof v === "object" && v !== null
+  && "value" in v && typeof v.value === "string"
+  && "label" in v && typeof v.label === "string";
+
+const isSelectResult = (v: unknown): v is SelectResult => {
+  if (typeof v !== "object" || v === null || !("status" in v)) return false;
+  if (v.status === "not_found") return true;
+  if (v.status === "not_select") return "tag" in v && typeof v.tag === "string";
+  if (v.status === "ok") {
+    return "value" in v && typeof v.value === "string" && "label" in v && typeof v.label === "string";
+  }
+  if (v.status === "no_match") {
+    return "options" in v && Array.isArray(v.options) && v.options.every(isSelectOption);
+  }
+  return false;
+};
 
 // `this` is the <select>; `arg` is { wv, wl, wi } (null = not provided).
 const SELECT_FN = `
@@ -248,7 +285,7 @@ export const selectOptionTool = defineBrowserTool({
     const arg = { wv: args.value ?? null, wl: args.label ?? null, wi: args.index ?? null };
     const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: SELECT_FN, arg });
     if (!r.success) return r;
-    const res = r.data as SelectResult | undefined;
+    const res = isSelectResult(r.data) ? r.data : undefined;
     const target = args.ref ?? args.selector ?? "";
     if (res === undefined || res.status === "not_found") {
       return err({ kind: "invalid_state", message: `No element matched: ${target}`, details: { ref: args.ref, selector: args.selector } });

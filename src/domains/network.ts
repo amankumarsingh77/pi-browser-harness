@@ -202,7 +202,7 @@ export const networkRequestsTool = defineBrowserTool({
           r.body = null;
           return;
         }
-        const b = bodyRes.data as { body: string; base64Encoded?: boolean };
+        const b = bodyRes.data;
         let body = b.base64Encoded ? Buffer.from(b.body, "base64").toString("utf8") : b.body;
         if (body.length > PER_BODY_CAP) body = body.slice(0, PER_BODY_CAP) + "…";
         r.body = body;

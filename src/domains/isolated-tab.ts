@@ -14,6 +14,7 @@ import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
+import { evaluateJson } from "../cdp/evaluate";
 import type { ToolErr } from "../util/tool";
 
 /** A tab attached by its own sessionId, ready to drive via callOnTarget. */
@@ -51,7 +52,7 @@ export const openIsolatedTab = async (client: BrowserClient): Promise<Result<Iso
     await client.closeTab(targetId);
     return err(toToolErr(attached.error.message));
   }
-  const { sessionId } = attached.data as { sessionId: string };
+  const { sessionId } = attached.data;
 
   const enabled = await client.session().callOnTarget("Page.enable", {}, sessionId);
   if (!enabled.success) {
@@ -91,27 +92,20 @@ export const waitForIsolatedLoad = async (
   return err(toToolErr(`page did not finish loading in ${Math.round(timeoutMs / 1000)}s`, "timeout"));
 };
 
-/**
- * Evaluate an expression in the isolated tab and return the raw value. Bounds
- * the eval with a timeout so a blocking dialog cannot hang the tool.
- */
-export const evalInIsolatedTab = async (
+export const isJsonText = (v: unknown): v is string => typeof v === "string";
+
+export const evalInIsolatedTab = async <T>(
   client: BrowserClient,
   tab: IsolatedTab,
   expression: string,
-): Promise<Result<unknown, ToolErr>> => {
-  const r = await client.session().callOnTarget(
-    "Runtime.evaluate",
-    { expression, returnByValue: true, awaitPromise: true },
-    tab.sessionId,
-    { timeoutMs: EVAL_TIMEOUT_MS },
-  );
+  check: (v: unknown) => v is T,
+): Promise<Result<T, ToolErr>> => {
+  const r = await evaluateJson(client.session(), expression, check, {
+    sessionId: tab.sessionId,
+    timeoutMs: EVAL_TIMEOUT_MS,
+  });
   if (!r.success) return err(toToolErr(r.error.message, r.error.kind === "timeout" ? "timeout" : "cdp_error"));
-  const data = r.data as { result?: { value?: unknown }; exceptionDetails?: unknown };
-  if (data.exceptionDetails) {
-    return err(toToolErr(`page evaluation failed: ${JSON.stringify(data.exceptionDetails)}`));
-  }
-  return ok(data.result?.value);
+  return ok(r.data);
 };
 
 /** Close an isolated tab and drop its ownership. Best-effort; never throws. */

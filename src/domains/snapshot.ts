@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { CdpSession } from "../cdp/session";
+import { type Box, boxOf } from "./box";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
@@ -40,8 +41,6 @@ export type RawAxNode = {
   properties?: ReadonlyArray<{ name?: string; value?: AxValue }>;
   backendDOMNodeId?: number;
 };
-
-type Box = { x: number; y: number; width: number; height: number; cx: number; cy: number };
 
 export type SlimNode = {
   role: string;
@@ -273,7 +272,7 @@ export const collectInteractiveTargets = (
 const liveValue = async (session: CdpSession, backendId: number): Promise<string | undefined> => {
   const resolved = await session.call("DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) return undefined;
-  const objectId = (resolved.data as { object?: { objectId?: string } }).object?.objectId;
+  const objectId = resolved.data.object.objectId;
   if (!objectId) return undefined;
   const fn = `function () {
     if (this.type === "checkbox" || this.type === "radio") return this.checked ? "checked" : "unchecked";
@@ -286,7 +285,7 @@ const liveValue = async (session: CdpSession, backendId: number): Promise<string
     returnByValue: true,
   });
   if (!r.success) return undefined;
-  const value = (r.data as { result?: { value?: unknown } }).result?.value;
+  const value = r.data.result.value;
   return typeof value === "string" ? value : undefined;
 };
 
@@ -358,27 +357,10 @@ export const snapshotTool = defineBrowserTool({
       await Promise.allSettled(
         targets.map(async ({ node, backendId }) => {
           if (ac.signal.aborted) return;
-          const r = await session.call("DOM.getBoxModel", { backendNodeId: backendId });
-          if (!r.success) return;
-          // CDP boundary cast: DOM.getBoxModel
-          const data = r.data as { model?: { content?: ReadonlyArray<number>; width?: number; height?: number } };
-          const content = data.model?.content;
-          if (!content || content.length < 8) return;
-          // content is [x1,y1, x2,y1, x2,y2, x1,y2] in viewport CSS pixels.
-          const x = content[0]!;
-          const y = content[1]!;
-          const width = data.model!.width ?? 0;
-          const height = data.model!.height ?? 0;
-          // Skip zero-size and off-viewport boxes — they can't be clicked.
-          if (width <= 0 || height <= 0 || x < 0 || y < 0) return;
-          node.box = {
-            x: Math.round(x),
-            y: Math.round(y),
-            width: Math.round(width),
-            height: Math.round(height),
-            cx: Math.round(x + width / 2),
-            cy: Math.round(y + height / 2),
-          };
+          const box = await boxOf(client, backendId);
+          if (!box.success) return;
+          if (box.data.x < 0 || box.data.y < 0) return;
+          node.box = box.data;
           // Override the AX value with the live DOM property for form controls.
           // The AX `value` is stale for freshly-typed / controlled inputs, so the
           // agent can't trust it as a read-back signal. Reading .value/.checked
@@ -410,9 +392,8 @@ export const snapshotTool = defineBrowserTool({
     if (args.includeScreenshot) {
       const shot = await session.call("Page.captureScreenshot", { format: "jpeg", quality: 80 });
       if (shot.success) {
-        const data = (shot.data as { data: string }).data;
         shotPath = screenshotPath(client.namespace, "jpeg");
-        writeFileSync(shotPath, Buffer.from(data, "base64"));
+        writeFileSync(shotPath, Buffer.from(shot.data.data, "base64"));
       }
     }
 

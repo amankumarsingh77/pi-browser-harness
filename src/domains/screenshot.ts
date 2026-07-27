@@ -29,13 +29,13 @@ const captureBase = async (
   const format = args.format ?? "png";
   const quality = args.quality ?? 80;
   const path = screenshotPath(client.namespace, format);
-  const params: Record<string, unknown> = { format, captureBeyondViewport: args.fullPage ?? false };
-  if (format === "jpeg") params["quality"] = quality;
-  const r = await client.session().call("Page.captureScreenshot", params);
+  const r = await client.session().call("Page.captureScreenshot", {
+    format,
+    captureBeyondViewport: args.fullPage ?? false,
+    ...(format === "jpeg" ? { quality } : {}),
+  });
   if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-  // Page.captureScreenshot returns { data: base64 }
-  const data = (r.data as { data: string }).data;
-  await writeFile(path, Buffer.from(data, "base64"));
+  await writeFile(path, Buffer.from(r.data.data, "base64"));
   return ok({ path, format });
 };
 

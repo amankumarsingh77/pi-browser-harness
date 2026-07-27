@@ -9,7 +9,7 @@ type History = { readonly entries: ReadonlyArray<HistoryEntry>; readonly current
 const fetchHistory = async (client: BrowserClient): Promise<Result<History, ToolErr>> => {
   const r = await client.session().call("Page.getNavigationHistory");
   if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
-  return ok(r.data as History);
+  return ok(r.data);
 };
 
 export const goBackTool = defineBrowserTool({

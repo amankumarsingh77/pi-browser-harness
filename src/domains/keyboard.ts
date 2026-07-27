@@ -9,6 +9,13 @@ const TypeArgs = Type.Object({
   text: Type.String({ description: "Text to type" }),
 });
 
+type FocusProbe = { readonly ok: boolean; readonly tag: string | null };
+
+const isFocusProbe = (v: unknown): v is FocusProbe =>
+  typeof v === "object" && v !== null
+  && "ok" in v && typeof v.ok === "boolean"
+  && "tag" in v && (typeof v.tag === "string" || v.tag === null);
+
 export const typeTool = defineBrowserTool({
   name: "browser_type",
   label: "Browser Type",
@@ -32,8 +39,8 @@ export const typeTool = defineBrowserTool({
         return { ok, tag: el ? el.tagName : null };
       })()
     `);
-    if (focused.success) {
-      const f = focused.data as { ok: boolean; tag: string | null };
+    if (focused.success && isFocusProbe(focused.data)) {
+      const f = focused.data;
       if (!f.ok) {
         return err({
           kind: "invalid_state",

@@ -1,9 +1,8 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
+import { type Box, boxOf } from "./box";
 import { buildTree, collectInteractiveTargets, type RawAxNode, type SlimNode } from "./snapshot";
-
-type Box = { x: number; y: number; width: number; height: number; cx: number; cy: number };
 
 const staleErr = (ref: string): ToolErr => ({
   kind: "invalid_state",
@@ -29,7 +28,7 @@ export const resolveRefToObjectId = async (
     // a stale ref rather than a raw CDP error so the agent knows to re-snapshot.
     return err(staleErr(ref));
   }
-  const objectId = (resolved.data as { object?: { objectId?: string } }).object?.objectId;
+  const objectId = resolved.data.object.objectId;
   if (!objectId) return err(staleErr(ref));
   return ok(objectId);
 };
@@ -52,24 +51,9 @@ export const resolveRefToBox = async (
 ): Promise<Result<Box, ToolErr>> => {
   const backendId = client.session().resolveRef(ref);
   if (backendId === undefined) return err(staleErr(ref));
-  const r = await client.session().call("DOM.getBoxModel", { backendNodeId: backendId });
-  if (!r.success) return err(staleErr(ref));
-  const data = r.data as { model?: { content?: ReadonlyArray<number>; width?: number; height?: number } };
-  const content = data.model?.content;
-  if (!content || content.length < 8) return err(staleErr(ref));
-  const x = content[0]!;
-  const y = content[1]!;
-  const width = data.model!.width ?? 0;
-  const height = data.model!.height ?? 0;
-  if (width <= 0 || height <= 0) return err(staleErr(ref));
-  return ok({
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height),
-    cx: Math.round(x + width / 2),
-    cy: Math.round(y + height / 2),
-  });
+  const box = await boxOf(client, backendId);
+  if (!box.success) return err(staleErr(ref));
+  return ok(box.data);
 };
 
 const sigOf = (n: SlimNode): string => `${n.role}|${n.name ?? ""}|${n.value ?? ""}|${n.state ?? ""}`;

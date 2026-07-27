@@ -128,6 +128,23 @@ type PageResult = {
   readonly options?: ReadonlyArray<{ value: string; text: string }>;
 };
 
+const isOption = (v: unknown): v is { readonly value: string; readonly text: string } =>
+  typeof v === "object" && v !== null
+  && "value" in v && typeof v.value === "string"
+  && "text" in v && typeof v.text === "string";
+
+const isPageResult = (v: unknown): v is PageResult => {
+  if (typeof v !== "object" || v === null) return false;
+  if (!("ok" in v) || typeof v.ok !== "boolean") return false;
+  if ("reason" in v && typeof v.reason !== "string") return false;
+  if ("kind" in v && typeof v.kind !== "string") return false;
+  if ("text" in v && typeof v.text !== "string") return false;
+  if ("checked" in v && typeof v.checked !== "boolean") return false;
+  if ("changed" in v && typeof v.changed !== "boolean") return false;
+  if ("options" in v && !(Array.isArray(v.options) && v.options.every(isOption))) return false;
+  return true;
+};
+
 /**
  * Resolve a ref (CDP backendDOMNodeId) to a live JS handle and invoke a
  * page-side function on it. DOM + Runtime are enabled on every session
@@ -149,7 +166,7 @@ const resolveAndCall = async (
       details: { ref },
     });
   }
-  const objectId = (resolved.data as { object?: { objectId?: string } }).object?.objectId;
+  const objectId = resolved.data.object.objectId;
   if (objectId === undefined) {
     return err({
       kind: "invalid_state",
@@ -167,15 +184,14 @@ const resolveAndCall = async (
       awaitPromise: true,
     });
     if (!called.success) return err({ kind: "cdp_error", message: called.error.message, details: { ref } });
-    const data = called.data as { result?: { value?: unknown }; exceptionDetails?: unknown };
-    if (data.exceptionDetails !== undefined) {
-      return err({ kind: "cdp_error", message: `page function threw: ${JSON.stringify(data.exceptionDetails)}`, details: { ref } });
+    if (called.data.exceptionDetails !== undefined) {
+      return err({ kind: "cdp_error", message: `page function threw: ${JSON.stringify(called.data.exceptionDetails)}`, details: { ref } });
     }
-    const value = data.result?.value;
-    if (typeof value !== "object" || value === null) {
+    const value = called.data.result.value;
+    if (!isPageResult(value)) {
       return err({ kind: "internal", message: "page function returned no result object", details: { ref } });
     }
-    return ok(value as PageResult);
+    return ok(value);
   } finally {
     // Best-effort: release the remote handle so it can be GC'd. Failure is
     // harmless (the page may have navigated), so we ignore the result.
