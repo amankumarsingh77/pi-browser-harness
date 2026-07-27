@@ -311,3 +311,115 @@ export const selectOptionTool = defineBrowserTool({
     });
   },
 });
+
+export type PageResult = {
+  readonly ok: boolean;
+  readonly reason?: string;
+  readonly kind?: string;
+  readonly value?: unknown;
+  readonly text?: string;
+  readonly checked?: boolean;
+  readonly changed?: boolean;
+  readonly options?: ReadonlyArray<{ value: string; text: string }>;
+};
+
+const isOption = (v: unknown): v is { readonly value: string; readonly text: string } =>
+  typeof v === "object" && v !== null
+  && "value" in v && typeof v.value === "string"
+  && "text" in v && typeof v.text === "string";
+
+const isPageResult = (v: unknown): v is PageResult => {
+  if (typeof v !== "object" || v === null) return false;
+  if (!("ok" in v) || typeof v.ok !== "boolean") return false;
+  if ("reason" in v && typeof v.reason !== "string") return false;
+  if ("kind" in v && typeof v.kind !== "string") return false;
+  if ("text" in v && typeof v.text !== "string") return false;
+  if ("checked" in v && typeof v.checked !== "boolean") return false;
+  if ("changed" in v && typeof v.changed !== "boolean") return false;
+  if ("options" in v && !(Array.isArray(v.options) && v.options.every(isOption))) return false;
+  return true;
+};
+
+export const resolveAndCall = async (
+  client: BrowserClient,
+  ref: string,
+  functionDeclaration: string,
+  args: ReadonlyArray<unknown>,
+): Promise<Result<PageResult, ToolErr>> => {
+  const objectId = await resolveRefToObjectId(client, ref);
+  if (!objectId.success) return objectId;
+  const handle = objectId.data;
+  try {
+    const called = await client.session().call("Runtime.callFunctionOn", {
+      objectId: handle,
+      functionDeclaration,
+      arguments: args.map((v) => ({ value: v })),
+      returnByValue: true,
+      awaitPromise: true,
+    });
+    if (!called.success) return err({ kind: "cdp_error", message: called.error.message, details: { ref } });
+    if (called.data.exceptionDetails !== undefined) {
+      return err({ kind: "cdp_error", message: `page function threw: ${JSON.stringify(called.data.exceptionDetails)}`, details: { ref } });
+    }
+    const value = called.data.result.value;
+    if (!isPageResult(value)) {
+      return err({ kind: "internal", message: "page function returned no result object", details: { ref } });
+    }
+    return ok(value);
+  } finally {
+    await client.session().call("Runtime.releaseObject", { objectId: handle });
+  }
+};
+
+export const detailsOf = (ref: string, res: PageResult, extra?: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => {
+  const { ok: _ok, ...rest } = res;
+  return { ref, ...rest, ...(extra ?? {}) };
+};
+
+const CHECK_FN = `
+function(checked) {
+  const el = this;
+  const tag = (el.tagName || "").toLowerCase();
+  const type = (el.type || "").toLowerCase();
+  if (tag !== "input" || (type !== "checkbox" && type !== "radio")) return { ok: false, reason: "ref is not a checkbox or radio" };
+  if (el.disabled) return { ok: false, reason: "element is disabled" };
+  const want = checked === true;
+  let changed = false;
+  if (el.checked !== want) {
+    try { el.click(); } catch (e) {}
+    if (el.checked !== want) { el.checked = want; el.dispatchEvent(new Event("change", { bubbles: true })); }
+    changed = true;
+  }
+  return { ok: true, checked: el.checked, changed: changed };
+}`;
+
+const SetCheckedArgs = Type.Object({
+  ref: Type.String({ description: "Stable element ref of a checkbox or radio from browser_snapshot (e.g. 'e7')." }),
+  checked: Type.Boolean({ description: "Desired checked state." }),
+});
+
+export const setCheckedTool = defineBrowserTool({
+  name: "browser_set_checked",
+  label: "Browser Set Checked",
+  description:
+    "Set a checkbox or radio to a desired checked state by ref. Only acts if the current state differs, fires change, and reports the final state. Get the ref from browser_snapshot's [eN].",
+  promptSnippet: "Set a checkbox/radio checked state by ref",
+  promptGuidelines: [
+    "checked:true ticks the box, checked:false unticks it. Idempotent — no-op if already in the desired state.",
+    "For radios, set checked:true on the option you want; the group deselects the others.",
+  ],
+  parameters: SetCheckedArgs,
+  concurrency: "serialized",
+  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+    const r = await resolveAndCall(client, args.ref, CHECK_FN, [args.checked]);
+    if (!r.success) return r;
+    const res = r.data;
+    if (!res.ok) {
+      return err({ kind: "invalid_state", message: `Could not set checked on ref ${args.ref}: ${res.reason ?? "unknown reason"}`, details: detailsOf(args.ref, res) });
+    }
+    return ok({
+      text: `Set ref ${args.ref} checked=${res.checked}` + (res.changed === false ? " (already)" : ""),
+      details: detailsOf(args.ref, res),
+    });
+  },
+});

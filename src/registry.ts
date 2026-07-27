@@ -3,7 +3,8 @@ import type { BrowserClient } from "./client";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "./util/tool";
 import { clickTool } from "./domains/click";
 import { typeTool, pressKeyTool, dispatchKeyTool } from "./domains/keyboard";
-import { fillTool, selectOptionTool, focusTool } from "./domains/form";
+import { fillTool, selectOptionTool, focusTool, setCheckedTool } from "./domains/form";
+import { fillFormTool } from "./domains/form-batch";
 import { pageInfoTool, waitTool, waitForLoadTool, waitForTool } from "./domains/page";
 import { scrollTool } from "./domains/scroll";
 import { handleDialogTool } from "./domains/dialog";
@@ -27,7 +28,9 @@ export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   clickTool,
   typeTool,
   fillTool,
+  fillFormTool,
   selectOptionTool,
+  setCheckedTool,
   focusTool,
   pressKeyTool,
   dispatchKeyTool,

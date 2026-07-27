@@ -12,13 +12,14 @@
  */
 import { createDaemonTransport } from "../../src/cdp/daemon-transport";
 import { createBrowserClient } from "../../src/client";
-import { fillTool, fillFormTool, selectOptionTool, setCheckedTool } from "../../src/domains/forms";
+import { fillTool, selectOptionTool, setCheckedTool } from "../../src/domains/form";
+import { fillFormTool } from "../../src/domains/form-batch";
 
 // NOTE: we intentionally do NOT import snapshotTool here — it pulls in pi-tui /
 // pi-coding-agent value imports that don't resolve under bare tsx. Instead we
-// derive refs from Accessibility.getFullAXTree's backendDOMNodeId, which is the
-// exact value browser_snapshot surfaces as [ref=N]. The snapshot's [ref=N]
-// rendering is covered by `npm run typecheck` + the real-page smoke test.
+// publish an 'eN' ref map onto the session from Accessibility.getFullAXTree,
+// which is what browser_snapshot does when it prints [eN]. The snapshot's own
+// ref rendering is covered by `npm run typecheck` + the real-page smoke test.
 
 let passed = 0;
 let failed = 0;
@@ -59,15 +60,30 @@ const FIXTURE = `
   </script>
 </body></html>`;
 
-// Resolve a ref by accessible name via the AX tree — the same backendDOMNodeId
-// that browser_snapshot prints as [ref=N].
-const refByName = async (client: any, name: string): Promise<number | undefined> => {
+// Publish an 'eN' ref map onto the session for the given accessible names and
+// return name → ref, mirroring what browser_snapshot does.
+const publishRefs = async (client: any, names: ReadonlyArray<string>): Promise<Record<string, string | undefined>> => {
   const ax = await client.session().call("Accessibility.getFullAXTree", {});
-  if (!ax.success) return undefined;
+  if (!ax.success) return {};
+  const byName = new Map<string, number>();
   for (const n of (ax.data as any).nodes as any[]) {
-    if (n?.name?.value === name && typeof n.backendDOMNodeId === "number") return n.backendDOMNodeId;
+    if (typeof n?.name?.value === "string" && typeof n.backendDOMNodeId === "number" && !byName.has(n.name.value)) {
+      byName.set(n.name.value, n.backendDOMNodeId);
+    }
   }
-  return undefined;
+  const refMap = new Map<string, number>();
+  const refSig = new Map<string, string>();
+  const out: Record<string, string | undefined> = {};
+  names.forEach((name, i) => {
+    const backendId = byName.get(name);
+    if (backendId === undefined) return;
+    const ref = `e${i + 1}`;
+    refMap.set(ref, backendId);
+    refSig.set(ref, `|${name}||`);
+    out[name] = ref;
+  });
+  client.session().setRefMap(refMap, refSig);
+  return out;
 };
 
 async function main(): Promise<void> {
@@ -84,16 +100,16 @@ async function main(): Promise<void> {
   // Give the inline script a beat to wire up listeners.
   await new Promise((r) => setTimeout(r, 300));
 
-  // ── Resolve refs (the backendDOMNodeId browser_snapshot prints as [ref=N]) ──
+  const byName = await publishRefs(client, ["plain", "ta", "controlled", "country", "agree", "bio"]);
   const refs = {
-    plain: await refByName(client, "plain"),
-    ta: await refByName(client, "ta"),
-    controlled: await refByName(client, "controlled"),
-    sel: await refByName(client, "country"),
-    chk: await refByName(client, "agree"),
-    editable: await refByName(client, "bio"),
+    plain: byName["plain"],
+    ta: byName["ta"],
+    controlled: byName["controlled"],
+    sel: byName["country"],
+    chk: byName["agree"],
+    editable: byName["bio"],
   };
-  for (const [k, v] of Object.entries(refs)) check(typeof v === "number", `ref present for ${k} (${v})`);
+  for (const [k, v] of Object.entries(refs)) check(typeof v === "string", `ref present for ${k} (${v})`);
 
   // ── Batch fill text fields ──────────────────────────────────────────────────
   const fill = await fillFormTool.handler({
