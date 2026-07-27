@@ -13,8 +13,10 @@
  * the previous drain. This is the cursor pattern that makes "what did this action
  * cause?" answerable in one tool call.
  *
- * Pure module (no CDP dependency) — joining/filtering logic stays trivially testable.
+ * Joining/filtering logic stays trivially testable (no transport dependency).
  */
+
+import { decodeEvent } from "./events";
 
 export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
 
@@ -165,21 +167,9 @@ export const createConsoleBuffer = (capacity = 500): ConsoleBuffer => {
 
   return {
     ingestConsoleApi(p) {
-      // CDP boundary cast: Runtime.consoleAPICalled
-      const params = p as
-        | {
-            type?: string;
-            args?: ReadonlyArray<{
-              type?: string;
-              subtype?: string;
-              value?: unknown;
-              description?: string;
-              unserializableValue?: string;
-            }>;
-            stackTrace?: { callFrames?: ReadonlyArray<{ url?: string; lineNumber?: number; functionName?: string }> };
-          }
-        | undefined;
-      if (!params) return;
+      const decoded = decodeEvent("Runtime.consoleAPICalled", p);
+      if (!decoded.success) return;
+      const params = decoded.data;
       const level = mapConsoleApiLevel(params.type);
       const argTexts = (params.args ?? []).map((a) => truncateArg(stringifyRemoteObject(a)));
       const text = argTexts.join(" ");
@@ -199,19 +189,8 @@ export const createConsoleBuffer = (capacity = 500): ConsoleBuffer => {
     },
 
     ingestLogEntry(p) {
-      // CDP boundary cast: Log.entryAdded
-      const params = p as
-        | {
-            entry?: {
-              level?: string;
-              text?: string;
-              url?: string;
-              lineNumber?: number;
-              stackTrace?: { callFrames?: ReadonlyArray<{ url?: string; lineNumber?: number; functionName?: string }> };
-            };
-          }
-        | undefined;
-      const entry = params?.entry;
+      const decoded = decodeEvent("Log.entryAdded", p);
+      const entry = decoded.success ? decoded.data.entry : undefined;
       if (!entry) return;
       const level = mapLogEntryLevel(entry.level);
       const text = truncateArg(entry.text ?? "");
