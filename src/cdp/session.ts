@@ -4,6 +4,7 @@ import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./transport";
 import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
+import { decodeEvent } from "./events";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
 import { attachTo } from "./attach";
@@ -28,6 +29,9 @@ type TabSession = {
   // baseline for the post-mutation auto-diff. Replaced alongside refMap.
   refSig: Map<string, string>;
 };
+
+const dialogType = (raw: string): DialogInfo["type"] =>
+  raw === "confirm" || raw === "prompt" || raw === "beforeunload" ? raw : "alert";
 
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
@@ -88,66 +92,93 @@ export const createCdpSession = (
       if (ev.method !== "Target.targetDestroyed") {
         if (ev.sessionId && ev.sessionId !== sessionId) continue;
       }
-      if (ev.method === "Page.javascriptDialogOpening") {
-        const tab = targetId ? tabs.get(targetId) : undefined;
-        if (!tab) continue;
-        const params = ev.params as Partial<DialogInfo> | undefined;
-        tab.dialog = {
-          type: (params?.type as DialogInfo["type"]) ?? "alert",
-          message: params?.message ?? "",
-          ...(params?.defaultPrompt !== undefined ? { defaultPrompt: params.defaultPrompt } : {}),
-        };
-        continue;
-      }
-      // Page.javascriptDialogClosed is intentionally NOT cleared here —
-      // the dialog stays in the buffer until takeDialog() is called.
-      // This prevents fast dismiss flows from dropping a dialog the agent
-      // was about to read. (Fix for spec §7 predictability bug #2.)
-      if (ev.method === "Page.frameNavigated" || ev.method === "Page.loadEventFired") {
-        const tab = targetId ? tabs.get(targetId) : undefined;
-        if (tab) tab.pageInfoDirty = true;
-      }
-      if (ev.method === "Target.targetCreated" && ownership) {
-        // Adopt tabs opened BY a tab we already own (window.open, target=_blank,
-        // popups). Chrome sets openerId to the opener target; if that opener is
-        // owned, the child belongs to this session's window and must be
-        // controllable + cleaned up. Targets the user opens themselves have no
-        // owned opener, so they are never adopted.
-        const info = (ev.params as { targetInfo?: { targetId?: string; type?: string; openerId?: string } } | undefined)?.targetInfo;
-        if (info?.type === "page" && info.targetId && info.openerId && ownership.has(info.openerId)) {
-          ownership.add(info.targetId);
+      switch (ev.method) {
+        case "Page.javascriptDialogOpening": {
+          const tab = targetId ? tabs.get(targetId) : undefined;
+          if (!tab) break;
+          const decoded = decodeEvent(ev.method, ev.params);
+          tab.dialog = decoded.success
+            ? {
+                type: dialogType(decoded.data.type),
+                message: decoded.data.message,
+                ...(decoded.data.defaultPrompt !== undefined
+                  ? { defaultPrompt: decoded.data.defaultPrompt }
+                  : {}),
+              }
+            : { type: "alert", message: "" };
+          break;
         }
-      }
-      if (ev.method === "Target.targetDestroyed" && ownership) {
-        const params = ev.params as { targetId?: string } | undefined;
-        if (params?.targetId) {
-          ownership.remove(params.targetId);
+        // Page.javascriptDialogClosed is intentionally NOT cleared here —
+        // the dialog stays in the buffer until takeDialog() is called.
+        // This prevents fast dismiss flows from dropping a dialog the agent
+        // was about to read. (Fix for spec §7 predictability bug #2.)
+        case "Page.frameNavigated":
+        case "Page.loadEventFired": {
+          const tab = targetId ? tabs.get(targetId) : undefined;
+          if (tab) tab.pageInfoDirty = true;
+          break;
+        }
+        case "Target.targetCreated": {
+          // Adopt tabs opened BY a tab we already own (window.open, target=_blank,
+          // popups). Chrome sets openerId to the opener target; if that opener is
+          // owned, the child belongs to this session's window and must be
+          // controllable + cleaned up. Targets the user opens themselves have no
+          // owned opener, so they are never adopted.
+          if (!ownership) break;
+          const decoded = decodeEvent(ev.method, ev.params);
+          if (!decoded.success) break;
+          const info = decoded.data.targetInfo;
+          if (info.type === "page" && info.targetId && info.openerId && ownership.has(info.openerId)) {
+            ownership.add(info.targetId);
+          }
+          break;
+        }
+        case "Target.targetDestroyed": {
+          if (!ownership) break;
+          const decoded = decodeEvent(ev.method, ev.params);
+          if (!decoded.success || !decoded.data.targetId) break;
+          const destroyed = decoded.data.targetId;
+          ownership.remove(destroyed);
           // Prune per-tab state for the destroyed target
-          const tab = tabs.get(params.targetId);
+          const tab = tabs.get(destroyed);
           if (tab) {
             sessionIdToTargetId.delete(tab.sessionId);
-            tabs.delete(params.targetId);
+            tabs.delete(destroyed);
           }
+          break;
         }
-      }
-      if (ev.method === "Network.requestWillBeSent") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.networkBuffer.ingestRequestWillBeSent(ev.params);
-      } else if (ev.method === "Network.responseReceived") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.networkBuffer.ingestResponseReceived(ev.params);
-      } else if (ev.method === "Network.loadingFinished") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.networkBuffer.ingestLoadingFinished(ev.params);
-      } else if (ev.method === "Network.loadingFailed") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.networkBuffer.ingestLoadingFailed(ev.params);
-      } else if (ev.method === "Runtime.consoleAPICalled") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.consoleBuffer.ingestConsoleApi(ev.params);
-      } else if (ev.method === "Log.entryAdded") {
-        const tab = resolveTab(ev.sessionId);
-        if (tab) tab.consoleBuffer.ingestLogEntry(ev.params);
+        case "Network.requestWillBeSent": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.networkBuffer.ingestRequestWillBeSent(ev.params);
+          break;
+        }
+        case "Network.responseReceived": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.networkBuffer.ingestResponseReceived(ev.params);
+          break;
+        }
+        case "Network.loadingFinished": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.networkBuffer.ingestLoadingFinished(ev.params);
+          break;
+        }
+        case "Network.loadingFailed": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.networkBuffer.ingestLoadingFailed(ev.params);
+          break;
+        }
+        case "Runtime.consoleAPICalled": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.consoleBuffer.ingestConsoleApi(ev.params);
+          break;
+        }
+        case "Log.entryAdded": {
+          const tab = resolveTab(ev.sessionId);
+          if (tab) tab.consoleBuffer.ingestLogEntry(ev.params);
+          break;
+        }
+        default:
+          break;
       }
     }
   };

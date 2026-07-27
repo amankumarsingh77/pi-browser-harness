@@ -10,9 +10,11 @@
  * evicted FIFO. The overflow flag is reported once per drain so tools can warn
  * the LLM that data may be missing.
  *
- * This module is pure (no CDP dependency) so the joining/filtering logic stays
+ * This module has no transport dependency, so the joining/filtering logic stays
  * trivially testable in isolation.
  */
+
+import { decodeEvent } from "./events";
 
 export type NetworkRecord = {
   requestId: string;
@@ -91,29 +93,16 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
 
   return {
     ingestRequestWillBeSent(p) {
-      // CDP boundary cast: Network.requestWillBeSent
-      const params = p as
-        | {
-            requestId?: string;
-            request?: {
-              url?: string;
-              method?: string;
-              postData?: string;
-              headers?: Record<string, string>;
-            };
-            type?: string;
-            timestamp?: number;
-            wallTime?: number;
-          }
-        | undefined;
+      const decoded = decodeEvent("Network.requestWillBeSent", p);
+      const params = decoded.success ? decoded.data : undefined;
       const id = params?.requestId;
-      const url = params?.request?.url;
-      const method = params?.request?.method;
+      const url = params?.request.url;
+      const method = params?.request.method;
       if (!id || !url || !method) return;
       // Re-fired requestWillBeSent for the same id (e.g. redirect) — refresh in place.
       records.delete(id);
       evictOldestIfFull();
-      const postData = params.request?.postData;
+      const postData = params.request.postData;
       records.set(id, {
         requestId: id,
         method,
@@ -125,18 +114,8 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
     },
 
     ingestResponseReceived(p) {
-      // CDP boundary cast: Network.responseReceived
-      const params = p as
-        | {
-            requestId?: string;
-            response?: {
-              status?: number;
-              statusText?: string;
-              mimeType?: string;
-            };
-            type?: string;
-          }
-        | undefined;
+      const decoded = decodeEvent("Network.responseReceived", p);
+      const params = decoded.success ? decoded.data : undefined;
       const id = params?.requestId;
       if (!id) return;
       const r = records.get(id);
@@ -149,10 +128,8 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
     },
 
     ingestLoadingFinished(p) {
-      // CDP boundary cast: Network.loadingFinished
-      const params = p as
-        | { requestId?: string; encodedDataLength?: number }
-        | undefined;
+      const decoded = decodeEvent("Network.loadingFinished", p);
+      const params = decoded.success ? decoded.data : undefined;
       const id = params?.requestId;
       if (!id) return;
       const r = records.get(id);
@@ -162,10 +139,8 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
     },
 
     ingestLoadingFailed(p) {
-      // CDP boundary cast: Network.loadingFailed
-      const params = p as
-        | { requestId?: string; errorText?: string; canceled?: boolean }
-        | undefined;
+      const decoded = decodeEvent("Network.loadingFailed", p);
+      const params = decoded.success ? decoded.data : undefined;
       const id = params?.requestId;
       if (!id) return;
       const r = records.get(id);
