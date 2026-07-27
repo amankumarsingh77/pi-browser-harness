@@ -12,6 +12,8 @@ const SERIALIZED = new Set([
   "browser_click",
   "browser_type",
   "browser_fill",
+  "browser_fill_form",
+  "browser_set_checked",
   "browser_select_option",
   "browser_focus",
   "browser_press_key",
