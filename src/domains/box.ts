@@ -1,6 +1,7 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 
 export type Box = {
   readonly x: number;
@@ -34,8 +35,8 @@ export const boxOf = async (
   client: BrowserClient,
   backendNodeId: number,
 ): Promise<Result<Box, ToolErr>> => {
-  const r = await client.session().call("DOM.getBoxModel", { backendNodeId });
-  if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+  const r = await cdpCall(client, "DOM.getBoxModel", { backendNodeId });
+  if (!r.success) return r;
   const model = r.data.model;
   if (model.content.length < 8) {
     return err({ kind: "invalid_state", message: "DOM.getBoxModel returned an incomplete content quad" });

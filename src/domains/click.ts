@@ -2,10 +2,12 @@ import { Type } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
 import { Coords, MouseButton } from "../schemas/common";
-import { type Result, err, ok } from "../util/result";
+import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 import { captureWithCrosshair } from "./screenshot";
-import { interactiveDiff, resolveRefToBox } from "./ref-resolve";
+import { interactiveDiff } from "./ref-resolve";
+import { resolveTarget } from "./target";
 
 const ClickArgs = Type.Object({
   ref: Type.Optional(
@@ -37,18 +39,16 @@ const dispatchClick = async (
   // Move the pointer to the target first. Some focus/hover handlers (and React
   // synthetic events) only fire when a mousemove precedes the press, so without
   // it a click can land without focusing the element.
-  const moved = await client.session().call("Input.dispatchMouseEvent", {
-    type: "mouseMoved", x, y,
-  });
-  if (!moved.success) return err({ kind: "cdp_error", message: moved.error.message });
-  const pressed = await client.session().call("Input.dispatchMouseEvent", {
+  const moved = await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  if (!moved.success) return moved;
+  const pressed = await cdpCall(client, "Input.dispatchMouseEvent", {
     type: "mousePressed", x, y, button, clickCount: count,
   });
-  if (!pressed.success) return err({ kind: "cdp_error", message: pressed.error.message });
-  const released = await client.session().call("Input.dispatchMouseEvent", {
+  if (!pressed.success) return pressed;
+  const released = await cdpCall(client, "Input.dispatchMouseEvent", {
     type: "mouseReleased", x, y, button, clickCount: count,
   });
-  if (!released.success) return err({ kind: "cdp_error", message: released.error.message });
+  if (!released.success) return released;
   return ok(undefined);
 };
 
@@ -73,26 +73,13 @@ export const clickTool = defineBrowserTool({
     const button = args.button ?? "left";
     const count = args.count ?? 1;
 
-    // Resolve the click point: ref re-resolves to the element's CURRENT box
-    // (so re-renders don't matter); otherwise use the literal x/y.
-    let x: number;
-    let y: number;
-    if (args.ref !== undefined) {
-      const box = await resolveRefToBox(client, args.ref);
-      if (!box.success) return box;
-      x = box.data.cx;
-      y = box.data.cy;
-    } else if (args.x !== undefined && args.y !== undefined) {
-      x = args.x;
-      y = args.y;
-    } else {
-      return err({ kind: "invalid_state", message: "Provide either `ref` or both `x` and `y`." });
-    }
+    const resolved = await resolveTarget(client, args);
+    if (!resolved.success) return resolved;
+    const { x, y, label: target } = resolved.data;
 
     const clicked = await dispatchClick(client, x, y, button, count);
     if (!clicked.success) return clicked;
 
-    const target = args.ref !== undefined ? `[${args.ref}] (${x}, ${y})` : `(${x}, ${y})`;
     const diff = await interactiveDiff(client);
     if (process.env["BH_DEBUG_CLICKS"]) {
       const debug = await captureWithCrosshair(client, { x, y });

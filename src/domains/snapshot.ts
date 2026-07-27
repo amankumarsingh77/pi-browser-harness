@@ -4,6 +4,7 @@ import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, vis
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { CdpSession } from "../cdp/session";
 import { type Box, boxOf } from "./box";
+import { cdpCall } from "./cdp-call";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
@@ -319,8 +320,8 @@ export const snapshotTool = defineBrowserTool({
     const session = client.session();
 
     // 1. AX tree
-    const axRes = await session.call("Accessibility.getFullAXTree", {});
-    if (!axRes.success) return err({ kind: "cdp_error", message: axRes.error.message });
+    const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
+    if (!axRes.success) return axRes;
     const rawNodes = (axRes.data as { nodes: ReadonlyArray<RawAxNode> }).nodes;
 
     // 2. Page url/title

@@ -6,6 +6,7 @@ import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
 import { attachTo } from "../cdp/attach";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
+import { cdpCall } from "./cdp-call";
 
 const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
@@ -39,8 +40,8 @@ export const navigateTool = defineBrowserTool({
       if (!created.success) return err({ kind: "cdp_error", message: created.error.message });
       outcome = { kind: "new_tab_created", targetId: created.data, reason: "no_tabs" };
     } else {
-      const nav = await client.session().call("Page.navigate", { url: args.url });
-      if (!nav.success) return err({ kind: "cdp_error", message: nav.error.message });
+      const nav = await cdpCall(client, "Page.navigate", { url: args.url });
+      if (!nav.success) return nav;
       const cur = client.current();
       if (!cur) return err({ kind: "internal", message: "navigate succeeded but no current target tracked" });
       outcome = { kind: "in_place", targetId: cur.targetId };

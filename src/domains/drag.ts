@@ -1,6 +1,7 @@
 import { Type } from "typebox";
-import { type Result, err, ok } from "../util/result";
+import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 
 const DragArgs = Type.Object({
   startX: Type.Number(),
@@ -35,7 +36,6 @@ export const dragAndDropTool = defineBrowserTool({
           dragOperationsMask: 1,
         }
       : { items: [], dragOperationsMask: 1 };
-    const cdp = client.session();
     type InputCall = readonly ["Input.dispatchMouseEvent" | "Input.dispatchDragEvent", Record<string, unknown>];
     const calls: ReadonlyArray<InputCall> = [
       ["Input.dispatchMouseEvent", { type: "mousePressed", x: args.startX, y: args.startY, button: "left", clickCount: 1 }],
@@ -58,8 +58,8 @@ export const dragAndDropTool = defineBrowserTool({
       ["Input.dispatchMouseEvent", { type: "mouseReleased", x: args.endX, y: args.endY, button: "left", clickCount: 1 }],
     ];
     for (const [method, params] of calls) {
-      const r = await cdp.call(method, params);
-      if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+      const r = await cdpCall(client, method, params);
+      if (!r.success) return r;
     }
     return ok({
       text: `Dragged from (${args.startX},${args.startY}) to (${args.endX},${args.endY})`,
