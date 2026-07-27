@@ -25,6 +25,7 @@ export const httpGetTool = defineBrowserTool({
     "No JS rendering — for SPAs use browser_navigate.",
   ],
   parameters: HttpGetArgs,
+  concurrency: "parallel",
   ensureAlive: false,
   async handler(args): Promise<Result<ToolOk, ToolErr>> {
     const ac = new AbortController();
@@ -180,6 +181,7 @@ export const networkRequestsTool = defineBrowserTool({
     "If bufferOverflowed:true in the result, older events were dropped (capacity 500 records/tab).",
   ],
   parameters: NetworkRequestsArgs,
+  concurrency: "parallel",
 
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const session = client.session();

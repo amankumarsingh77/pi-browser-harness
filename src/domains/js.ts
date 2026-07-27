@@ -51,6 +51,7 @@ export const executeJsTool = defineBrowserTool({
     "Result must be JSON-serializable (Runtime.evaluate returnByValue=true).",
   ],
   parameters: ExecuteJsArgs,
+  concurrency: "parallel",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.evaluateJs(args.expression, args.targetId);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
@@ -158,6 +159,7 @@ export const runScriptTool = defineBrowserTool({
     "Script MUST return { content: [{ type: 'text', text: '...' }], details?: {...} }. Throw on errors.",
   ],
   parameters: RunScriptArgs,
+  concurrency: "parallel",
   async handler(args, { client, signal, onUpdate, extensionCtx }): Promise<Result<ToolOk, ToolErr>> {
     if (!isAbsolute(args.path)) {
       return err({ kind: "invalid_state", message: "Script path must be absolute" });

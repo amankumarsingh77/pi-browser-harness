@@ -109,6 +109,7 @@ export const uploadFileTool = defineBrowserTool({
     "File path must be absolute and readable.",
   ],
   parameters: UploadArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const readable = await verifyReadable(args.filePath);
     if (!readable.success) return readable;
@@ -160,6 +161,7 @@ export const downloadTool = defineBrowserTool({
     "Affects all subsequent downloads on this browser.",
   ],
   parameters: DownloadArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     try {
       await mkdir(args.downloadPath, { recursive: true });
@@ -205,6 +207,7 @@ export const printToPdfTool = defineBrowserTool({
   promptSnippet: "Print the current page to PDF",
   promptGuidelines: ["Default output path is in tmpdir; pass outputPath to control."],
   parameters: PrintPdfArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.session().call("Page.printToPDF", {
       printBackground: true,

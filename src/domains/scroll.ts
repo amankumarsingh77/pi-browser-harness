@@ -23,6 +23,7 @@ export const scrollTool = defineBrowserTool({
     "Pass x/y to target a specific scrollable region (e.g., a div with overflow); otherwise scrolls the page at viewport center.",
   ],
   parameters: ScrollArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const info = await client.pageInfo();
     if (!info.success) return err({ kind: "cdp_error", message: info.error.message });

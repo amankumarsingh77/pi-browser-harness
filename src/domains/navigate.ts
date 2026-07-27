@@ -28,6 +28,7 @@ export const navigateTool = defineBrowserTool({
     "Note: Google and some sites with strict anti-bot detection may reject CDP navigation. Use browser_http_get for search results.",
   ],
   parameters: NavigateArgs,
+  concurrency: "serialized",
   renderCall: (a) => new Text(`🌐 Navigate to ${a.url}`, 0, 0),
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const tabs = await client.listTabs(false);
@@ -82,6 +83,7 @@ export const openUrlsTool = defineBrowserTool({
     "Use browser_wait_for_load on a tab before extracting data from SPAs.",
   ],
   parameters: OpenUrlsArgs,
+  concurrency: "serialized",
   renderCall: (a) => new Text(`🌐 Opening ${a.urls.length} URL${a.urls.length !== 1 ? "s" : ""}…`, 0, 0),
   async handler(args, { client, onUpdate }): Promise<Result<ToolOk, ToolErr>> {
     const total = args.urls.length;

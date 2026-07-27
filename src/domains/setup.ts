@@ -28,6 +28,7 @@ export const setupTool = defineBrowserTool({
     "After browser_setup succeeds, retry the browser tool that failed.",
   ],
   parameters: SetupArgs,
+  concurrency: "parallel",
   // ensureAlive:false — this tool IS the setup; it must bypass the socket guard
   ensureAlive: false,
   renderCall: () => new Text("🔧 Initializing browser...", 0, 0),

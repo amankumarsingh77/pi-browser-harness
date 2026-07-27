@@ -24,6 +24,7 @@ export const listTabsTool = defineBrowserTool({
     "Internal tabs (chrome://) included by default; pass includeInternal=false to exclude them.",
   ],
   parameters: ListTabsArgs,
+  concurrency: "parallel",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.listTabs(args.includeInternal ?? true);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
@@ -50,6 +51,7 @@ export const currentTabTool = defineBrowserTool({
   promptSnippet: "Get current tab info",
   promptGuidelines: ["Returns targetId, url, title, and whether the tab is owned by this harness session."],
   parameters: Type.Object({}),
+  concurrency: "parallel",
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
     const cur = client.current();
     if (!cur) return err({ kind: "invalid_state", message: "No tab attached." });
@@ -83,6 +85,7 @@ export const switchTabTool = defineBrowserTool({
     "Refuses tabs not owned by this session — use browser_new_tab to open a controllable tab instead.",
   ],
   parameters: SwitchTabArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     // Resolve to a concrete targetId (exact, or unique hex prefix). We resolve
     // first so the ownership check sees the canonical id, not the prefix.
@@ -141,6 +144,7 @@ export const newTabTool = defineBrowserTool({
     "Pass url to navigate immediately.",
   ],
   parameters: NewTabArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.newTab(args.url);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
@@ -167,6 +171,7 @@ export const closeTabTool = defineBrowserTool({
     "Accepts exact targetId or a unique hex prefix (>=8 chars).",
   ],
   parameters: CloseTabArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     let resolved = args.targetId;
     if (!client.owns(resolved)) {

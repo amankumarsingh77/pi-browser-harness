@@ -26,6 +26,7 @@ export const typeTool = defineBrowserTool({
     "For special keys (Enter, Tab, Escape, arrows), use browser_press_key instead.",
   ],
   parameters: TypeArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const focused = await client.evaluateJs(safeJs`
       (() => {
@@ -79,6 +80,7 @@ export const pressKeyTool = defineBrowserTool({
     "Modifiers: 1=Alt, 2=Ctrl, 4=Meta(Cmd), 8=Shift. Combine with bitwise OR: Ctrl+Shift = 2|8 = 10.",
   ],
   parameters: PressKeyArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const k = args.key;
     const code = virtualKeyCode(k);
@@ -136,6 +138,7 @@ export const dispatchKeyTool = defineBrowserTool({
     "eventType defaults to 'keydown'.",
   ],
   parameters: DispatchKeyArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const eventType = args.eventType ?? "keydown";
     const target = args.ref ?? args.selector ?? "";

@@ -24,6 +24,7 @@ export const dragAndDropTool = defineBrowserTool({
     "dataTransfer is an optional MIME→data map (e.g., { 'text/plain': 'hello' }).",
   ],
   parameters: DragArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const data = args.dataTransfer
       ? {

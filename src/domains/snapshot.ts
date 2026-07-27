@@ -313,6 +313,7 @@ export const snapshotTool = defineBrowserTool({
     "format:'json' returns the raw slim structure (with `ref` and `box` per node) for programmatic use; default 'outline' is human/LLM-readable.",
   ],
   parameters: SnapshotArgs,
+  concurrency: "parallel",
 
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const session = client.session();

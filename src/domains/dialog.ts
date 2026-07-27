@@ -18,6 +18,7 @@ export const handleDialogTool = defineBrowserTool({
     "For prompt() dialogs, supply promptText with the value to submit.",
   ],
   parameters: HandleDialogArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.session().call("Page.handleJavaScriptDialog", {
       accept: args.accept,

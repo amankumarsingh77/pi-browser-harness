@@ -231,6 +231,7 @@ export const fillTool = defineBrowserTool({
     "If a ref no longer resolves, re-run browser_snapshot to get fresh refs.",
   ],
   parameters: FillArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await resolveAndCall(client, args.ref, FILL_FN, [args.value]);
     if (!r.success) return r;
@@ -278,6 +279,7 @@ export const fillFormTool = defineBrowserTool({
     "Re-run browser_snapshot afterwards to verify the form state if needed.",
   ],
   parameters: FillFormArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const results: Array<Readonly<Record<string, unknown>>> = [];
     let okCount = 0;
@@ -323,6 +325,7 @@ export const selectOptionTool = defineBrowserTool({
     "Use this for native <select> elements — clicking coordinates does not work for OS dropdowns.",
   ],
   parameters: SelectOptionArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     if (args.value === undefined && args.label === undefined) {
       return err({ kind: "invalid_state", message: "Provide value or label to select an option." });
@@ -356,6 +359,7 @@ export const setCheckedTool = defineBrowserTool({
     "For radios, set checked:true on the option you want; the group deselects the others.",
   ],
   parameters: SetCheckedArgs,
+  concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await resolveAndCall(client, args.ref, CHECK_FN, [args.checked]);
     if (!r.success) return r;
