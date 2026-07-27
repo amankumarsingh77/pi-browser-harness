@@ -20,6 +20,7 @@
 
 import type { BrowserClient } from "../client";
 import { attachTo } from "../cdp/attach";
+import type { ResultOf } from "../cdp/commands";
 import { type CdpError, cdpError } from "../cdp/errors";
 import { getWindowId } from "../cdp/window";
 import { type Result, err, ok } from "../util/result";
@@ -31,18 +32,12 @@ import type { ProfilePin } from "./store";
 const SEED_DEADLINE_MS = 15_000;
 const SEED_POLL_MS = 500;
 
-type PageTarget = {
-  readonly targetId: string;
-  readonly type: string;
-  readonly url: string;
-  readonly browserContextId?: string;
-};
+type PageTarget = ResultOf<"Target.getTargets">["targetInfos"][number];
 
 const pageTargets = async (client: BrowserClient): Promise<ReadonlyArray<PageTarget>> => {
   const r = await client.session().callBrowser("Target.getTargets");
   if (!r.success) return [];
-  const data = r.data as { targetInfos: ReadonlyArray<PageTarget> };
-  return data.targetInfos.filter((t) => t.type === "page");
+  return r.data.targetInfos.filter((t) => t.type === "page");
 };
 
 const manualFallbackHint = (pin: ProfilePin): string =>

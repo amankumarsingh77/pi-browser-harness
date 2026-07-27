@@ -373,9 +373,11 @@ export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<
         : await collectLinux();
   if (candidates.length === 0) return { running: false };
 
-  let best = candidates[0] as BrowserCandidate;
+  const [first, ...rest] = candidates;
+  if (!first) return { running: false };
+  let best = first;
   let bestRank = rankBrowserCandidate(best, preferUserDataDir);
-  for (const candidate of candidates.slice(1)) {
+  for (const candidate of rest) {
     const rank = rankBrowserCandidate(candidate, preferUserDataDir);
     if (rank > bestRank) {
       best = candidate;
