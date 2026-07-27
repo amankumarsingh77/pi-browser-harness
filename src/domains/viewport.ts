@@ -1,6 +1,7 @@
 import { Type } from "typebox";
-import { type Result, err, ok } from "../util/result";
+import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 
 const ViewportArgs = Type.Object({
   width: Type.Integer({ minimum: 100, maximum: 8000, description: "Viewport CSS pixel width" }),
@@ -22,13 +23,13 @@ export const viewportResizeTool = defineBrowserTool({
   parameters: ViewportArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.session().call("Emulation.setDeviceMetricsOverride", {
+    const r = await cdpCall(client, "Emulation.setDeviceMetricsOverride", {
       width: args.width,
       height: args.height,
       deviceScaleFactor: args.deviceScaleFactor ?? 1,
       mobile: false,
     });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    if (!r.success) return r;
     return ok({
       text: `Viewport set to ${args.width}x${args.height} @${args.deviceScaleFactor ?? 1}x`,
       details: {

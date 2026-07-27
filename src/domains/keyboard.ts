@@ -3,6 +3,7 @@ import { safeJs } from "../util/js-template";
 import { virtualKeyCode } from "../util/keycodes";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 import { resolveRefToObjectId } from "./ref-resolve";
 
 const TypeArgs = Type.Object({
@@ -47,8 +48,8 @@ export const typeTool = defineBrowserTool({
         });
       }
     }
-    const r = await client.session().call("Input.insertText", { text: args.text });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = await cdpCall(client, "Input.insertText", { text: args.text });
+    if (!r.success) return r;
     return ok({ text: `Typed: "${args.text}"` });
   },
 });
@@ -94,18 +95,18 @@ export const pressKeyTool = defineBrowserTool({
       ...(code ? { windowsVirtualKeyCode: code, nativeVirtualKeyCode: code } : {}),
       ...(isChar ? { text: k, unmodifiedText: k } : {}),
     };
-    const down = await client.session().call("Input.dispatchKeyEvent", downParams);
-    if (!down.success) return err({ kind: "cdp_error", message: down.error.message });
+    const down = await cdpCall(client, "Input.dispatchKeyEvent", downParams);
+    if (!down.success) return down;
     // For a printable character with no command modifier (Ctrl/Meta/Alt = 1|2|4),
     // emit a `char` event so the page receives keypress/textInput and the
     // character is actually inserted. Shift (8) is allowed (capitals/symbols).
     const hasCommandModifier = (modifiers & (1 | 2 | 4)) !== 0;
     if (isChar && !hasCommandModifier) {
-      const charEv = await client.session().call("Input.dispatchKeyEvent", { type: "char", text: k, key: k });
-      if (!charEv.success) return err({ kind: "cdp_error", message: charEv.error.message });
+      const charEv = await cdpCall(client, "Input.dispatchKeyEvent", { type: "char", text: k, key: k });
+      if (!charEv.success) return charEv;
     }
-    const up = await client.session().call("Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, modifiers });
-    if (!up.success) return err({ kind: "cdp_error", message: up.error.message });
+    const up = await cdpCall(client, "Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, modifiers });
+    if (!up.success) return up;
     return ok({ text: `Pressed: ${k}${modifiers ? ` (modifiers=${modifiers})` : ""}` });
   },
 });
@@ -151,13 +152,13 @@ export const dispatchKeyTool = defineBrowserTool({
     if (args.ref !== undefined) {
       const objectId = await resolveRefToObjectId(client, args.ref);
       if (!objectId.success) return objectId;
-      const r = await client.session().call("Runtime.callFunctionOn", {
+      const r = await cdpCall(client, "Runtime.callFunctionOn", {
         objectId: objectId.data,
         functionDeclaration: `function (type, key, keyCode) { this.dispatchEvent(new KeyboardEvent(type, { key, keyCode, which: keyCode, bubbles: true, cancelable: true })); return 1; }`,
         arguments: [{ value: eventType }, { value: args.key }, { value: code }],
         returnByValue: true,
       });
-      if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+      if (!r.success) return r;
       return ok({
         text: `Dispatched ${eventType}('${args.key}') on ${target}`,
         details: { matched: 1, ref: args.ref },

@@ -3,11 +3,12 @@ import { writeFile, rename } from "node:fs/promises";
 import { Type } from "typebox";
 import { Image, type ImageTheme, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
-import { type Result, err, ok } from "../util/result";
+import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
 import { safeJs } from "../util/js-template";
+import { cdpCall } from "./cdp-call";
 
 const ScreenshotArgs = Type.Object({
   fullPage: Type.Optional(Type.Boolean({ default: false, description: "Capture beyond viewport" })),
@@ -29,12 +30,12 @@ const captureBase = async (
   const format = args.format ?? "png";
   const quality = args.quality ?? 80;
   const path = screenshotPath(client.namespace, format);
-  const r = await client.session().call("Page.captureScreenshot", {
+  const r = await cdpCall(client, "Page.captureScreenshot", {
     format,
     captureBeyondViewport: args.fullPage ?? false,
     ...(format === "jpeg" ? { quality } : {}),
   });
-  if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+  if (!r.success) return r;
   await writeFile(path, Buffer.from(r.data.data, "base64"));
   return ok({ path, format });
 };

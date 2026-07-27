@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 
 const ScrollArgs = Type.Object({
   x: Type.Optional(Type.Number({ description: "X coordinate where to scroll. Default: viewport center" })),
@@ -40,19 +41,19 @@ export const scrollTool = defineBrowserTool({
     // The page target must be focused or Input events are dropped silently
     // (mouseWheel hangs; synthesizeScrollGesture returns ok but no scroll).
     // Page.bringToFront makes the target the active one in the browser.
-    const front = await client.session().call("Page.bringToFront", {});
-    if (!front.success) return err({ kind: "cdp_error", message: front.error.message });
+    const front = await cdpCall(client, "Page.bringToFront", {});
+    if (!front.success) return front;
     // Establish compositor mouse position before mouseWheel; without this,
     // CDP sometimes drops the wheel event with a timeout.
-    const moved = await client.session().call("Input.dispatchMouseEvent", {
+    const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,
     });
-    if (!moved.success) return err({ kind: "cdp_error", message: moved.error.message });
-    const wheel = await client.session().call("Input.dispatchMouseEvent", {
+    if (!moved.success) return moved;
+    const wheel = await cdpCall(client, "Input.dispatchMouseEvent", {
       type: "mouseWheel", x: cx, y: cy, deltaX: dx, deltaY: dy,
       button: "none", buttons: 0, pointerType: "mouse",
     });
-    if (!wheel.success) return err({ kind: "cdp_error", message: wheel.error.message });
+    if (!wheel.success) return wheel;
     return ok({
       text: `Scrolled at (${cx}, ${cy}) by (${dx}, ${dy})`,
       details: { x: cx, y: cy, deltaX: dx, deltaY: dy },

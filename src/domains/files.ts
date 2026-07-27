@@ -6,6 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { safeJs } from "../util/js-template";
 import { pdfPath } from "../util/paths";
+import { cdpCall } from "./cdp-call";
 import { resolveRefToBackendId } from "./ref-resolve";
 
 const UploadArgs = Type.Object({
@@ -23,8 +24,8 @@ const tryRefUpload = async (
   backendId: number,
   filePath: string,
 ): Promise<Result<void, ToolErr>> => {
-  const set = await client.session().call("DOM.setFileInputFiles", { files: [filePath], backendNodeId: backendId });
-  if (!set.success) return err({ kind: "cdp_error", message: set.error.message });
+  const set = await cdpCall(client, "DOM.setFileInputFiles", { files: [filePath], backendNodeId: backendId });
+  if (!set.success) return set;
   return ok(undefined);
 };
 
@@ -45,14 +46,14 @@ const tryCdpUpload = async (
   selector: string,
   filePath: string,
 ): Promise<Result<void, ToolErr>> => {
-  const doc = await client.session().call("DOM.getDocument", { depth: -1 });
-  if (!doc.success) return err({ kind: "cdp_error", message: doc.error.message });
-  const q = await client.session().call("DOM.querySelector", { nodeId: doc.data.root.nodeId, selector });
-  if (!q.success) return err({ kind: "cdp_error", message: q.error.message });
+  const doc = await cdpCall(client, "DOM.getDocument", { depth: -1 });
+  if (!doc.success) return doc;
+  const q = await cdpCall(client, "DOM.querySelector", { nodeId: doc.data.root.nodeId, selector });
+  if (!q.success) return q;
   const nodeId = q.data.nodeId;
   if (!nodeId) return err({ kind: "invalid_state", message: `Selector matched 0 file inputs: ${selector}` });
-  const set = await client.session().call("DOM.setFileInputFiles", { files: [filePath], nodeId });
-  if (!set.success) return err({ kind: "cdp_error", message: set.error.message });
+  const set = await cdpCall(client, "DOM.setFileInputFiles", { files: [filePath], nodeId });
+  if (!set.success) return set;
   const verify = await client.evaluateJs(safeJs`document.querySelector(${selector})?.files?.length || 0`);
   if (!verify.success) return err({ kind: "cdp_error", message: verify.error.message });
   if (Number(verify.data ?? 0) === 0) {
@@ -209,11 +210,11 @@ export const printToPdfTool = defineBrowserTool({
   parameters: PrintPdfArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.session().call("Page.printToPDF", {
+    const r = await cdpCall(client, "Page.printToPDF", {
       printBackground: true,
       preferCSSPageSize: true,
     });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    if (!r.success) return r;
     const path = args.outputPath ?? pdfPath(client.namespace);
     await writeFile(path, Buffer.from(r.data.data, "base64"));
     return ok({ text: `PDF saved: ${path}`, details: { path } });

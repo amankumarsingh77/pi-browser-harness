@@ -3,6 +3,7 @@ import type { BrowserClient } from "../client";
 import { safeJs } from "../util/js-template";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 import { interactiveDiff, resolveRefToObjectId } from "./ref-resolve";
 
 const FillArgs = Type.Object({
@@ -33,13 +34,13 @@ const runOnElement = async (
   if (opts.ref !== undefined) {
     const objectId = await resolveRefToObjectId(client, opts.ref);
     if (!objectId.success) return objectId;
-    const r = await client.session().call("Runtime.callFunctionOn", {
+    const r = await cdpCall(client, "Runtime.callFunctionOn", {
       objectId: objectId.data,
       functionDeclaration: `function (arg) { ${opts.fnBody} }`,
       arguments: [{ value: opts.arg }],
       returnByValue: true,
     });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    if (!r.success) return r;
     return ok(r.data.result.value);
   }
   if (opts.selector === undefined) {

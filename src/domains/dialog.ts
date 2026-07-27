@@ -1,6 +1,7 @@
 import { Type } from "typebox";
-import { type Result, err, ok } from "../util/result";
+import { type Result, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 
 const HandleDialogArgs = Type.Object({
   accept: Type.Boolean({ description: "true = accept, false = dismiss" }),
@@ -20,11 +21,11 @@ export const handleDialogTool = defineBrowserTool({
   parameters: HandleDialogArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.session().call("Page.handleJavaScriptDialog", {
+    const r = await cdpCall(client, "Page.handleJavaScriptDialog", {
       accept: args.accept,
       ...(args.promptText !== undefined ? { promptText: args.promptText } : {}),
     });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    if (!r.success) return r;
     return ok({
       text: `Dialog ${args.accept ? "accepted" : "dismissed"}`,
       details: { accept: args.accept },
