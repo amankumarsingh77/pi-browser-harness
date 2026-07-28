@@ -48,6 +48,13 @@ const runOnElement = async (
       returnByValue: true,
     });
     if (!r.success) return r;
+    if (r.data.exceptionDetails !== undefined) {
+      return err({
+        kind: "cdp_error",
+        message: `page function threw: ${r.data.exceptionDetails.text}`,
+        details: { ref: opts.ref },
+      });
+    }
     return ok(r.data.result.value);
   }
   if (opts.selector === undefined) {
