@@ -6,7 +6,7 @@ import { type Result, ok } from "../util/result";
 import { debugClicksEnabled } from "../util/debug";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
 import { cdpCall } from "./cdp-call";
-import { captureWithCrosshair } from "./screenshot";
+import { captureWithCrosshair } from "./screenshot-capture";
 import { interactiveDiff } from "./ref-resolve";
 import { resolveTarget } from "./target";
 

@@ -3,7 +3,7 @@ import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
 import { type Box, boxOf } from "./box";
 import { cdpCall } from "./cdp-call";
-import { buildTree, collectInteractiveTargets, type SlimNode } from "./snapshot";
+import { buildTree, collectInteractiveTargets, type SlimNode } from "./ax-tree";
 
 const staleErr = (ref: string): ToolErr => ({
   kind: "invalid_state",

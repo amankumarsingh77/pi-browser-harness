@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { fillDeclaration } from "./fill-engine";
-import { detailsOf, resolveAndCall } from "./form";
+import { detailsOf, resolveAndCall } from "./element-call";
 
 const FILL_FN = fillDeclaration({ rejectSelect: false, focusFirst: true });
 
