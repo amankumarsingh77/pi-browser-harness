@@ -1,4 +1,4 @@
-import { type Result, ok } from "../util/result";
+import { map, type Result, ok } from "../util/result";
 import type { CdpError } from "./errors";
 import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
@@ -7,8 +7,6 @@ import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./co
 import { decodeEvent } from "./events";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
-import { attachTo } from "./attach";
-import { getWindowId } from "./window";
 
 type TabSession = {
   sessionId: string;
@@ -26,6 +24,8 @@ const dialogType = (raw: string): DialogInfo["type"] =>
 
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
+  attach(targetId: string): Promise<Result<string, CdpError>>;
+  windowId(targetId: string): Promise<Result<number, CdpError>>;
   switchTo(targetId: string): Promise<Result<void, CdpError>>;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   setRefMap(refMap: Map<string, number>, refSig: Map<string, string>): void;
@@ -185,6 +185,14 @@ export const createCdpSession = (
     return decodeResult(method, raw.data);
   };
 
+  const attach = async (tid: string): Promise<Result<string, CdpError>> =>
+    map(await req("Target.attachToTarget", { targetId: tid, flatten: true }, null), (d) => d.sessionId);
+
+  const windowId = async (tid: string): Promise<Result<number, CdpError>> =>
+    map(await req("Browser.getWindowForTarget", { targetId: tid }, null), (d) => d.windowId);
+
+  const currentTab = (): TabSession | undefined => (targetId ? tabs.get(targetId) : undefined);
+
   const session: CdpSession = {
     async attachFirstPage() {
       await req("Target.setDiscoverTargets", { discover: true }, null);
@@ -203,7 +211,7 @@ export const createCdpSession = (
         if (anchorId === undefined) {
           ownership.setHarnessWindowId(undefined);
         } else {
-          const anchorWin = await getWindowId(session, anchorId);
+          const anchorWin = await windowId(anchorId);
           if (anchorWin.success) {
             const anchorWindowId = anchorWin.data;
             ownership.setHarnessWindowId(anchorWindowId);
@@ -211,7 +219,7 @@ export const createCdpSession = (
               allPages.map((p) =>
                 p.targetId === anchorId
                   ? Promise.resolve(anchorWin)
-                  : getWindowId(session, p.targetId),
+                  : windowId(p.targetId),
               ),
             );
             allPages.forEach((p, i) => {
@@ -254,12 +262,12 @@ export const createCdpSession = (
         if (ownership) {
           ownership.setHarnessWindow(created.data.targetId);
           ownership.add(created.data.targetId);
-          const win = await getWindowId(session, created.data.targetId);
+          const win = await windowId(created.data.targetId);
           if (win.success) ownership.setHarnessWindowId(win.data);
         }
       }
 
-      const attached = await attachTo(session, pickTargetId);
+      const attached = await attach(pickTargetId);
       if (!attached.success) return attached;
       const attachedSessionId = attached.data;
       sessionId = attachedSessionId;
@@ -281,7 +289,7 @@ export const createCdpSession = (
     async switchTo(tid) {
       const activated = await req("Target.activateTarget", { targetId: tid }, null);
       if (!activated.success) return activated;
-      const attached = await attachTo(session, tid);
+      const attached = await attach(tid);
       if (!attached.success) return attached;
       const attachedSessionId = attached.data;
       const existing = tabs.get(tid);
@@ -307,25 +315,27 @@ export const createCdpSession = (
       targetId = tid;
       return ok(undefined);
     },
+    attach,
+    windowId,
     current() {
       return sessionId && targetId ? { sessionId, targetId } : null;
     },
     setRefMap(refMap, refSig) {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       if (!tab) return;
       tab.refMap = refMap;
       tab.refSig = refSig;
     },
     resolveRef(ref) {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       return tab?.refMap.get(ref);
     },
     refSignatures() {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       return tab?.refSig ?? new Map();
     },
     refMappings() {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       return tab?.refMap ?? new Map();
     },
     call(method, params, opts) {
@@ -338,26 +348,26 @@ export const createCdpSession = (
       return req(method, params, null, opts);
     },
     takeDialog() {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       if (!tab) return null;
       const d = tab.dialog;
       tab.dialog = null;
       return d;
     },
     drainPageInfoInvalidations() {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       if (!tab) return false;
       const dirty = tab.pageInfoDirty;
       tab.pageInfoDirty = false;
       return dirty;
     },
     drainNetworkBuffer(filter) {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       if (!tab) return { records: [], total: 0, bufferOverflowed: false };
       return tab.networkBuffer.drain(filter);
     },
     drainConsoleBuffer(filter) {
-      const tab = targetId ? tabs.get(targetId) : undefined;
+      const tab = currentTab();
       if (!tab) return { records: [], total: 0, bufferOverflowed: false };
       return tab.consoleBuffer.drain(filter);
     },

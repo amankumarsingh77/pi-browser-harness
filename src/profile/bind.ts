@@ -1,8 +1,6 @@
 import type { BrowserClient } from "../client";
-import { attachTo } from "../cdp/attach";
 import type { ResultOf } from "../cdp/commands";
 import { type CdpError, cdpError } from "../cdp/errors";
-import { getWindowId } from "../cdp/window";
 import { type Result, err, ok } from "../util/result";
 import { detectRunningBrowser, resolveBrowserExecutable } from "./browser-process";
 import { openProfileWindow } from "./launch";
@@ -79,10 +77,10 @@ export const seedProfileWindow = async (
   const ownership = client.ownership();
   ownership.setHarnessWindow(seed.targetId);
   ownership.add(seed.targetId);
-  const win = await getWindowId(client.session(), seed.targetId);
+  const win = await client.session().windowId(seed.targetId);
   if (win.success) ownership.setHarnessWindowId(win.data);
 
-  const attached = await attachTo(client.session(), seed.targetId);
+  const attached = await client.session().attach(seed.targetId);
   if (attached.success) {
     await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, attached.data);
   }

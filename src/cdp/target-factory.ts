@@ -3,9 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
-import { attachTo } from "./attach";
 import { type CdpError, cdpError } from "./errors";
-import { getWindowId } from "./window";
 
 const SPAWN_DEADLINE_MS = 8_000;
 const SPAWN_POLL_MS = 100;
@@ -31,7 +29,7 @@ const listPageTargets = async (client: BrowserClient): Promise<Result<ReadonlyAr
 const sessionForTarget = async (client: BrowserClient, targetId: string): Promise<Result<string, CdpError>> => {
   const current = client.current();
   if (current?.targetId === targetId) return ok(current.sessionId);
-  return attachTo(client.session(), targetId);
+  return client.session().attach(targetId);
 };
 
 const spawnTabViaOpener = async (
@@ -130,7 +128,7 @@ const createDedicatedWindow = async (client: BrowserClient): Promise<Result<stri
   const ownership = client.ownership();
   ownership.setHarnessWindow(targetId);
   ownership.add(targetId);
-  const win = await getWindowId(client.session(), targetId);
+  const win = await client.session().windowId(targetId);
   if (win.success) ownership.setHarnessWindowId(win.data);
   return ok(targetId);
 };
