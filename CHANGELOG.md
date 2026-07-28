@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Removed
+
+- **The `deep-research` skill, the `/deep-research` command, and the `web-search-researcher` subagent.** The harness ships browser tools; orchestrating multi-agent research on top of them belongs to the agent, not to this extension. `browser_web_search` and `browser_read_page` are unaffected — search then read still works, it is just no longer wrapped in a fan-out workflow.
+
 ## 0.10.3 — 2026-07-26
 
 ### Fixed

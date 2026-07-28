@@ -4,7 +4,6 @@ import { getBrowserSystemPrompt } from "./prompt";
 import { registerSetupCommand } from "./setup";
 import { registerProfileCommand } from "./profile/command";
 import { readPin } from "./profile/store";
-import { registerDeepResearchCommand } from "./deep-research";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
@@ -124,7 +123,6 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     }
     registerSetupCommand(pi, client);
     registerProfileCommand(pi, client);
-    registerDeepResearchCommand(pi);
   });
 
   pi.on("session_shutdown", async () => {

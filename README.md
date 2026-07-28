@@ -238,11 +238,7 @@ browser_web_search({ query: "chrome devtools protocol overview", limit: 5 })
 browser_read_page({ url: "<the best result's url>" })
 ```
 
-For a question that needs several sources synthesized into a **cited report**, use
-`/deep-research <question>`. It decomposes the question, fans out one isolated
-`web-search-researcher` subagent per sub-question, loops for coverage under a hard ceiling, and
-writes a Markdown report where every claim carries a source link. The skill also auto-triggers on
-research-shaped requests without the command.
+Both tools open their own isolated tab, so neither disturbs the tab you are working in.
 
 ### Keyboard modifiers
 
@@ -310,7 +306,6 @@ re-runnable.
 | `/browser-setup` | Connect pi to your browser. Run once; idempotent. |
 | `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
 | `/browser-status` | Connection state, selected profile, and current page. |
-| `/deep-research <question>` | Multi-source web research → cited Markdown report. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
 
 | Flag / variable | Effect |

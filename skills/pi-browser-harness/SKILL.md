@@ -36,7 +36,7 @@ What do you need to know?
 
 Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. No screenshot round-trip.
 
-`browser_web_search` and `browser_read_page` each run in their own isolated tab and never touch the user's current tab. For a multi-source question that needs a synthesized, cited report, use the **deep-research** skill (or `/deep-research <question>`): it fans out isolated `web-search-researcher` subagents over both tools and writes a source-cited Markdown report.
+`browser_web_search` and `browser_read_page` each run in their own isolated tab and never touch the user's current tab. Pair them for a research question: search for candidate URLs, then read the promising ones.
 
 ## Connection Setup
 
