@@ -1,8 +1,8 @@
 import { createConnection, type Socket } from "node:net";
 import { createInterface } from "node:readline";
 import { type Result, err, ok } from "../util/result";
-import { type CdpError, cdpError } from "../cdp/errors";
-import type { CdpTransport } from "../cdp/transport";
+import { type CdpError, cdpError, classifyRemoteError } from "../cdp/errors";
+import { DEFAULT_TIMEOUT_MS, type CdpTransport } from "../cdp/transport";
 import type { CdpEvent } from "../cdp/types";
 import { type Pending, makeEventQueue, makeOnClose, rejectAllPending, sendWithTimeout } from "./event-queue";
 import {
@@ -91,13 +91,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
             clearTimeout(p.timer);
 
             if (msg.error) {
-              p.resolve(err(cdpError(
-                msg.error.message.includes("Session with given id not found")
-                  ? "session_not_found"
-                  : "remote_error",
-                msg.error.message,
-                p.method,
-              )));
+              p.resolve(err(cdpError(classifyRemoteError(msg.error.message), msg.error.message, p.method)));
             } else {
               p.resolve(ok(msg.result));
             }
@@ -149,7 +143,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     params: Record<string, unknown>,
     opts?: { sessionId?: string | null; timeoutMs?: number },
   ): Promise<Result<unknown, CdpError>> => {
-    const timeoutMs = opts?.timeoutMs ?? 15_000;
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const sessionId = opts?.sessionId ?? null;
 
     const sock = socket;

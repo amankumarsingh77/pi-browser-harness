@@ -7,7 +7,6 @@ import { type Mutex, createMutex } from "./util/mutex";
 import { discoverEndpoint } from "./cdp/discovery";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/transport";
-import { createCdpTransport } from "./cdp/transport";
 import { type CdpSession, createCdpSession } from "./cdp/session";
 import { type OwnershipRegistry, createOwnershipRegistry } from "./cdp/ownership";
 import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";
@@ -17,7 +16,7 @@ import type { DaemonStatus, DialogInfo, PageInfo, TabInfo } from "./cdp/types";
 
 export type BrowserClientOptions = {
   readonly namespace: string;
-  readonly transport?: CdpTransport;
+  readonly transport: CdpTransport;
   readonly remote?: { readonly cdpUrl: string; readonly browserId: string };
   readonly initialOwnership?: {
     readonly ownedTargetIds?: ReadonlyArray<string>;
@@ -96,7 +95,7 @@ const parsePageInfoPayload = (raw: string): Result<PageInfo, CdpError> => {
 };
 
 export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient => {
-  const transport = opts.transport ?? createCdpTransport();
+  const transport = opts.transport;
   const ownershipInit: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string; harnessWindowId?: number } = {};
   if (opts.initialOwnership?.ownedTargetIds !== undefined) {
     ownershipInit.ownedTargetIds = opts.initialOwnership.ownedTargetIds;
