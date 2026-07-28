@@ -78,7 +78,6 @@ const AxNode = Type.Object(
 export type AxNodeResult = Static<typeof AxNode>;
 
 export const COMMANDS = {
-  // --- Target ---
   "Target.attachToTarget": cmd(
     Type.Object({ targetId: Type.String(), flatten: Type.Optional(Type.Boolean()) }),
     Type.Object({ sessionId: Type.String() }),
@@ -112,7 +111,6 @@ export const COMMANDS = {
   ),
   "Target.setDiscoverTargets": cmd(Type.Object({ discover: Type.Boolean() }), Empty),
 
-  // --- Browser ---
   "Browser.getWindowForTarget": cmd(
     Type.Object({ targetId: Type.Optional(Type.String()) }),
     Type.Object({ windowId: Type.Number(), bounds: Type.Optional(Type.Unknown()) }),
@@ -126,7 +124,6 @@ export const COMMANDS = {
     Empty,
   ),
 
-  // --- Page ---
   "Page.enable": cmd(Type.Object({}), Empty),
   "Page.bringToFront": cmd(Type.Object({}), Empty),
   "Page.navigate": cmd(
@@ -163,7 +160,6 @@ export const COMMANDS = {
     Empty,
   ),
 
-  // --- Runtime ---
   "Runtime.evaluate": cmd(
     Type.Object(
       {
@@ -192,7 +188,6 @@ export const COMMANDS = {
   ),
   "Runtime.releaseObject": cmd(Type.Object({ objectId: Type.String() }), Empty),
 
-  // --- DOM ---
   "DOM.getDocument": cmd(
     Type.Object({ depth: Type.Optional(Type.Number()), pierce: Type.Optional(Type.Boolean()) }),
     Type.Object({ root: Type.Object({ nodeId: Type.Number() }, { additionalProperties: true }) }),
@@ -224,13 +219,11 @@ export const COMMANDS = {
     Empty,
   ),
 
-  // --- Input ---
   "Input.dispatchMouseEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchKeyEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchDragEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.insertText": cmd(Type.Object({ text: Type.String() }), Empty),
 
-  // --- Network / Emulation / Accessibility ---
   "Network.getResponseBody": cmd(
     Type.Object({ requestId: Type.String() }),
     Type.Object({ body: Type.String(), base64Encoded: Type.Optional(Type.Boolean()) }),
@@ -258,9 +251,6 @@ export const decodeResult = <M extends CdpMethod>(
     const why = spec.validate.Errors(raw).map((e) => e.message).join("; ");
     return err(cdpError("invalid_response", why, method));
   }
-  // Guarded assertion — see Verified Fact 4. The Check above proves `raw`
-  // matches COMMANDS[method].result; TS cannot correlate a generic key to its
-  // mapped value, so this carries what the check established. The only
-  // assertion in the CDP layer; do not add another.
+  // Guarded assertion: the check above proves `raw` matches COMMANDS[method].result, which TS cannot correlate from a generic key.
   return ok(raw as ResultOf<M>);
 };

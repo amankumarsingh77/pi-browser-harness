@@ -10,10 +10,6 @@ import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from
 import { attachTo } from "./attach";
 import { getWindowId } from "./window";
 
-// Per-tab state. One TabSession exists per known targetId.
-// Dialog, page-info dirty flag, and CDP buffers are per-tab — switching
-// tabs preserves the previous tab's data in its TabSession instead of
-// clearing it.
 type TabSession = {
   sessionId: string;
   targetId: string;
@@ -21,12 +17,7 @@ type TabSession = {
   pageInfoDirty: boolean;
   networkBuffer: ReturnType<typeof createNetworkBuffer>;
   consoleBuffer: ReturnType<typeof createConsoleBuffer>;
-  // Stable element refs (e1, e2, …) → CDP backendNodeId, from the latest
-  // snapshot of this tab. Replaced wholesale on every snapshot — old refs are
-  // stale anyway, so this stays bounded (~50–60 KB worst case).
   refMap: Map<string, number>;
-  // Per-ref signature ("role|name|value") from the latest snapshot, used as the
-  // baseline for the post-mutation auto-diff. Replaced alongside refMap.
   refSig: Map<string, string>;
 };
 
@@ -37,11 +28,8 @@ export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
   switchTo(targetId: string): Promise<Result<void, CdpError>>;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
-  /** Replace the active tab's ref map and ref signatures (from a fresh snapshot). */
   setRefMap(refMap: Map<string, number>, refSig: Map<string, string>): void;
-  /** Resolve a ref (e.g. "e12") to its backendNodeId on the active tab, or undefined if unknown/stale. */
   resolveRef(ref: string): number | undefined;
-  /** The active tab's prior ref signatures — baseline for the post-mutation diff. */
   refSignatures(): ReadonlyMap<string, string>;
   refMappings(): ReadonlyMap<string, number>;
   call<M extends CdpMethod>(method: M, params?: ParamsOf<M>, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
@@ -53,15 +41,7 @@ export type CdpSession = {
   drainConsoleBuffer(filter: ConsoleFilter): ConsoleDrainResult;
 };
 
-/**
- * Supplies the seed tab when attachFirstPage finds no owned tab to attach to.
- * Injected by the client so that seeding goes through the target factory —
- * which, with a profile pinned, opens the window inside that profile. Without
- * it, attachFirstPage's own `Target.createTarget` would land in whichever
- * profile currently has focus.
- *
- * The provider is responsible for its own ownership bookkeeping.
- */
+// Injected so seeding goes through the target factory; attachFirstPage's own `Target.createTarget` would land in whichever profile has focus.
 export type SeedTargetProvider = () => Promise<Result<string, CdpError>>;
 
 export const createCdpSession = (
@@ -72,15 +52,11 @@ export const createCdpSession = (
   let sessionId: string | null = null;
   let targetId: string | null = null;
 
-  // Per-tab tracking: maps targetId → TabSession and sessionId → targetId for
-  // event routing. Lazy: a TabSession is created on the first visit to a tab.
   const tabs = new Map<string, TabSession>();
   const sessionIdToTargetId = new Map<string, string>();
 
   let activeConsumer: Promise<void> = Promise.resolve();
 
-  // Event → TabSession resolver. Uses sessionId from CDP events to find the
-  // correct TabSession, falling back to the current targetId when no sessionId.
   const resolveTab = (evSessionId?: string): TabSession | undefined => {
     const tid = evSessionId ? sessionIdToTargetId.get(evSessionId) : targetId;
     return tid ? tabs.get(tid) : undefined;
@@ -88,8 +64,6 @@ export const createCdpSession = (
 
   const consumeEvents = async (): Promise<void> => {
     for await (const ev of transport.events()) {
-      // Filter: skip events from sessions we're not currently tracking.
-      // Target.targetDestroyed is browser-level (no sessionId) — always process.
       if (ev.method !== "Target.targetDestroyed") {
         if (ev.sessionId && !sessionIdToTargetId.has(ev.sessionId)) continue;
       }
@@ -109,10 +83,7 @@ export const createCdpSession = (
             : { type: "alert", message: "" };
           break;
         }
-        // Page.javascriptDialogClosed is intentionally NOT cleared here —
-        // the dialog stays in the buffer until takeDialog() is called.
-        // This prevents fast dismiss flows from dropping a dialog the agent
-        // was about to read. (Fix for spec §7 predictability bug #2.)
+        // Intentionally NOT cleared on javascriptDialogClosed: a fast dismiss would otherwise drop a dialog the agent was about to read.
         case "Page.frameNavigated":
         case "Page.loadEventFired": {
           const tab = resolveTab(ev.sessionId);
@@ -120,11 +91,6 @@ export const createCdpSession = (
           break;
         }
         case "Target.targetCreated": {
-          // Adopt tabs opened BY a tab we already own (window.open, target=_blank,
-          // popups). Chrome sets openerId to the opener target; if that opener is
-          // owned, the child belongs to this session's window and must be
-          // controllable + cleaned up. Targets the user opens themselves have no
-          // owned opener, so they are never adopted.
           if (!ownership) break;
           const decoded = decodeEvent(ev.method, ev.params);
           if (!decoded.success) break;
@@ -140,7 +106,6 @@ export const createCdpSession = (
           if (!decoded.success || !decoded.data.targetId) break;
           const destroyed = decoded.data.targetId;
           ownership.remove(destroyed);
-          // Prune per-tab state for the destroyed target
           const tab = tabs.get(destroyed);
           if (tab) {
             sessionIdToTargetId.delete(tab.sessionId);
@@ -186,10 +151,6 @@ export const createCdpSession = (
 
   const restartConsumer = (): void => {
     activeConsumer = activeConsumer.then(() => consumeEvents()).catch((e: unknown) => {
-      // The .then() chain calls consumeEvents() which iterates the transport's
-      // events() AsyncIterable. The iterable resolves cleanly on close (returns
-      // {done:true}); any rejection here is an unexpected bug in the event
-      // handler, not a normal termination. Surface it on stderr so it's not lost.
       console.warn("[pi-browser-harness] CDP event consumer crashed:", e);
     });
   };
@@ -200,26 +161,16 @@ export const createCdpSession = (
     targetId = null;
     tabs.clear();
     sessionIdToTargetId.clear();
-    // Do NOT clear `dialog` here — same rationale as inside consumeEvents:
-    // the agent may have a pending takeDialog() call that should still see it.
+    // Do NOT clear `dialog` here: a pending takeDialog() must still see it.
     restartConsumer();
   });
 
-  // TODO(perf): the four enable calls are sequential here for predictability.
-  // Switching to Promise.all over a single WS pipelines the round-trips and
-  // saves ~3× on tab-switch latency. Defer until session.ts has tests.
   const enableDomains = async (sid: string): Promise<void> => {
     for (const d of ["Page", "DOM", "Runtime", "Network", "Accessibility", "Log"]) {
       await transport.request(`${d}.enable`, {}, { sessionId: sid });
     }
   };
 
-  // The one place `unknown` ends for every CDP call this session makes — its
-  // own internal bookkeeping calls (attach/switch) and the public
-  // call/callOnTarget/callBrowser all funnel through here. A single
-  // transport-then-decode implementation means a future change (tracing,
-  // error wrapping, the short-circuit on failure) lands in one place, and a
-  // new internal call site can't forget to decode.
   const req = async <M extends CdpMethod>(
     method: M,
     params: ParamsOf<M> | undefined,
@@ -236,14 +187,11 @@ export const createCdpSession = (
 
   const session: CdpSession = {
     async attachFirstPage() {
-      // Subscribe to Target.* events so we can react to targetDestroyed.
-      // Best-effort: failing to enable discovery is not fatal for attach.
       await req("Target.setDiscoverTargets", { discover: true }, null);
 
       const targets = await req("Target.getTargets", {}, null);
       if (!targets.success) return targets;
       const allPages = targets.data.targetInfos.filter((t) => t.type === "page");
-      // Reconcile the persisted ownership set against live targets — drop dead IDs.
       if (ownership) {
         const live = new Set(allPages.map((p) => p.targetId));
         const survivors = ownership.list().filter((id) => live.has(id));
@@ -253,22 +201,12 @@ export const createCdpSession = (
 
         const anchorId = survivors[0];
         if (anchorId === undefined) {
-          // No owned tab survived — the harness window is gone (user closed it,
-          // or Chrome restarted and reassigned all ids). The persisted windowId
-          // is now meaningless and could even collide with one of the user's
-          // windows, so drop it. attachFirstPage will mint a fresh window below.
           ownership.setHarnessWindowId(undefined);
         } else {
-          // Self-heal ownership from the window itself. We anchor on a tab we
-          // KNOW we own (a survivor) and re-adopt only its live window-mates —
-          // popups/children from last session, tabs reopened in our window.
-          // Ownership is thus DERIVED from the real window, never from the bare
-          // persisted integer (which Chrome may reassign to a user window on
-          // restart — anchoring on a survivor makes that misfire impossible).
           const anchorWin = await getWindowId(session, anchorId);
           if (anchorWin.success) {
             const anchorWindowId = anchorWin.data;
-            ownership.setHarnessWindowId(anchorWindowId); // refresh to the live id
+            ownership.setHarnessWindowId(anchorWindowId);
             const windows = await Promise.all(
               allPages.map((p) =>
                 p.targetId === anchorId
@@ -286,7 +224,6 @@ export const createCdpSession = (
           if (!ownership.harnessWindow()) ownership.setHarnessWindow(anchorId);
         }
       }
-      // Prune per-tab state for pages that no longer exist
       const liveTargetIds = new Set(allPages.map((p) => p.targetId));
       for (const tid of tabs.keys()) {
         if (!liveTargetIds.has(tid)) {
@@ -296,17 +233,12 @@ export const createCdpSession = (
         }
       }
 
-      // Prefer attaching to a tab this session already owns. Falls back to
-      // creating a fresh harness-owned tab in a dedicated window — never
-      // grabs the user's foreground tab.
       let pickTargetId: string | undefined;
       if (ownership) {
         const ownedLive = ownership.list().filter((id) => allPages.some((p) => p.targetId === id));
         pickTargetId = ownedLive[0];
       }
       if (!pickTargetId && createSeedTarget) {
-        // Delegated seeding (see SeedTargetProvider): the provider creates the
-        // window in the right profile and records ownership itself.
         const seeded = await createSeedTarget();
         if (!seeded.success) return seeded;
         pickTargetId = seeded.data;
@@ -322,8 +254,6 @@ export const createCdpSession = (
         if (ownership) {
           ownership.setHarnessWindow(created.data.targetId);
           ownership.add(created.data.targetId);
-          // Capture the real Chrome windowId — the durable identity of the
-          // window this session initialized (survives seed-tab closure).
           const win = await getWindowId(session, created.data.targetId);
           if (win.success) ownership.setHarnessWindowId(win.data);
         }
@@ -354,7 +284,6 @@ export const createCdpSession = (
       const attached = await attachTo(session, tid);
       if (!attached.success) return attached;
       const attachedSessionId = attached.data;
-      // Reuse existing TabSession or create one on first visit
       const existing = tabs.get(tid);
       const tab: TabSession = existing ?? {
         sessionId: attachedSessionId,
@@ -367,7 +296,6 @@ export const createCdpSession = (
         refSig: new Map(),
       };
       if (existing) {
-        // Each Target.attachToTarget produces a new sessionId — update it.
         sessionIdToTargetId.delete(existing.sessionId);
         existing.sessionId = attachedSessionId;
       } else {
@@ -375,7 +303,6 @@ export const createCdpSession = (
       }
       sessionIdToTargetId.set(attachedSessionId, tid);
       await enableDomains(attachedSessionId);
-      // Update global pointers to point at the new active tab
       sessionId = tab.sessionId;
       targetId = tid;
       return ok(undefined);

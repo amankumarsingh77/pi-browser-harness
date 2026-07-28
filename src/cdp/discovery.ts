@@ -20,13 +20,6 @@ const VersionResponse = Type.Object(
 
 const versionValidator = Compile(VersionResponse);
 
-/**
- * A live CDP endpoint plus, when discovery went through a DevToolsActivePort
- * file, the user-data-dir that file lives in. That directory is the browser's
- * profile registry (`Local State`) — Chromium writes DevToolsActivePort to
- * chrome::DIR_USER_DATA — so it is what profile selection enumerates.
- * Undefined when the endpoint came from BU_CDP_WS or a bare port probe.
- */
 export type CdpEndpoint = {
   readonly wsUrl: string;
   readonly userDataDir?: string;
@@ -63,17 +56,9 @@ const waitForPort = async (port: number): Promise<Result<void, CdpError>> => {
   ));
 };
 
-// Fast, single-shot TCP check (no retry loop). Used to skip stale
-// DevToolsActivePort files left behind by a browser that has since quit —
-// unlike waitForPort, this returns immediately instead of blocking ~30s.
 const isPortLive = async (port: number): Promise<boolean> => (await probePort(port)).success;
 
-// Ask the live browser for its canonical webSocketDebuggerUrl via
-// http://127.0.0.1:<port>/json/version. This is authoritative: it avoids
-// trusting a path from a stale DevToolsActivePort file that may belong to a
-// different browser which has since exited (e.g. Chrome's stale file pointing
-// at 9222 while Brave actually owns the port now). Returns null if the endpoint
-// is unreachable, non-200, or doesn't expose a WS URL.
+// /json/version is authoritative: a stale DevToolsActivePort file may name a browser that has since exited while another now owns the port.
 const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null> =>
   new Promise<string | null>((resolve) => {
     const req = httpRequest(
@@ -97,10 +82,6 @@ const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null>
     req.end();
   });
 
-// Well-known CDP ports to probe when no DevToolsActivePort file is readable
-// (sandboxed harness, restricted filesystem permissions, or an unusual profile
-// location not on the profileDirs list). The default Chromium remote-debugging
-// port is 9222; users can extend via BU_CDP_PORTS="9222,9333".
 const fallbackPorts = (): ReadonlyArray<number> => {
   const ports = new Set<number>([9222]);
   const fromEnv = process.env["BU_CDP_PORTS"];
@@ -117,21 +98,12 @@ type Candidate = {
   readonly port: number;
   readonly path: string;
   readonly mtimeMs: number;
-  /** The user-data-dir whose DevToolsActivePort produced this candidate. */
   readonly userDataDir: string;
 };
 
-/**
- * Locate a live CDP endpoint, reporting the user-data-dir it belongs to when
- * that is knowable. `discoverWsUrl` is the URL-only view of the same walk.
- */
 export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
   const dirs = userDataDirCandidates();
 
-  // Phase 1: collect every readable DevToolsActivePort candidate up front,
-  // rather than committing to the first one found. A single browser writes one
-  // such file, but stale files from quit browsers linger, so we must
-  // disambiguate below instead of trusting discovery order.
   const candidates: Candidate[] = [];
   const readErrors: string[] = [];
   for (const base of dirs) {
@@ -143,13 +115,9 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
       try {
         mtimeMs = (await stat(portFile)).mtimeMs;
       } catch {
-        // mtime is only a tiebreaker; a stat failure just leaves it at 0.
       }
     } catch (e) {
-      // Node fs errors carry .code; see ErrnoException. ENOENT is normal — the
-      // dir is on our list but the user hasn't installed that browser. EPERM/
-      // EACCES is common under sandboxes; remember it and fall back to network
-      // probing rather than failing the whole discovery.
+      // EPERM/EACCES is common under sandboxes; remember it and fall back to network probing rather than failing the whole discovery.
       const code = errnoCode(e);
       if (code === "ENOENT" || code === undefined) continue;
       if (code === "EPERM" || code === "EACCES") {
@@ -163,25 +131,16 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     const port = lines[0]?.trim();
     const path = lines[1]?.trim();
     if (!port || !path) continue;
-    // Guard against a truncated/corrupt port file (e.g. a non-numeric first
-    // line): an out-of-range port makes net.connect throw ERR_SOCKET_BAD_PORT
-    // synchronously, which would escape discoverWsUrl instead of surfacing as
-    // a Result error. Skip such entries.
+    // An out-of-range port makes net.connect throw ERR_SOCKET_BAD_PORT synchronously, escaping discoverWsUrl instead of surfacing as a Result error.
     const portNum = Number(port);
     if (!Number.isInteger(portNum) || portNum <= 0 || portNum >= 65536) continue;
     candidates.push({ port: portNum, path, mtimeMs, userDataDir: base });
   }
 
-  // Phase 2: no readable candidate — probe well-known ports directly. Covers
-  // sandboxed harnesses that can't read profile dirs and non-default install
-  // locations. Requires the browser to have been launched with
-  // --remote-debugging-port so /json/version is served.
   if (candidates.length === 0) {
     for (const port of fallbackPorts()) {
       if (!(await isPortLive(port))) continue;
       const live = await queryLiveWsUrl(port);
-      // No DevToolsActivePort file was involved, so the user-data-dir behind
-      // this endpoint is unknown — profile selection stays unavailable.
       if (live) return ok({ wsUrl: live });
     }
     const permHint = readErrors.length > 0
@@ -193,9 +152,6 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     ));
   }
 
-  // Phase 3: disambiguate candidates sharing a port (one browser running, and
-  // another's file left behind on the default 9222): keep the most-recently-
-  // written file — that's the currently-running browser.
   const byPort = new Map<number, Candidate>();
   for (const c of candidates) {
     const prev = byPort.get(c.port);
@@ -203,16 +159,11 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   }
   const unique = Array.from(byPort.values());
 
-  // Prefer candidates whose port is actually accepting connections; this skips
-  // stale files whose browser has quit (avoiding a ~30s waitForPort block).
   const liveChecks = await Promise.all(unique.map((c) => isPortLive(c.port)));
   const liveCandidates = unique.filter((_, i) => liveChecks[i]);
   const ordered = liveCandidates.length > 0 ? liveCandidates : unique;
 
-  // Phase 4: for each candidate, prefer the browser's own canonical WS URL from
-  // /json/version. Some browsers disable that HTTP endpoint when remote
-  // debugging is toggled only via chrome://inspect (rather than a launch flag),
-  // so fall back to the WS path written in DevToolsActivePort.
+  // Some browsers disable the /json/version endpoint when remote debugging is toggled via chrome://inspect rather than a launch flag, hence the DevToolsActivePort fallback.
   let lastErr: Result<CdpEndpoint, CdpError> | null = null;
   for (const c of ordered) {
     const ready = await waitForPort(c.port);
@@ -224,10 +175,6 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     return ok({ wsUrl: liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`, userDataDir: c.userDataDir });
   }
 
-  // Every discovered candidate was stale/unreachable. Before giving up, try the
-  // well-known fallback ports — a user with a leftover DevToolsActivePort file
-  // may still have a live browser reachable via 9222 / BU_CDP_PORTS. (Skip ports
-  // already covered by a candidate above so we don't re-probe them.)
   for (const port of fallbackPorts()) {
     if (byPort.has(port) || !(await isPortLive(port))) continue;
     const liveUrl = await queryLiveWsUrl(port);
@@ -237,10 +184,6 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   return lastErr ?? err(cdpError("discovery_failed", "no live DevTools endpoint among discovered candidates"));
 };
 
-/**
- * URL-only view of {@link discoverEndpoint}, kept as the stable entry point for
- * callers that don't care which user-data-dir answered.
- */
 export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {
   const endpoint = await discoverEndpoint();
   return endpoint.success ? ok(endpoint.data.wsUrl) : endpoint;

@@ -1,20 +1,3 @@
-/**
- * In-memory aggregator for CDP Runtime.consoleAPICalled and Log.entryAdded events.
- *
- * Mirrors network-buffer.ts: the single CDP event loop in session.ts hands raw
- * params to ingestConsoleApi / ingestLogEntry; tools later read records via drain().
- *
- * Bounded by capacity (default 500). On overflow the oldest record is evicted FIFO,
- * and the overflow flag is reported once per drain so tools can warn the LLM that
- * data may be missing.
- *
- * Each record carries a monotonic `seq`. Tools expose the last drained seq as
- * `nextCursor`; callers pass it back as `sinceSeq` to read only what's new since
- * the previous drain. This is the cursor pattern that makes "what did this action
- * cause?" answerable in one tool call.
- *
- * Joining/filtering logic stays trivially testable (no transport dependency).
- */
 
 import { decodeEvent } from "./events";
 
@@ -22,35 +5,26 @@ export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
 
 export type ConsoleRecord = {
   seq: number;
-  /** Wall-clock ms when the event was ingested, in Date.now() units. */
   timestampMs: number;
   level: ConsoleLevel;
-  /** Joined args (console-api) or the entry text (log-entry). Per-arg truncated. */
   text: string;
   source: "console-api" | "log-entry";
   url?: string;
   lineNumber?: number;
-  /** Top frames only, joined with newlines. Populated for error/warn when CDP provides one. */
   stackTrace?: string;
 };
 
 export type ConsoleFilter = {
   levels?: ConsoleLevel[];
-  /** Substring match by default. Wrap in slashes (`/foo/`) for regex. */
   textPattern?: string;
-  /** Only records with seq strictly greater than this. */
   sinceSeq?: number;
-  /** Only records with timestamp at most N ms ago. */
   sinceMs?: number;
-  /** Cap on returned records (default 50, max 500). */
   limit?: number;
 };
 
 export type ConsoleDrainResult = {
   readonly records: ConsoleRecord[];
-  /** Total matches before `limit` was applied. */
   readonly total: number;
-  /** True if the ring buffer evicted at least one record since the last drain. */
   readonly bufferOverflowed: boolean;
 };
 
@@ -61,9 +35,7 @@ export type ConsoleBuffer = {
   clear(): void;
 };
 
-/** Per-arg cap to stop a single console.log(hugeBlob) from blowing the buffer. */
 const PER_ARG_CAP = 2000;
-/** Max stack frames preserved per record. */
 const MAX_STACK_FRAMES = 3;
 
 const compileTextMatcher = (pattern: string): ((text: string) => boolean) => {
@@ -72,7 +44,6 @@ const compileTextMatcher = (pattern: string): ((text: string) => boolean) => {
       const re = new RegExp(pattern.slice(1, -1));
       return (text) => re.test(text);
     } catch {
-      // Fall through to substring match if the pattern is not a valid regex.
     }
   }
   return (text) => text.includes(pattern);
@@ -81,7 +52,6 @@ const compileTextMatcher = (pattern: string): ((text: string) => boolean) => {
 const truncateArg = (s: string): string =>
   s.length > PER_ARG_CAP ? s.slice(0, PER_ARG_CAP) + "…" : s;
 
-/** Best-effort stringification of one Runtime.RemoteObject. */
 const stringifyRemoteObject = (
   arg: { type?: string; subtype?: string; value?: unknown; description?: string; unserializableValue?: string },
 ): string => {
@@ -98,7 +68,6 @@ const stringifyRemoteObject = (
   return arg.type ?? "";
 };
 
-/** Map CDP console-API method names to our normalized levels. */
 const mapConsoleApiLevel = (type: string | undefined): ConsoleLevel => {
   switch (type) {
     case "error":
@@ -116,7 +85,6 @@ const mapConsoleApiLevel = (type: string | undefined): ConsoleLevel => {
   }
 };
 
-/** Map Log.LogEntry.level values ("verbose","info","warning","error") to our levels. */
 const mapLogEntryLevel = (level: string | undefined): ConsoleLevel => {
   switch (level) {
     case "error":
@@ -145,8 +113,6 @@ const formatStackTrace = (
 };
 
 export const createConsoleBuffer = (capacity = 500): ConsoleBuffer => {
-  // Insertion-ordered map keyed by seq. Map preserves insertion order in JS,
-  // so iteration gives us oldest-first eviction without a separate index.
   const records = new Map<number, ConsoleRecord>();
   let nextSeq = 1;
   let overflowed = false;

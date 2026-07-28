@@ -2,7 +2,6 @@ import { map, type Result } from "../util/result";
 import type { CdpError } from "./errors";
 import type { CdpSession } from "./session";
 
-/** Browser.getWindowForTarget, unwrapped to the windowId. */
 export const getWindowId = async (
   session: CdpSession,
   targetId: string,

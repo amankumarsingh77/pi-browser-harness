@@ -1,15 +1,3 @@
-/**
- * DaemonTransport — CdpTransport backed by a Unix socket to the browser daemon.
- *
- * Satisfies the exact CdpTransport interface so BrowserClient, CdpSession, and
- * all domain tools work without changes. Internally uses newline-delimited JSON
- * over a Unix domain socket instead of a WebSocket to Chrome.
- *
- * References:
- *   - CdpTransport interface: src/cdp/transport.ts
- *   - net.createConnection IPC: https://nodejs.org/docs/latest-v22.x/api/net.html#netcreateconnection
- *   - readline.createInterface: https://nodejs.org/docs/latest-v22.x/api/readline.html#readlinecreateinterfaceoptions
- */
 
 import { createConnection, type Socket } from "node:net";
 import { createInterface } from "node:readline";
@@ -26,7 +14,6 @@ import {
   serialize,
 } from "../daemon/protocol";
 
-// ── Implementation ─────────────────────────────────────────────────────────────
 
 export const createDaemonTransport = (clientId: string): CdpTransport => {
   let socket: Socket | null = null;
@@ -49,10 +36,8 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     for (const cb of closeListeners) cb();
   };
 
-  // ── Connect ────────────────────────────────────────────────────────────
 
   const connect = (_url: string, opts?: { timeoutMs?: number }): Promise<Result<void, CdpError>> => {
-    // url is ignored — we always connect to the daemon socket
     const timeoutMs = opts?.timeoutMs ?? 10_000;
 
     if (socket && !socket.destroyed && registered) {
@@ -133,17 +118,14 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
         });
 
         sock.on("error", () => {
-          // Errors are surfaced via 'close'
         });
 
         sock.on("close", () => {
           clearTimeout(connectTimer);
           cleanup("Daemon socket closed");
-          // If connect hasn't settled yet, settle with error
           settle(err(cdpError("transport_closed", "Daemon socket closed before registration")));
         });
 
-        // Send registration
         const regMsg: WireControl = { type: "control", action: "register", clientId };
         sock.write(serialize(regMsg) + "\n");
       });
@@ -158,7 +140,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     });
   };
 
-  // ── Close ──────────────────────────────────────────────────────────────
 
   const close = async (): Promise<void> => {
     if (registered && socket && !socket.destroyed) {
@@ -168,7 +149,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     cleanup("close() called");
   };
 
-  // ── Request ────────────────────────────────────────────────────────────
 
   const request = (
     method: string,
@@ -195,11 +175,9 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     return sendWithTimeout(pending, id, method, timeoutMs, "Daemon", () => sock.write(serialize(req) + "\n"));
   };
 
-  // ── Events ─────────────────────────────────────────────────────────────
 
   const events = (): AsyncIterable<CdpEvent> => queue.iter;
 
-  // ── State ──────────────────────────────────────────────────────────────
 
   const state = (): "open" | "closed" | "connecting" => {
     if (!socket) return "closed";
