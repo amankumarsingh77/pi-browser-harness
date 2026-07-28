@@ -33,22 +33,36 @@ const cleanupStaleSocket = (): void => {
 };
 
 /**
+ * Whether the daemon endpoint could plausibly exist, judged without connecting.
+ *
+ * On POSIX a missing socket file means the daemon definitely isn't running, so
+ * callers can short-circuit. Windows named pipes are NOT filesystem entries —
+ * access() always fails on `\\.\pipe\…` even while the daemon is serving it — so
+ * on Windows the answer is always "maybe" and the caller must probe instead.
+ *
+ * Platform and path are parameters so the branch is testable off-platform.
+ */
+export const daemonSocketMayExist = async (
+  platform: NodeJS.Platform = process.platform,
+  socketPath: string = DAEMON_SOCKET_PATH,
+): Promise<boolean> => {
+  if (platform === "win32") return true;
+  try {
+    await access(socketPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
  * Check whether the daemon is running by probing its Unix socket.
  * A file-existence check is unreliable — a crashed daemon leaves a stale socket.
  * We connect, send a register, wait for the registered ack, then disconnect.
  * On failure, clean up the stale socket so ensureDaemon can spawn a fresh one.
  */
 export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
-  // On POSIX, a missing socket file means the daemon definitely isn't running,
-  // so we can short-circuit. Windows named pipes are not filesystem entries —
-  // access() always fails there — so skip the pre-check and probe directly.
-  if (!isWindows) {
-    try {
-      await access(DAEMON_SOCKET_PATH);
-    } catch {
-      return false;
-    }
-  }
+  if (!(await daemonSocketMayExist())) return false;
 
   return new Promise((resolve) => {
     let settled = false;
