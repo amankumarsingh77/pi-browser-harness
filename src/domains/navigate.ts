@@ -4,7 +4,6 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
-import { attachTo } from "../cdp/attach";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 import { cdpCall, cdpCallBrowser, cdpCallOnTarget, evalJs } from "./cdp-call";
 
@@ -107,7 +106,7 @@ export const openUrlsTool = defineBrowserTool({
     const settled = await Promise.all(
       created.filter((t) => t.ok).map(async (tab): Promise<TabResult> => {
         try {
-          const attached = await attachTo(client.session(), tab.targetId);
+          const attached = await client.session().attach(tab.targetId);
           if (!attached.success) return { ...tab, ok: false, error: attached.error.message };
           const sid = attached.data;
           const enabled = await cdpCallOnTarget(client, "Page.enable", {}, sid);
