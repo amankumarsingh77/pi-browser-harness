@@ -17,6 +17,9 @@ const RULES: ReadonlyArray<{ readonly rule: string; readonly re: RegExp }> = [
   { rule: "non-null-assertion", re: /[A-Za-z_$)\]]!\s*(?:[.[(;,)\]}]|$)/ },
   { rule: "inline-object-cast", re: /\bas\s+\{/ },
   { rule: "double-cast", re: /\bas\s+unknown\s+as\b/ },
+  { rule: "named-cast", re: /\bas\s+(?:new\s+)?[A-Z][A-Za-z0-9_]*/ },
+  { rule: "function-cast", re: /\bas\s+\(/ },
+  { rule: "trailing-cast", re: /\bas\s*$/ },
 ];
 
 export type SourceFile = { readonly path: string; readonly text: string };

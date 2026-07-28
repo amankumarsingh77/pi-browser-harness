@@ -77,8 +77,24 @@ describe("boundary check", () => {
     assert.equal(checkSource([{ path: "a.ts", text: "const x = [1] as const;" }], noExemptions).length, 0);
   });
 
-  test("allows a cast to a named type", () => {
-    assert.equal(checkSource([{ path: "a.ts", text: "return ok(raw as ResultOf<M>);" }], noExemptions).length, 0);
+  test("flags a cast to a named type", () => {
+    const v = checkSource([{ path: "a.ts", text: "return ok(raw as ResultOf<M>);" }], noExemptions);
+    assert.equal(v.some((x) => x.rule === "named-cast"), true);
+  });
+
+  test("flags a cast to a function type", () => {
+    const v = checkSource([{ path: "a.ts", text: "(fn as (a: unknown) => void)(x);" }], noExemptions);
+    assert.equal(v.some((x) => x.rule === "function-cast"), true);
+  });
+
+  test("flags a cast whose target type sits on the next line", () => {
+    const v = checkSource([{ path: "a.ts", text: "const f = base.constructor as\n  new () => void;" }], noExemptions);
+    assert.equal(v.some((x) => x.rule === "trailing-cast"), true);
+  });
+
+  test("does not flag the word as inside prose", () => {
+    const text = 'const d = "Capture the page as a JPEG. DO NOT use as a default tool.";';
+    assert.equal(checkSource([{ path: "a.ts", text }], noExemptions).length, 0);
   });
 
   test("reports the 1-indexed line number and the trimmed text", () => {
