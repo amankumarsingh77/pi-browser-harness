@@ -1,4 +1,4 @@
-import { createDaemonTransport } from "../../src/cdp/daemon-transport";
+import { createDaemonTransport } from "../../src/daemon/transport";
 import { createBrowserClient } from "../../src/client";
 import { fillTool, selectOptionTool, setCheckedTool } from "../../src/domains/form";
 import { fillFormTool } from "../../src/domains/form-batch";

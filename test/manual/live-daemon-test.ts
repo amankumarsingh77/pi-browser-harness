@@ -1,4 +1,4 @@
-import { createDaemonTransport } from "../../src/cdp/daemon-transport";
+import { createDaemonTransport } from "../../src/daemon/transport";
 
 async function main() {
   const t = createDaemonTransport("pi-live-test");

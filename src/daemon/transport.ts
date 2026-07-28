@@ -4,14 +4,15 @@ import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError, classifyRemoteError } from "../cdp/errors";
 import { DEFAULT_TIMEOUT_MS, type CdpTransport } from "../cdp/transport";
 import type { CdpEvent } from "../cdp/types";
-import { type Pending, makeEventQueue, makeOnClose, rejectAllPending, sendWithTimeout } from "./event-queue";
+import { makeEventQueue } from "../cdp/event-queue";
+import { type Pending, makeOnClose, rejectAllPending, sendWithTimeout } from "../cdp/pending-requests";
 import {
   DAEMON_SOCKET_PATH,
   type WireRequest,
   type WireControl,
   deserialize,
   serialize,
-} from "../daemon/protocol";
+} from "./protocol";
 
 export const createDaemonTransport = (clientId: string): CdpTransport => {
   let socket: Socket | null = null;

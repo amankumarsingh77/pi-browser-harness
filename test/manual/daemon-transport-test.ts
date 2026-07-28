@@ -1,5 +1,5 @@
 import { createIpcServer } from "../../src/daemon/server";
-import { createDaemonTransport } from "../../src/cdp/daemon-transport";
+import { createDaemonTransport } from "../../src/daemon/transport";
 import { DAEMON_SOCKET_PATH } from "../../src/daemon/protocol";
 import type { WireMessage } from "../../src/daemon/protocol";
 import { unlinkSync } from "node:fs";
