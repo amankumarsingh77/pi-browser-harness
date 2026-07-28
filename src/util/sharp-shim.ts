@@ -1,10 +1,4 @@
-// Typed minimal shim for the optional `sharp` dependency. Sharp is a heavy
-// native module not installed in every workspace; we import dynamically and
-// distinguish "missing" (no install) from "error" (installed but threw).
-//
-// We declare only the surface we use. The dynamic import returns `unknown`
-// at the boundary; the cast inside loadSharp() is the documented escape
-// hatch — every other consumer sees the typed SharpFactory.
+// `sharp` is an optional dependency not installed in every workspace, so the import must stay dynamic and unresolvable to tsc.
 
 export type SharpInstance = {
   metadata(): Promise<{ width?: number; height?: number }>;
@@ -38,8 +32,7 @@ export const loadSharp = async (): Promise<SharpLoad> => {
     return { kind: "error", message: msg };
   }
   if (mod === null || mod === undefined) return { kind: "missing" };
-  // The CommonJS sharp module's default export IS the factory. ESM-wrapped
-  // sharp puts it on .default. Probe both.
+  // The CommonJS sharp module's default export IS the factory; ESM-wrapped sharp puts it on .default.
   const m = mod as { default?: unknown };
   const candidate: unknown = typeof m.default === "function" ? m.default : mod;
   if (typeof candidate !== "function") {
