@@ -1,17 +1,8 @@
-/**
- * Unit tests for path resolution — runs on Linux, macOS, and Windows in CI.
- *
- * Only the branch for the host platform can be exercised, so each assertion is
- * guarded by process.platform; the CI matrix is what gives all three coverage.
- *
- * Run: npm test
- */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-/** Re-import with a fresh module identity so env changes are picked up. */
 const freshImport = async (): Promise<typeof import("../../src/profile/paths")> =>
   import(`../../src/profile/paths?cache=${Math.random()}`);
 
@@ -28,7 +19,6 @@ const withEnv = async (key: string, value: string | undefined, fn: () => Promise
 };
 
 describe("path resolution", () => {
-  // A1: agent dir default and override
   test("A1: default agent dir is ~/.pi/agent", async () => {
     await withEnv("PI_CODING_AGENT_DIR", undefined, async () => {
       const { agentDir } = await freshImport();
@@ -43,8 +33,6 @@ describe("path resolution", () => {
     });
   });
 
-  // pi's own expandTildePath only understands "~/" — never "~\" — so the agent
-  // dir must resolve identically or the pin lands where pi does not look.
   test("A1: '~/' in the agent-dir override expands like pi", async () => {
     await withEnv("PI_CODING_AGENT_DIR", "~/custom-agent", async () => {
       assert.equal((await freshImport()).agentDir(), `${homedir()}/custom-agent`);
@@ -57,7 +45,6 @@ describe("path resolution", () => {
     });
   });
 
-  // A2: platform candidate list
   test("A2: candidates are non-empty on this platform", async () => {
     await withEnv("CHROME_USER_DATA_DIR", undefined, async () => {
       const dirs = (await freshImport()).userDataDirCandidates();
@@ -133,7 +120,6 @@ describe("path resolution", () => {
     });
   });
 
-  // A3: %LOCALAPPDATA% redirection is honoured (Windows-only behaviour)
   test("A3 win: redirected LOCALAPPDATA is used", { skip: process.platform !== "win32" }, async () => {
     await withEnv("LOCALAPPDATA", "D:\\Redirected\\Local", async () => {
       const dirs = (await freshImport()).userDataDirCandidates();
@@ -141,8 +127,6 @@ describe("path resolution", () => {
     });
   });
 
-  // A4: $CHROME_USER_DATA_DIR override leads the list. This value is ours to
-  // interpret, so both tilde separators are accepted.
   test("A4: env override is first and tilde-expanded", async () => {
     await withEnv("CHROME_USER_DATA_DIR", join("~", "my-chrome-data"), async () => {
       const dirs = (await freshImport()).userDataDirCandidates();
@@ -157,7 +141,6 @@ describe("path resolution", () => {
     });
   });
 
-  // A5: browser naming
   test("A5: Chrome recognised", async () => {
     const { browserNameForUserDataDir } = await freshImport();
     assert.equal(browserNameForUserDataDir("/home/u/.config/google-chrome"), "Chrome");

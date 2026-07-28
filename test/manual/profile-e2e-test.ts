@@ -1,22 +1,3 @@
-/**
- * End-to-end proof of profile pinning, against a REAL browser.
- *
- * Runs entirely inside a throwaway --user-data-dir, so the user's own browser
- * and profiles are never touched. Designed to run on Linux (under xvfb-run),
- * macOS, and Windows — the three OSes where the launch handshake relies on
- * Chromium's ProcessSingleton handing our argv to the running browser.
- *
- * What it asserts:
- *   1. two profiles in one browser enumerate from Local State
- *   2. they surface as DISTINCT browserContextIds over one CDP endpoint
- *   3. a sentinel launch opens a window in the requested profile and is
- *      identifiable
- *   4. tabs spawned afterwards stay in that profile AND that window
- *   5. a spawned tab is attachable, navigable, and closable
- *
- * Run: npx tsx test/manual/profile-e2e-test.ts
- *      CHROME_BIN=/path/to/chrome npx tsx test/manual/profile-e2e-test.ts
- */
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,7 +20,6 @@ const check = (cond: boolean, label: string): void => {
   }
 };
 
-/** Locate a Chrome/Chromium binary for the host OS. */
 function findBrowser(): string | undefined {
   const fromEnv = process.env["CHROME_BIN"] ?? process.env["CHROME_PATH"];
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
@@ -68,7 +48,6 @@ function findBrowser(): string | undefined {
         const resolved = execFileSync("which", [name], { encoding: "utf8" }).trim();
         if (resolved) return resolved;
       } catch {
-        // not on PATH
       }
     }
   }
@@ -118,7 +97,6 @@ async function waitForEndpoint(deadlineMs = 30_000): Promise<boolean> {
       const res = await fetch(`http://127.0.0.1:${PORT}/json/version`);
       if (res.ok) return true;
     } catch {
-      // not up yet
     }
     await sleep(500);
   }
@@ -150,31 +128,26 @@ async function main(): Promise<void> {
   browser.unref();
 
   const cleanup = (): void => {
-    // Chrome spawns a tree of child processes. Leaving any alive keeps the
-    // user-data-dir locked, which on Windows also blocks the directory removal.
+    // Any surviving child keeps the user-data-dir locked, which on Windows also blocks the directory removal.
     if (process.platform === "win32") {
       try {
         execFileSync("taskkill.exe", ["/pid", String(browser.pid), "/T", "/F"], { stdio: "ignore" });
       } catch {
-        // already gone
       }
     } else {
       try {
-        // detached:true put the browser in its own process group; the negative
-        // pid signals the whole group.
+        // detached:true put the browser in its own process group, so the negative pid signals the whole group.
         process.kill(-browser.pid!, "SIGKILL");
       } catch {
         try {
           browser.kill("SIGKILL");
         } catch {
-          // already gone
         }
       }
     }
     try {
       rmSync(udd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch {
-      // A locked file in a temp dir is not worth failing the run over.
     }
   };
 
@@ -185,9 +158,6 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    // Create a SECOND profile in the same browser by launching into it. The
-    // running instance handles this via ProcessSingleton — the very behaviour
-    // profile pinning depends on.
     const second = spawn(exePath, [...baseArgs, "--profile-directory=Profile 2", "about:blank"], {
       detached: true,
       stdio: "ignore",
@@ -201,8 +171,7 @@ async function main(): Promise<void> {
     const windowOf = async (targetId: string): Promise<number | undefined> =>
       (await cdp.call("Browser.getWindowForTarget", { targetId })).result?.windowId;
 
-    // 1. enumeration. Chrome flushes Local State asynchronously — a profile
-    // created seconds ago is not registered yet — so poll rather than read once.
+    // Chrome flushes Local State asynchronously, so a just-created profile is not registered yet — poll rather than read once.
     let profiles = await listProfiles(udd);
     const enumDeadline = Date.now() + 30_000;
     while (Date.now() < enumDeadline && profiles.length < 2) {
@@ -217,11 +186,9 @@ async function main(): Promise<void> {
       "E1: every profile has a 'Name (…)' label",
     );
 
-    // 2. distinct browser contexts
     const contexts = new Set((await pageTargets()).map((t) => t.browserContextId));
     check(contexts.size >= 2, `E2: profiles surface as distinct browserContextIds (${contexts.size} seen)`);
 
-    // 3. sentinel launch into a chosen profile
     const launched = await openProfileWindow({ exePath, profileDir: "Profile 2", explicitUserDataDir: udd });
     check(launched.success, "E3: profile window launch dispatched");
     if (!launched.success) throw new Error(launched.error);
@@ -240,7 +207,6 @@ async function main(): Promise<void> {
     const seedContext = seed.browserContextId;
     check(typeof seedContext === "string" && seedContext.length > 0, "E3: seed carries the profile's browserContextId");
 
-    // 4. + 5. spawn a tab the way the target factory does
     const attached = await cdp.call("Target.attachToTarget", { targetId: seed.targetId, flatten: true });
     const sessionId = attached.result?.sessionId;
     check(!!sessionId, "E4: seed page in a non-default profile is attachable");

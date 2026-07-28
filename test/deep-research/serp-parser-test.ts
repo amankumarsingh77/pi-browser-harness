@@ -1,8 +1,3 @@
-/**
- * Unit tests for the pure Google SERP parser — no browser required.
- *
- * Run: npm test
- */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -17,7 +12,6 @@ const captcha = fixture("google-serp-captcha.json");
 const empty = fixture("google-serp-empty.json");
 
 describe("pure Google SERP parser", () => {
-  // S1: redirect unwrapping + internal/javascript anchors dropped
   test("S1: /url?q= redirect is unwrapped to the real target", () => {
     const results = parseGoogleSerp(ok.anchors, 10);
     const urls = results.map((r) => r.url);
@@ -36,7 +30,6 @@ describe("pure Google SERP parser", () => {
     assert.ok(!urls.some((u) => u.startsWith("javascript:")));
   });
 
-  // S2: dedupe + rank + limit
   test("S2: trailing-slash duplicate collapses to one result", () => {
     const results = parseGoogleSerp(ok.anchors, 10);
     const realExampleCount = results.filter((r) => r.url.startsWith("https://real.example/x")).length;
@@ -53,7 +46,6 @@ describe("pure Google SERP parser", () => {
     assert.ok(capped.length === 2 && capped[capped.length - 1]?.rank === 2);
   });
 
-  // S3: CAPTCHA / no-results classification
   test("S3: populated SERP classifies as ok", () => {
     assert.equal(classifySerp(ok.pageText, parseGoogleSerp(ok.anchors, 10).length), "ok");
   });

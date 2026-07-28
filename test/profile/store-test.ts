@@ -1,11 +1,3 @@
-/**
- * Unit tests for the profile pin store — no browser required.
- *
- * Redirects pi's agent dir via $PI_CODING_AGENT_DIR so the real
- * ~/.pi/agent/browser-harness.json is never touched.
- *
- * Run: npm test
- */
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -114,7 +106,6 @@ describe("profile pin store", () => {
     const blocked = join(sandbox, "blocked");
     mkdirSync(blocked, { recursive: true });
     writeFileSync(join(blocked, "browser-harness.json"), "{}", "utf8");
-    // Point the agent dir at a FILE — mkdir/write must fail cleanly.
     process.env["PI_CODING_AGENT_DIR"] = join(blocked, "browser-harness.json");
     const { writePin: writeAgain } = await import(`../../src/profile/store?nocache=${Date.now()}`);
     const written = await writeAgain(pin);

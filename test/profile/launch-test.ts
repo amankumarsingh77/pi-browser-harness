@@ -1,14 +1,3 @@
-/**
- * Unit tests for openProfileWindow's failure reporting — no browser required.
- *
- * spawn() reports a missing or non-executable binary asynchronously, as an
- * 'error' event, not by throwing. When that event was ignored, a bad executable
- * path returned `ok` and the caller's 15s sentinel poll blamed the browser:
- * "couldn't open a window in <profile> automatically". These tests pin the
- * failure to its real cause instead.
- *
- * Run: npm test
- */
 import { test, before, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -28,8 +17,6 @@ describe("openProfileWindow's failure reporting", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  // L1: a nonexistent binary — the shape of an in-place browser upgrade,
-  // where /proc/<pid>/exe still names the unlinked file.
   describe("L1", () => {
     const missing = (): string => join(root, "chrome (deleted)");
 
@@ -51,8 +38,6 @@ describe("openProfileWindow's failure reporting", () => {
     });
   });
 
-  // L2: a file that exists but is not executable — same async 'error' path,
-  // different errno (EACCES). Skipped where the check is meaningless.
   test(
     "L2: a non-executable file fails the launch",
     { skip: process.platform === "win32" || process.getuid?.() === 0 },
@@ -64,8 +49,6 @@ describe("openProfileWindow's failure reporting", () => {
     },
   );
 
-  // L3: a failed launch leaves no sentinel file behind. The caller only calls
-  // cleanup() on the success path, so the failure path owns its own tidying.
   describe("L3", () => {
     let before_: string | undefined;
 
@@ -91,8 +74,6 @@ describe("openProfileWindow's failure reporting", () => {
     });
   });
 
-  // L4: a launcher that starts succeeds, and the sentinel it advertises is a
-  // real, readable file — the page the browser is asked to open.
   describe("L4", () => {
     let r: Awaited<ReturnType<typeof openProfileWindow>>;
 

@@ -1,11 +1,3 @@
-/**
- * Unit tests for profile enumeration — no browser required.
- *
- * Builds throwaway user-data-dirs on disk so both tiers (Local State and the
- * Preferences scan) run against real files.
- *
- * Run: npm test
- */
 import { test, after, describe } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -31,7 +23,6 @@ describe("profile enumeration", () => {
     for (const root of roots) rmSync(root, { recursive: true, force: true });
   });
 
-  // L1: tier 1 — names, emails, ordering, last-used marker
   const makeL1Udd = (): string => {
     const udd = makeUdd();
     writeLocalState(udd, {
@@ -73,7 +64,6 @@ describe("profile enumeration", () => {
     assert.equal(profiles[0]?.lastUsed, false);
   });
 
-  // L2: profile with no signed-in account falls back to the directory
   const makeL2Udd = (): string => {
     const udd = makeUdd();
     writeLocalState(udd, { profile: { info_cache: { "Profile 3": { name: "Work" } } } });
@@ -90,7 +80,6 @@ describe("profile enumeration", () => {
     assert.equal(profiles[0]?.email, undefined);
   });
 
-  // L3: gaia_name backfills a missing name; ephemeral profiles are skipped
   const makeL3Udd = (): string => {
     const udd = makeUdd();
     writeLocalState(udd, {
@@ -115,7 +104,6 @@ describe("profile enumeration", () => {
     assert.equal(profiles[0]?.label, "Aman Kumar (gaia@example.com)");
   });
 
-  // L4: unlisted profiles are appended alphabetically after profiles_order
   test("L4: ordered entries first, remainder alphabetical", async () => {
     const udd = makeUdd();
     writeLocalState(udd, {
@@ -132,7 +120,6 @@ describe("profile enumeration", () => {
     assert.equal(profiles.map((p) => p.dir).join(","), "Profile 9,Default,Profile 3");
   });
 
-  // L5: corrupt Local State falls through to the Preferences scan
   const makeL5Udd = (): string => {
     const udd = makeUdd();
     writeLocalState(udd, "{ this is not json");
@@ -140,7 +127,7 @@ describe("profile enumeration", () => {
       profile: { name: "Fallback Name" },
       account_info: [{ email: "fallback@example.com" }],
     });
-    writeProfileDir(udd, "Crash Reports"); // no Preferences → not a profile
+    writeProfileDir(udd, "Crash Reports");
     return udd;
   };
 
@@ -154,7 +141,6 @@ describe("profile enumeration", () => {
     assert.equal(profiles[0]?.label, "Fallback Name (fallback@example.com)");
   });
 
-  // L6: missing info_cache also falls through to tier 2
   test("L6: missing info_cache → Preferences scan", async () => {
     const udd = makeUdd();
     writeLocalState(udd, { profile: { last_used: "Default" } });
@@ -163,13 +149,11 @@ describe("profile enumeration", () => {
     assert.equal(profiles[0]?.label, "Tier Two (Profile 1)");
   });
 
-  // L7: nothing readable → empty list, never a throw
   test("L7: unreadable user-data-dir yields an empty list", async () => {
     const profiles = await listProfiles(join(tmpdir(), "pi-profile-does-not-exist-xyz"));
     assert.equal(profiles.length, 0);
   });
 
-  // L8: label formatting is total
   test("L8: email wins the brackets", () => {
     assert.equal(formatProfileLabel("A", "a@b.c", "Default"), "A (a@b.c)");
   });

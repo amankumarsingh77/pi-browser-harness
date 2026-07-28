@@ -1,8 +1,3 @@
-/**
- * Unit tests for the pure readability extractor — no browser required.
- *
- * Run: npm test
- */
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,7 +8,6 @@ const fixture = (name: string): PageCapture =>
   JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", name), "utf8")) as PageCapture;
 
 describe("pure readability extractor", () => {
-  // S10: boilerplate stripped, article content preserved
   test("S10: article body text is present", () => {
     const page = extractReadable(fixture("article-capture.json"));
     assert.ok(page.text.includes("Chrome DevTools Protocol lets tools instrument"));
@@ -54,7 +48,6 @@ describe("pure readability extractor", () => {
     assert.ok(page.wordCount > 40);
   });
 
-  // S11: no clear article node falls back to bounded body text
   test("S11: structure-less page falls back to non-empty body text", () => {
     const page = extractReadable(fixture("no-article-capture.json"));
     assert.ok(page.text.length > 0);

@@ -14,13 +14,6 @@ type RecordedCall = {
   readonly opts: RequestOpts | undefined;
 };
 
-/**
- * A stub transport: no socket, no browser. `request()` looks up a canned
- * Result by method name (defaulting to `ok({})` for methods the test doesn't
- * care about — e.g. the six domain-enable calls switchTo fires as a side
- * effect). Every call is recorded so tests can assert on exactly what the
- * session sent, including the sessionId routing and the timeoutMs option.
- */
 const makeStubTransport = (
   responses: Record<string, Result<unknown, CdpError>> = {},
 ): { transport: CdpTransport; calls: RecordedCall[] } => {
@@ -32,8 +25,7 @@ const makeStubTransport = (
       calls.push({ method, params, opts });
       return Promise.resolve(responses[method] ?? ok({}));
     },
-    // No real events ever arrive; the session's background consumer just
-    // awaits forever. No timers involved, so it doesn't keep the process alive.
+    // No real events ever arrive, so the session's background consumer awaits forever — with no timers involved, it does not keep the process alive.
     events: (): AsyncIterable<CdpEvent> => (async function* (): AsyncGenerator<CdpEvent> {
       await new Promise<never>(() => {});
     })(),
@@ -84,8 +76,6 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
     const r = await session.call("Target.getTargetInfo", {});
     assert.equal(r.success, false);
     if (!r.success) {
-      // Must stay "timeout" — decodeResult must never run on a failed
-      // transport call and relabel it "invalid_response".
       assert.equal(r.error.kind, "timeout");
       assert.equal(r.error.message, "socket dead");
     }
@@ -97,24 +87,21 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
     });
     const session = createCdpSession(transport);
 
-    // Establish an internal sessionId distinct from both null and the
-    // explicit sid used below, via the public switchTo() — no attachFirstPage
-    // bookkeeping required.
     const switched = await session.switchTo("target-1");
     assert.equal(switched.success, true);
 
-    calls.length = 0; // discard switchTo's own requests (activate/attach/enable*6)
+    calls.length = 0;
 
     await session.call("Page.navigate", { url: "http://example.com" });
     await session.callOnTarget("Page.navigate", { url: "http://example.com" }, "explicit-sid");
     await session.callBrowser("Target.getTargets");
 
     const navigateCalls = calls.filter((c) => c.method === "Page.navigate");
-    assert.equal(navigateCalls[0]?.opts?.sessionId, "session-xyz"); // call() uses the active session
-    assert.equal(navigateCalls[1]?.opts?.sessionId, "explicit-sid"); // callOnTarget() uses the given sid, not the active one
+    assert.equal(navigateCalls[0]?.opts?.sessionId, "session-xyz");
+    assert.equal(navigateCalls[1]?.opts?.sessionId, "explicit-sid");
 
     const browserCall = calls.find((c) => c.method === "Target.getTargets");
-    assert.equal(browserCall?.opts?.sessionId, null); // callBrowser() forces null even though a session is active
+    assert.equal(browserCall?.opts?.sessionId, null);
   });
 
   test("opts.timeoutMs reaches the transport only when provided (exactOptionalPropertyTypes)", async () => {
@@ -127,8 +114,7 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
 
     await session.callBrowser("Target.getTargets");
     const withoutTimeout = calls.filter((c) => c.method === "Target.getTargets")[1];
-    // The key itself must be absent, not present-with-undefined — that's the
-    // distinction exactOptionalPropertyTypes exists to enforce at the call site.
+    // The key must be absent, not present-with-undefined — the distinction exactOptionalPropertyTypes enforces at the call site.
     assert.equal(withoutTimeout?.opts && "timeoutMs" in withoutTimeout.opts, false);
   });
 });

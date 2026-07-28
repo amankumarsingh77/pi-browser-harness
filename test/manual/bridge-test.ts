@@ -1,8 +1,3 @@
-/**
- * Manual integration test for CdpBridge against real Chrome.
- * Requires: Chrome with remote debugging enabled (chrome://inspect/#remote-debugging).
- * Run: npx tsx test/manual/bridge-test.ts
- */
 import { createCdpBridge, type SendToClient } from "../../src/daemon/bridge";
 import type { WireRequest, WireResponse, WireEvent } from "../../src/daemon/protocol";
 
@@ -17,11 +12,8 @@ async function main() {
   console.log("Starting CdpBridge...");
   const bridge = createCdpBridge();
 
-  // ── Test 1: Connect to Chrome ──────────────────────────────────────────
-  // start() now runs auto-retry in the background. Wait a moment for
-  // the initial connection attempt to complete.
   await bridge.start();
-  await sleep(3000); // allow time for WebSocket handshake
+  await sleep(3000);
   if (!bridge.isAlive()) {
     console.error("Cannot continue — Chrome not reachable. Run /browser-setup first.");
     console.error("(The bridge will keep retrying in the background.)");
@@ -30,7 +22,6 @@ async function main() {
   console.log("  ✓ Connect to Chrome: ok");
   check(bridge.isAlive(), "Bridge reports alive after connect");
 
-  // ── Test 2: Send Target.getTargets ─────────────────────────────────────
   const responses: WireResponse[] = [];
   const events: WireEvent[] = [];
   let eventCount = 0;
@@ -55,7 +46,6 @@ async function main() {
     console.log(`    Found ${r.targetInfos?.length ?? 0} targets`);
   }
 
-  // ── Test 3: Create a new tab ───────────────────────────────────────────
   responses.length = 0;
   const req2: WireRequest = {
     type: "request", id: 2, method: "Target.createTarget",
@@ -75,7 +65,6 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Test 4: Attach to target ───────────────────────────────────────────
   responses.length = 0;
   const req3: WireRequest = {
     type: "request", id: 3, method: "Target.attachToTarget",
@@ -89,7 +78,6 @@ async function main() {
   const sessionId = (res3?.result as any)?.sessionId as string | undefined;
   check(typeof sessionId === "string", `Session ID: ${sessionId ?? "FAILED"}`);
 
-  // Verify session ownership was tracked
   if (sessionId) {
     const owner = bridge.getSessionOwner(sessionId);
     check(owner === "pi-test", "Session ownership tracked correctly");
@@ -100,7 +88,6 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Test 5: Navigate tab via session ───────────────────────────────────
   responses.length = 0;
   const req4: WireRequest = {
     type: "request", id: 4, method: "Page.navigate",
@@ -115,7 +102,6 @@ async function main() {
   const frameId = (res4?.result as any)?.frameId as string | undefined;
   check(typeof frameId === "string", `Navigated to example.com (frame: ${frameId ?? "FAILED"})`);
 
-  // ── Test 6: Evaluate JS in the page ────────────────────────────────────
   responses.length = 0;
   const req5: WireRequest = {
     type: "request", id: 5, method: "Runtime.evaluate",
@@ -130,7 +116,6 @@ async function main() {
   const title = (res5?.result as any)?.result?.value as string | undefined;
   check(title === "Example Domain", `Page title: "${title ?? "FAILED"}" (expected "Example Domain")`);
 
-  // ── Test 7: Detach from target ─────────────────────────────────────────
   responses.length = 0;
   const req6: WireRequest = {
     type: "request", id: 6, method: "Target.detachFromTarget",
@@ -142,11 +127,9 @@ async function main() {
   const res6 = responses.find(r => r.id === 6);
   check(res6 != null, "Target.detachFromTarget response received");
 
-  // Session ownership should be released
   const ownerAfter = bridge.getSessionOwner(sessionId);
   check(ownerAfter === undefined, "Session ownership released after detach");
 
-  // ── Test 8: Close target ───────────────────────────────────────────────
   responses.length = 0;
   const req7: WireRequest = {
     type: "request", id: 7, method: "Target.closeTarget",
@@ -158,12 +141,8 @@ async function main() {
   const res7 = responses.find(r => r.id === 7);
   check(res7 != null, "Target.closeTarget response received");
 
-  // ── Test 9: Remove client ──────────────────────────────────────────────
   bridge.removeClient("pi-test");
-  // After removal, no pending requests should remain — verify by checking
-  // no errors are thrown when handling subsequent events.
 
-  // ── Cleanup ────────────────────────────────────────────────────────────
   console.log("\nStopping bridge...");
   await bridge.stop();
   console.log("Bridge stopped ✓");
