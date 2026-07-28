@@ -43,6 +43,7 @@ export type CdpSession = {
   resolveRef(ref: string): number | undefined;
   /** The active tab's prior ref signatures — baseline for the post-mutation diff. */
   refSignatures(): ReadonlyMap<string, string>;
+  refMappings(): ReadonlyMap<string, number>;
   call<M extends CdpMethod>(method: M, params?: ParamsOf<M>, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
   callOnTarget<M extends CdpMethod>(method: M, params: ParamsOf<M>, sessionId: string, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
   callBrowser<M extends CdpMethod>(method: M, params?: ParamsOf<M>, opts?: { timeoutMs?: number }): Promise<Result<ResultOf<M>, CdpError>>;
@@ -395,6 +396,10 @@ export const createCdpSession = (
     refSignatures() {
       const tab = targetId ? tabs.get(targetId) : undefined;
       return tab?.refSig ?? new Map();
+    },
+    refMappings() {
+      const tab = targetId ? tabs.get(targetId) : undefined;
+      return tab?.refMap ?? new Map();
     },
     call(method, params, opts) {
       return req(method, params, sessionId, opts);

@@ -83,14 +83,25 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
   const targets = collectInteractiveTargets(slim);
 
   // Re-publish fresh refs so later ref calls resolve against the new DOM.
+  const priorRefs = session.refMappings();
+  const refByBackendId = new Map<number, string>();
+  for (const [ref, backendId] of priorRefs) refByBackendId.set(backendId, ref);
+  let nextIndex = 1;
+  for (const ref of priorRefs.keys()) {
+    const digits = /^e(\d+)$/.exec(ref)?.[1];
+    if (digits !== undefined) nextIndex = Math.max(nextIndex, Number(digits) + 1);
+  }
   const refMap = new Map<string, number>();
   const refSig = new Map<string, string>();
-  targets.forEach(({ node, backendId }, i) => {
-    const ref = `e${i + 1}`;
+  const taken = new Set<string>();
+  for (const { node, backendId } of targets) {
+    const prior = refByBackendId.get(backendId);
+    const ref = prior !== undefined && !taken.has(prior) ? prior : `e${nextIndex++}`;
+    taken.add(ref);
     node.ref = ref;
     refMap.set(ref, backendId);
     refSig.set(ref, sigOf(node));
-  });
+  }
   session.setRefMap(refMap, refSig);
 
   // Compare by stable identity (role|name) rather than ref position, since refs
