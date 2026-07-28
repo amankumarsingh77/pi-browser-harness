@@ -90,11 +90,11 @@ export const createCdpSession = (
       // Filter: skip events from sessions we're not currently tracking.
       // Target.targetDestroyed is browser-level (no sessionId) — always process.
       if (ev.method !== "Target.targetDestroyed") {
-        if (ev.sessionId && ev.sessionId !== sessionId) continue;
+        if (ev.sessionId && !sessionIdToTargetId.has(ev.sessionId)) continue;
       }
       switch (ev.method) {
         case "Page.javascriptDialogOpening": {
-          const tab = targetId ? tabs.get(targetId) : undefined;
+          const tab = resolveTab(ev.sessionId);
           if (!tab) break;
           const decoded = decodeEvent(ev.method, ev.params);
           tab.dialog = decoded.success
@@ -114,7 +114,7 @@ export const createCdpSession = (
         // was about to read. (Fix for spec §7 predictability bug #2.)
         case "Page.frameNavigated":
         case "Page.loadEventFired": {
-          const tab = targetId ? tabs.get(targetId) : undefined;
+          const tab = resolveTab(ev.sessionId);
           if (tab) tab.pageInfoDirty = true;
           break;
         }
@@ -333,7 +333,6 @@ export const createCdpSession = (
       const attachedSessionId = attached.data;
       sessionId = attachedSessionId;
       targetId = pickTargetId;
-      await enableDomains(attachedSessionId);
       tabs.set(pickTargetId, {
         sessionId: attachedSessionId,
         targetId: pickTargetId,
@@ -345,6 +344,7 @@ export const createCdpSession = (
         refSig: new Map(),
       });
       sessionIdToTargetId.set(attachedSessionId, pickTargetId);
+      await enableDomains(attachedSessionId);
       return ok({ targetId: pickTargetId, sessionId: attachedSessionId });
     },
     async switchTo(tid) {
