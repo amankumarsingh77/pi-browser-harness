@@ -1,12 +1,3 @@
-/**
- * Shared transport primitives for CdpTransport implementations.
- *
- * Both the WebSocket transport (transport.ts, talking to Chrome directly) and
- * the daemon transport (daemon-transport.ts, talking to the daemon over a Unix
- * socket) need an identical single-consumer async event queue plus the same
- * pending-request bookkeeping. This module is the single source of truth for
- * that shared machinery.
- */
 
 import { type Result, err } from "../util/result";
 import { type CdpError, cdpError } from "./errors";
@@ -14,14 +5,6 @@ import type { CdpEvent } from "./types";
 
 export type CdpResult = Result<unknown, CdpError>;
 
-/**
- * A single-consumer async queue of CDP events.
- *
- * `push` enqueues an event (dropped silently after `end`). `end` terminates the
- * stream — any pending and future iterator `next()` calls resolve `done:true`.
- * `iter` is the AsyncIterable consumed by one for-await loop; a second consumer
- * would silently steal events from the first.
- */
 export type EventQueue = {
   readonly push: (e: CdpEvent) => void;
   readonly end: () => void;
@@ -59,18 +42,12 @@ export const makeEventQueue = (): EventQueue => {
   };
 };
 
-/** An in-flight CDP request awaiting its response or timeout. */
 export type Pending = {
   readonly resolve: (v: Result<unknown, CdpError>) => void;
   readonly timer: ReturnType<typeof setTimeout>;
   readonly method: string;
 };
 
-/**
- * Reject every in-flight request with a transport_closed error and clear the
- * map. Called from each transport's cleanup path when the underlying connection
- * goes away.
- */
 export const rejectAllPending = (pending: Map<number, Pending>, reason: string): void => {
   for (const [, p] of pending) {
     clearTimeout(p.timer);
@@ -79,18 +56,6 @@ export const rejectAllPending = (pending: Map<number, Pending>, reason: string):
   pending.clear();
 };
 
-/**
- * Send a CDP request and return a promise that settles when the matching
- * response arrives, the request times out, or the send throws.
- *
- * The transport supplies a `send` callback that puts the already-serialized
- * payload onto its wire (WebSocket frame or Unix-socket line); everything else
- * — registering the pending entry, the timeout timer, and synchronous send
- * failure handling — is identical across transports and lives here.
- *
- * `timeoutLabel` is the transport's prefix for the timeout error message
- * (e.g. "CDP" or "Daemon").
- */
 export const sendWithTimeout = (
   pending: Map<number, Pending>,
   id: number,
@@ -114,10 +79,6 @@ export const sendWithTimeout = (
     }
   });
 
-/**
- * Register a close listener, returning an unsubscribe function. Identical
- * across transports, so it lives here.
- */
 export const makeOnClose = (closeListeners: Set<() => void>) =>
   (cb: () => void): (() => void) => {
     closeListeners.add(cb);

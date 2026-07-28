@@ -2,7 +2,6 @@ import { map, type Result } from "../util/result";
 import type { CdpError } from "./errors";
 import type { CdpSession } from "./session";
 
-/** Target.attachToTarget, unwrapped to the new session id. */
 export const attachTo = async (
   session: CdpSession,
   targetId: string,

@@ -15,8 +15,6 @@ export type CdpTransport = {
     params: Record<string, unknown>,
     opts?: { sessionId?: string | null; timeoutMs?: number },
   ): Promise<Result<unknown, CdpError>>;
-  // Returns the current event queue's iterator. After close()+reconnect, callers
-  // must re-call events() — the old iterator will have received done:true.
   events(): AsyncIterable<CdpEvent>;
   state(): "open" | "closed" | "connecting";
   onClose(cb: () => void): () => void;
@@ -107,16 +105,13 @@ export const createCdpTransport = (): CdpTransport => {
           clearTimeout(timer);
           ws = null;
           cleanup("WebSocket closed");
-          // If onopen already settled the connect promise, this settle is a no-op
-          // (guarded by `settled`). cleanup() above still runs unconditionally so
-          // pending requests are rejected and the event queue is rotated.
           settle(err(cdpError("transport_closed", "CDP WebSocket closed")));
         };
       });
     },
     close(): Promise<void> {
       if (ws) {
-        try { ws.close(1000, "Shutdown"); } catch { /* best effort */ }
+        try { ws.close(1000, "Shutdown"); } catch {}
         ws = null;
       }
       cleanup("close() called");
@@ -128,8 +123,7 @@ export const createCdpTransport = (): CdpTransport => {
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         return Promise.resolve(err(cdpError("transport_closed", "Browser not connected. Is Chrome running?", method)));
       }
-      // Bind to a local const so the non-null is guaranteed even across microtasks
-      // between the readyState check and the send() call.
+      // Bind to a local const so the non-null holds across microtasks between the readyState check and send().
       const sock = ws;
       const id = nextId++;
       const payload: Record<string, unknown> = { id, method, params };
@@ -138,11 +132,7 @@ export const createCdpTransport = (): CdpTransport => {
       return sendWithTimeout(pending, id, method, timeoutMs, "CDP", () => sock.send(json));
     },
     events(): AsyncIterable<CdpEvent> {
-      // Single-consumer: each connection's event stream may be iterated by
-      // exactly one for-await loop. Calling events() multiple times returns
-      // the same iterable; the second consumer will silently steal events
-      // from the first. After a reconnect, the previous iterator is ended
-      // and callers must re-call events() to receive new events.
+      // Single-consumer: a second for-await loop over this iterable silently steals events from the first.
       return queue.iter;
     },
     state(): "open" | "closed" | "connecting" {
