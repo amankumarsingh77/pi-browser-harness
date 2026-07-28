@@ -1,61 +1,10 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { fillDeclaration } from "./fill-engine";
 import { detailsOf, resolveAndCall } from "./form";
 
-const FILL_FN = `
-function(value) {
-  const el = this;
-  if (!el || el.nodeType !== 1) return { ok: false, reason: "ref does not point to an element" };
-  if (el.disabled) return { ok: false, reason: "element is disabled" };
-  const tag = (el.tagName || "").toLowerCase();
-  const type = (el.type || "").toLowerCase();
-  try { el.focus(); } catch (e) {}
-  const fire = function(t) { el.dispatchEvent(new Event(t, { bubbles: true })); };
-
-  if (tag === "select") {
-    const want = String(value);
-    let matched = null;
-    for (let i = 0; i < el.options.length; i++) {
-      const o = el.options[i];
-      if (o.value === want || o.label === want || o.text === want) { matched = o; break; }
-    }
-    if (!matched) {
-      const opts = [];
-      for (let i = 0; i < el.options.length; i++) opts.push({ value: el.options[i].value, text: el.options[i].text });
-      return { ok: false, reason: "no matching option", kind: "select", options: opts };
-    }
-    el.value = matched.value;
-    fire("input"); fire("change");
-    return { ok: true, kind: "select", value: el.value, text: matched.text };
-  }
-
-  if (tag === "input" && (type === "checkbox" || type === "radio")) {
-    const want = value === true || value === "true" || value === "on" || value === 1;
-    if (el.checked !== want) {
-      try { el.click(); } catch (e) {}
-      if (el.checked !== want) { el.checked = want; fire("input"); fire("change"); }
-    }
-    return { ok: true, kind: type, checked: el.checked };
-  }
-
-  if (el.isContentEditable) {
-    el.textContent = String(value);
-    fire("input"); fire("change");
-    return { ok: true, kind: "contenteditable", value: el.textContent };
-  }
-
-  if (tag === "input" || tag === "textarea") {
-    const proto = tag === "textarea" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
-    const desc = Object.getOwnPropertyDescriptor(proto, "value");
-    if (desc && desc.set) desc.set.call(el, String(value));
-    else el.value = String(value);
-    fire("input"); fire("change");
-    return { ok: true, kind: tag, value: el.value };
-  }
-
-  return { ok: false, reason: "element is not a fillable field (tag=" + tag + ")" };
-}`;
+const FILL_FN = fillDeclaration({ rejectSelect: false, focusFirst: true });
 
 const FieldValue = Type.Union([Type.String(), Type.Boolean()], {
   description: "Value to set. String for text inputs / textareas / selects / contenteditable; boolean for checkboxes & radios.",
