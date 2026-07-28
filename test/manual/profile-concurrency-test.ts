@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBrowserClient } from "../../src/client";
-import { createDaemonTransport } from "../../src/cdp/daemon-transport";
+import { createDaemonTransport } from "../../src/daemon/transport";
 import { isDaemonRunning, spawnDaemon } from "../../src/daemon/spawn";
 import { closeIsolatedTab, openIsolatedTab } from "../../src/domains/isolated-tab";
 

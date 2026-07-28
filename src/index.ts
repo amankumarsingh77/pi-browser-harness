@@ -7,7 +7,7 @@ import { readPin } from "./profile/store";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
-import { createDaemonTransport } from "./cdp/daemon-transport";
+import { createDaemonTransport } from "./daemon/transport";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
 

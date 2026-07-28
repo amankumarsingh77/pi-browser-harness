@@ -23,96 +23,127 @@ export type CdpBridge = {
   onClose(handler: CloseHandler): void;
 };
 
-interface PendingEntry {
-  clientId: string;
-  localId: number;
-}
+export type InFlight = {
+  readonly clientId: string;
+  readonly localId: number;
+  readonly send: SendToClient;
+  readonly timer: ReturnType<typeof setTimeout>;
+  readonly isAttach: boolean;
+};
 
-class IdMultiplexer {
-  private nextId = 1;
-  private localToRemote = new Map<string, Map<number, number>>();
-  private pending = new Map<number, PendingEntry>();
+// One map, keyed by the daemon-side id: the client that asked, the id it used, and everything needed to answer it.
+export type IdMultiplexer = {
+  allocate(entry: Omit<InFlight, "timer">, arm: (daemonId: number) => InFlight["timer"]): number;
+  take(daemonId: number): InFlight | undefined;
+  takeAll(): ReadonlyArray<InFlight>;
+  clearClient(clientId: string): void;
+};
 
-  allocate(clientId: string, localId: number): number {
-    const daemonId = this.nextId++;
-    let m = this.localToRemote.get(clientId);
-    if (!m) { m = new Map(); this.localToRemote.set(clientId, m); }
-    m.set(localId, daemonId);
-    this.pending.set(daemonId, { clientId, localId });
-    return daemonId;
-  }
+export const createIdMultiplexer = (): IdMultiplexer => {
+  let nextId = 1;
+  const inFlight = new Map<number, InFlight>();
 
-  resolve(daemonId: number): PendingEntry | null {
-    const e = this.pending.get(daemonId);
-    if (!e) return null;
-    this.pending.delete(daemonId);
-    const m = this.localToRemote.get(e.clientId);
-    if (m) m.delete(e.localId);
-    return e;
-  }
+  return {
+    allocate(entry, arm) {
+      const daemonId = nextId++;
+      inFlight.set(daemonId, { ...entry, timer: arm(daemonId) });
+      return daemonId;
+    },
+    take(daemonId) {
+      const e = inFlight.get(daemonId);
+      if (!e) return undefined;
+      inFlight.delete(daemonId);
+      clearTimeout(e.timer);
+      return e;
+    },
+    takeAll() {
+      const all = [...inFlight.values()];
+      inFlight.clear();
+      for (const e of all) clearTimeout(e.timer);
+      return all;
+    },
+    // A disconnected client must not be answered later: dropping its entries also cancels their timeouts.
+    clearClient(clientId) {
+      for (const [daemonId, e] of inFlight) {
+        if (e.clientId !== clientId) continue;
+        clearTimeout(e.timer);
+        inFlight.delete(daemonId);
+      }
+    },
+  };
+};
 
-  clearClient(clientId: string): void {
-    const m = this.localToRemote.get(clientId);
-    if (m) { for (const [, did] of m) this.pending.delete(did); }
-    this.localToRemote.delete(clientId);
-  }
-}
+export type EventRouter = {
+  record(clientId: string, sessionId: string): void;
+  release(sessionId: string): void;
+  getOwner(sessionId: string): string | undefined;
+  removeClient(clientId: string): void;
+  route(event: WireEvent): string[];
+};
 
-class EventRouter {
-  private owners = new Map<string, string>();
-  private clientSessions = new Map<string, Set<string>>();
+export const createEventRouter = (): EventRouter => {
+  const owners = new Map<string, string>();
+  const clientSessions = new Map<string, Set<string>>();
 
-  record(clientId: string, sessionId: string): void {
-    const prev = this.owners.get(sessionId);
-    if (prev && prev !== clientId) {
-      this.clientSessions.get(prev)?.delete(sessionId);
-    }
-    this.owners.set(sessionId, clientId);
-    let s = this.clientSessions.get(clientId);
-    if (!s) { s = new Set(); this.clientSessions.set(clientId, s); }
-    s.add(sessionId);
-  }
+  return {
+    record(clientId, sessionId) {
+      const prev = owners.get(sessionId);
+      if (prev && prev !== clientId) clientSessions.get(prev)?.delete(sessionId);
+      owners.set(sessionId, clientId);
+      let s = clientSessions.get(clientId);
+      if (!s) { s = new Set(); clientSessions.set(clientId, s); }
+      s.add(sessionId);
+    },
+    release(sessionId) {
+      const owner = owners.get(sessionId);
+      if (owner) clientSessions.get(owner)?.delete(sessionId);
+      owners.delete(sessionId);
+    },
+    getOwner(sessionId) {
+      return owners.get(sessionId);
+    },
+    removeClient(clientId) {
+      const sessions = clientSessions.get(clientId);
+      if (sessions) { for (const sid of sessions) owners.delete(sid); }
+      clientSessions.delete(clientId);
+    },
+    route(event) {
+      if (event.sessionId) {
+        const owner = owners.get(event.sessionId);
+        return owner ? [owner] : [];
+      }
+      return [...clientSessions.keys()];
+    },
+  };
+};
 
-  release(sessionId: string): void {
-    const owner = this.owners.get(sessionId);
-    if (owner) this.clientSessions.get(owner)?.delete(sessionId);
-    this.owners.delete(sessionId);
-  }
-
-  getOwner(sessionId: string): string | undefined {
-    return this.owners.get(sessionId);
-  }
-
-  removeClient(clientId: string): void {
-    const sessions = this.clientSessions.get(clientId);
-    if (sessions) { for (const sid of sessions) this.owners.delete(sid); }
-    this.clientSessions.delete(clientId);
-  }
-
-  route(event: WireEvent): string[] {
-    if (event.sessionId) {
-      const owner = this.owners.get(event.sessionId);
-      return owner ? [owner] : [];
-    }
-    return [...this.clientSessions.keys()];
-  }
-}
+const CONNECT_WAIT_MS = 15_000;
 
 export const createCdpBridge = (): CdpBridge => {
   let ws: WebSocket | null = null;
   let wsUrl: string | null = null;
-  const mux = new IdMultiplexer();
-  const router = new EventRouter();
+  const mux = createIdMultiplexer();
+  const router = createEventRouter();
   let eventHandler: EventHandler | null = null;
   let closeHandler: CloseHandler | null = null;
 
-  const callbacks = new Map<number, {
-    send: SendToClient;
-    clientId: string;
-    localId: number;
-    timer: ReturnType<typeof setTimeout>;
-    isAttach: boolean;
-  }>();
+  const connectedWaiters: Array<() => void> = [];
+  const signalConnected = (): void => {
+    for (const w of connectedWaiters.splice(0)) w();
+  };
+
+  const waitForConnection = (timeoutMs: number): Promise<void> =>
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      connectedWaiters.push(finish);
+    });
 
   const onChromeMessage = (raw: string): void => {
     let parsed: unknown;
@@ -121,14 +152,8 @@ export const createCdpBridge = (): CdpBridge => {
     const msg: CdpRawMessage = parsed;
 
     if (msg.id !== undefined) {
-      const cb = callbacks.get(msg.id);
-      if (!cb) {
-        mux.resolve(msg.id);
-        return;
-      }
-      clearTimeout(cb.timer);
-      callbacks.delete(msg.id);
-
+      const cb = mux.take(msg.id);
+      if (!cb) return;
       const localId = cb.localId;
 
       if (msg.error) {
@@ -146,8 +171,6 @@ export const createCdpBridge = (): CdpBridge => {
         }
         cb.send(cb.clientId, { type: "response", id: localId, result: msg.result });
       }
-
-      mux.resolve(msg.id);
       return;
     }
 
@@ -221,6 +244,7 @@ export const createCdpBridge = (): CdpBridge => {
           reconnectAttempt = 0;
           ws.send(JSON.stringify({ id: 0, method: "Target.setDiscoverTargets", params: { discover: true } }));
           console.log("[pi-browser-daemon] Connected to Chrome ✓");
+          signalConnected();
           settleOnce();
         });
 
@@ -236,15 +260,12 @@ export const createCdpBridge = (): CdpBridge => {
         sock.on("close", () => {
           clearTimeout(timer);
           ws = null;
-          for (const [daemonId, cb] of callbacks) {
-            clearTimeout(cb.timer);
+          for (const cb of mux.takeAll()) {
             cb.send(cb.clientId, {
               type: "response",
               id: cb.localId,
               error: { code: -32000, message: "Chrome disconnected" },
             });
-            callbacks.delete(daemonId);
-            mux.resolve(daemonId);
           }
           closeHandler?.();
           scheduleRetry();
@@ -276,8 +297,8 @@ export const createCdpBridge = (): CdpBridge => {
   const stop = async (): Promise<void> => {
     stopped = true;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    for (const [, cb] of callbacks) clearTimeout(cb.timer);
-    callbacks.clear();
+    mux.takeAll();
+    signalConnected();
     if (ws) { try { ws.close(1000, "Shutdown"); } catch {} ws = null; }
     wsUrl = null;
   };
@@ -287,13 +308,8 @@ export const createCdpBridge = (): CdpBridge => {
     clientId: string,
     send: SendToClient,
   ): Promise<void> => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      const deadline = Date.now() + 15_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 250));
-        if (ws && ws.readyState === WebSocket.OPEN) break;
-      }
-    }
+    // Every queued request awaits the same connect signal rather than each spinning its own poll loop.
+    if (!ws || ws.readyState !== WebSocket.OPEN) await waitForConnection(CONNECT_WAIT_MS);
 
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       send(clientId, {
@@ -304,26 +320,21 @@ export const createCdpBridge = (): CdpBridge => {
       return;
     }
 
-    const daemonId = mux.allocate(clientId, req.id);
-
-    const timer = setTimeout(() => {
-      callbacks.delete(daemonId);
-      mux.resolve(daemonId);
-      send(clientId, {
-        type: "response",
-        id: req.id,
-        error: { code: -32000, message: `Timeout after ${CDP_COMMAND_TIMEOUT_MS}ms: ${req.method}` },
-      });
-    }, CDP_COMMAND_TIMEOUT_MS);
-
-    const isAttach = req.method === "Target.attachToTarget";
     const isDetach = req.method === "Target.detachFromTarget";
+    if (isDetach && req.sessionId) router.release(req.sessionId);
 
-    if (isDetach && req.sessionId) {
-      router.release(req.sessionId);
-    }
-
-    callbacks.set(daemonId, { send, clientId, localId: req.id, timer, isAttach });
+    const daemonId = mux.allocate(
+      { clientId, localId: req.id, send, isAttach: req.method === "Target.attachToTarget" },
+      (id) =>
+        setTimeout(() => {
+          mux.take(id);
+          send(clientId, {
+            type: "response",
+            id: req.id,
+            error: { code: -32000, message: `Timeout after ${CDP_COMMAND_TIMEOUT_MS}ms: ${req.method}` },
+          });
+        }, CDP_COMMAND_TIMEOUT_MS),
+    );
 
     const payload: Record<string, unknown> = {
       id: daemonId,
@@ -335,9 +346,7 @@ export const createCdpBridge = (): CdpBridge => {
     try {
       ws.send(JSON.stringify(payload));
     } catch (e) {
-      clearTimeout(timer);
-      callbacks.delete(daemonId);
-      mux.resolve(daemonId);
+      mux.take(daemonId);
       send(clientId, {
         type: "response",
         id: req.id,

@@ -4,7 +4,8 @@ import { unlinkSync } from "node:fs";
 import {
   type WireMessage,
   type WireControl,
-  isWireMessage,
+  deserialize,
+  serialize,
   DAEMON_SOCKET_PATH,
   DAEMON_MAX_CLIENTS,
 } from "./protocol";
@@ -59,14 +60,8 @@ export const createIpcServer = (): IpcServer => {
         sockets.set(tempId, currentClient);
 
         rl.on("line", (line: string) => {
-          let msg: WireMessage | null;
-          try {
-            const parsed: unknown = JSON.parse(line);
-            if (!isWireMessage(parsed)) return;
-            msg = parsed;
-          } catch {
-            return;
-          }
+          const msg = deserialize(line);
+          if (!msg) return;
 
           if (msg.type === "control" && msg.action === "register" && !currentClient.registered) {
             const clientId = msg.clientId;
@@ -78,7 +73,7 @@ export const createIpcServer = (): IpcServer => {
                 action: "shutdown",
                 reason: `clientId ${clientId} is already connected`,
               };
-              socket.write(JSON.stringify(reply) + "\n");
+              socket.write(serialize(reply) + "\n");
               socket.destroy();
               return;
             }
@@ -90,7 +85,7 @@ export const createIpcServer = (): IpcServer => {
             clients.set(clientId, currentClient);
 
             const ack: WireControl = { type: "control", action: "registered", clientId };
-            socket.write(JSON.stringify(ack) + "\n");
+            socket.write(serialize(ack) + "\n");
 
             connectHandler?.(currentClient);
             return;
@@ -146,6 +141,14 @@ export const createIpcServer = (): IpcServer => {
       }
     });
 
+  const send = (clientId: string, msg: WireMessage): void => {
+    const client = clients.get(clientId);
+    if (!client) return;
+    try {
+      client.socket.write(serialize(msg) + "\n");
+    } catch {}
+  };
+
   return {
     start,
     stop,
@@ -158,17 +161,9 @@ export const createIpcServer = (): IpcServer => {
     onDisconnect(handler) {
       disconnectHandler = handler;
     },
-    send(clientId, msg) {
-      const client = clients.get(clientId);
-      if (!client) return;
-      try {
-        client.socket.write(JSON.stringify(msg) + "\n");
-      } catch {}
-    },
+    send,
     broadcast(msg) {
-      for (const [clientId] of clients) {
-        this.send(clientId, msg);
-      }
+      for (const [clientId] of clients) send(clientId, msg);
     },
     clientCount: (): number => clients.size,
   };
