@@ -24,7 +24,6 @@ export type BrowserClientOptions = {
     readonly harnessWindowTargetId?: string;
     readonly harnessWindowId?: number;
   };
-  /** Profile to pin this session to, loaded from the durable pin store. */
   readonly profilePin?: ProfilePin | null;
   readonly onOwnershipChange?: (snapshot: {
     readonly ownedTargetIds: ReadonlyArray<string>;
@@ -39,11 +38,7 @@ export type BrowserClient = {
   status(): DaemonStatus;
   start(): Promise<Result<void, CdpError>>;
   stop(): Promise<void>;
-  /** Detach from the current page target (removes the "Chrome is being controlled" banner)
-   *  while keeping the transport connection alive. Call on session shutdown. */
   detach(): Promise<void>;
-  /** Close every tab this session owns and clear the window binding. Best-effort —
-   *  used on session shutdown so no stale harness tabs survive. */
   closeOwnedTabs(): Promise<void>;
   evaluateJs(expression: string, sessionId?: string): Promise<Result<unknown, CdpError>>;
   pageInfo(): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>>;
@@ -57,21 +52,12 @@ export type BrowserClient = {
   current(): { readonly sessionId: string; readonly targetId: string } | null;
   session(): CdpSession;
   transport(): CdpTransport;
-  /** User-data-dir of the connected browser, when discovery could determine it.
-   *  Undefined for BU_CDP_WS / bare-port connections, where profile selection
-   *  is unavailable. */
   userDataDir(): string | undefined;
-  /** The profile this session is pinned to, or null when unpinned. */
   profilePin(): ProfilePin | null;
   setProfilePin(pin: ProfilePin | null): void;
-  /** browserContextId of the pinned profile, once a window has identified it.
-   *  Session-scoped: Chrome re-mints context ids on every browser run. */
   profileContextId(): string | undefined;
   setProfileContextId(contextId: string | undefined): void;
-  /** Open and adopt a window inside the pinned profile. Returns its seed tab. */
   seedPinnedProfileWindow(): Promise<Result<string, CdpError>>;
-  /** Returns the shared async mutex that serialized browser tools must acquire
-   *  before performing mutations. Observation tools should not use this. */
   mutationMutex(): Mutex;
 };
 
@@ -132,9 +118,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       });
     });
   }
-  // The seed provider routes attachFirstPage's fallback through the target
-  // factory, so a pinned profile is honoured on every path that can create the
-  // harness window.
   const session = createCdpSession(transport, ownership, async () => {
     const window = await ensureHarnessWindow(api);
     return window.success ? ok(window.data.targetId) : window;
@@ -147,12 +130,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   let profilePin: ProfilePin | null = opts.profilePin ?? null;
   let profileContextId: string | undefined;
 
-  /**
-   * With a profile pinned, the harness window must exist BEFORE anything
-   * attaches: session.attachFirstPage() would otherwise fall back to a bare
-   * Target.createTarget, which lands in the focus-derived default profile.
-   * Seeding first means attachFirstPage always finds an owned tab to attach to.
-   */
+  // With a pin set the window must exist BEFORE anything attaches, or attachFirstPage's bare Target.createTarget lands in the focus-derived default profile.
   const seedIfPinned = async (): Promise<Result<void, CdpError>> => {
     if (!profilePin) return ok(undefined);
     const window = await ensureHarnessWindow(api);
@@ -215,14 +193,10 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       return start();
     }
     lastHealth = Date.now();
-    // Verify the page session is still responsive (handles the case where the
-    // browser transport is alive but the page target crashed, e.g. localhost died).
     const jsProbe = await session.call("Runtime.evaluate", {
       expression: "1", returnByValue: true,
     }, { timeoutMs: 2_000 });
     if (!jsProbe.success && jsProbe.error.kind === "session_not_found") {
-      // Re-seed first when pinned: if the user closed every harness tab,
-      // attachFirstPage would mint a window in the focus-derived profile.
       const seeded = await seedIfPinned();
       if (!seeded.success) return seeded;
       const reattached = await session.attachFirstPage();
@@ -237,12 +211,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
-    // Heuristic IIFE wrap: legacy convenience that lets agents write
-    // `return foo` instead of `(() => foo)()`. Only wrap when the trimmed
-    // source *starts with* a return statement — a bare expression, or one that
-    // merely mentions `return` inside a string literal or comment, is passed
-    // through untouched (previously any substring `"return "` triggered a wrap,
-    // silently turning such expressions into `undefined`).
+    // Wrap only when the trimmed source *starts with* `return` — matching the substring anywhere silently turned expressions mentioning it into `undefined`.
     const trimmed = expression.trim();
     const isReturnStatement = /^return[\s(]/.test(trimmed);
     const wrapped = isReturnStatement ? `(function(){${expression}})()` : expression;
@@ -289,14 +258,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
         url: t.url,
         owned: ownership.has(t.targetId),
       }));
-    // Reconcile any persisted owned ids that no longer exist as live page targets.
     const live = new Set(tabs.map((t) => t.targetId));
     const owned = ownership.list();
     const survivors = owned.filter((id) => live.has(id));
     if (survivors.length !== owned.length) ownership.replaceAll(survivors);
     const hw = ownership.harnessWindow();
     if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
-    // Prune per-tab page caches for tabs that no longer exist
     for (const tid of pageCaches.keys()) {
       if (!live.has(tid)) pageCaches.delete(tid);
     }
@@ -306,10 +273,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   const switchTab = async (targetId: string): Promise<Result<void, CdpError>> => {
     const r = await session.switchTo(targetId);
     if (!r.success) return r;
-    // pageCache per-tab: no longer cleared — each tab retains its cache
-    // Best-effort: mark the tab title with a green circle so the user can
-    // see which tab the agent attached to. CSP or detached frames may
-    // block the eval; we don't surface that as a switchTab failure.
     await session.call("Runtime.evaluate", {
       expression: safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
     });
@@ -317,17 +280,11 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
-    // Reconcile ownership against live targets before deciding where to open.
     const tabsResult = await listTabs(true);
     if (!tabsResult.success) return tabsResult;
 
-    // ensureHarnessWindow reuses the seed tab, falls back to any surviving
-    // owned tab, and only then creates a window — which, when a profile is
-    // pinned, means launching one inside that profile.
     const window = await ensureHarnessWindow(api);
     if (!window.success) return window;
-    // A freshly created window IS the new tab; opening another would leave a
-    // stray blank tab behind.
     let tabId: string;
     if (window.data.freshlyCreated) {
       tabId = window.data.targetId;
@@ -354,9 +311,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const closeOwnedTabs = async (): Promise<void> => {
-    // Snapshot first — remove() mutates the list, and targetDestroyed events
-    // may also prune concurrently. Failures are swallowed: a tab the user
-    // already closed, or a dead transport, must not block shutdown.
     for (const id of ownership.list()) {
       await session.callBrowser("Target.closeTarget", { targetId: id }).catch(() => {});
       ownership.remove(id);
@@ -375,10 +329,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   const detach = async (): Promise<void> => {
     const cur = session.current();
     if (!cur) return;
-    // Target.detachFromTarget removes the "Chrome is being controlled" banner
-    // and releases the page session. The transport (WebSocket/Unix socket)
-    // stays alive for reuse by the next session.
-    // Reference: https://chromedevtools.github.io/devtools-protocol/tot/Target/#method-detachFromTarget
     await transport.request("Target.detachFromTarget", { sessionId: cur.sessionId }, { sessionId: null });
   };
 
