@@ -369,12 +369,11 @@ export const createCdpSession = (
         // Each Target.attachToTarget produces a new sessionId — update it.
         sessionIdToTargetId.delete(existing.sessionId);
         existing.sessionId = attachedSessionId;
-        sessionIdToTargetId.set(attachedSessionId, tid);
       } else {
         tabs.set(tid, tab);
-        await enableDomains(attachedSessionId);
-        sessionIdToTargetId.set(attachedSessionId, tid);
       }
+      sessionIdToTargetId.set(attachedSessionId, tid);
+      await enableDomains(attachedSessionId);
       // Update global pointers to point at the new active tab
       sessionId = tab.sessionId;
       targetId = tid;
