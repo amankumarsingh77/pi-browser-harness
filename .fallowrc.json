@@ -1,0 +1,13 @@
+{
+  "entry": [
+    "src/index.ts",
+    "src/daemon/index.ts",
+    "scripts/check-boundaries.ts",
+    "test/**/*-test.ts",
+    "test/manual/*.ts"
+  ],
+  "ignoreDependencies": ["sharp"],
+  "ignoreExports": [
+    { "file": "src/profile/paths.ts", "exports": ["agentDir"] }
+  ]
+}

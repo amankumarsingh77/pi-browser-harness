@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserProfile } from "./list";
 import type { ProfilePin } from "./store";
 
-export const CLEAR_SELECTION_LABEL = "— Clear selection (use whichever window is focused) —";
+const CLEAR_SELECTION_LABEL = "— Clear selection (use whichever window is focused) —";
 
 export type ProfileChoice =
   | { readonly kind: "profile"; readonly profile: BrowserProfile }

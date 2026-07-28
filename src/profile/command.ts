@@ -7,7 +7,7 @@ import { browserNameForUserDataDir, userDataDirCandidates } from "./paths";
 import { pinFor, promptForProfile } from "./picker";
 import { clearPin, readPin, writePin } from "./store";
 
-export const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string, string>> => {
+const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string, string>> => {
   const connected = client.userDataDir();
   if (connected) return ok(connected);
 

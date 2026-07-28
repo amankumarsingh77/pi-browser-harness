@@ -6,7 +6,7 @@ import { isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_LINES = 6;
 
-export type ExpandableText = {
+type ExpandableText = {
   readonly summary: string;
   readonly body: string;
   readonly fullOutputPath?: string;

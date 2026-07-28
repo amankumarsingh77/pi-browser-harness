@@ -1,4 +1,5 @@
-import { decodeEvent } from "./events";
+import { decodeEvent, type EventParamsOf } from "./events";
+import { createRecordStore } from "./record-store";
 
 export type NetworkRecord = {
   requestId: string;
@@ -51,17 +52,24 @@ const compileUrlMatcher = (pattern: string): ((url: string) => boolean) => {
   return (url) => url.includes(pattern);
 };
 
-export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
-  const records = new Map<string, NetworkRecord>();
-  let overflowed = false;
+type UpdateEvent = "Network.responseReceived" | "Network.loadingFinished" | "Network.loadingFailed";
 
-  const evictOldestIfFull = (): void => {
-    while (records.size >= capacity) {
-      const oldest = records.keys().next();
-      if (oldest.done) return;
-      records.delete(oldest.value);
-      overflowed = true;
-    }
+export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
+  const records = createRecordStore<string, NetworkRecord>(capacity);
+
+  // All three follow-up events say the same thing first: decode, find the request they belong to, give up quietly if it is gone.
+  const update = <E extends UpdateEvent>(
+    method: E,
+    p: unknown,
+    apply: (r: NetworkRecord, params: EventParamsOf<E>) => void,
+  ): void => {
+    const decoded = decodeEvent(method, p);
+    if (!decoded.success) return;
+    const id = decoded.data.requestId;
+    if (!id) return;
+    const r = records.get(id);
+    if (!r) return;
+    apply(r, decoded.data);
   };
 
   return {
@@ -73,7 +81,6 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
       const method = params?.request.method;
       if (!id || !url || !method) return;
       records.delete(id);
-      evictOldestIfFull();
       const postData = params.request.postData;
       records.set(id, {
         requestId: id,
@@ -86,40 +93,28 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
     },
 
     ingestResponseReceived(p) {
-      const decoded = decodeEvent("Network.responseReceived", p);
-      const params = decoded.success ? decoded.data : undefined;
-      const id = params?.requestId;
-      if (!id) return;
-      const r = records.get(id);
-      if (!r) return;
-      if (params?.response?.status !== undefined) r.status = params.response.status;
-      if (params?.response?.statusText !== undefined && params.response.statusText !== "") r.statusText = params.response.statusText;
-      if (params?.response?.mimeType !== undefined) r.mimeType = params.response.mimeType;
-      // type is more accurate on responseReceived (CDP sometimes refines it)
-      if (params?.type !== undefined) r.type = params.type;
+      update("Network.responseReceived", p, (r, params) => {
+        if (params.response?.status !== undefined) r.status = params.response.status;
+        if (params.response?.statusText !== undefined && params.response.statusText !== "") r.statusText = params.response.statusText;
+        if (params.response?.mimeType !== undefined) r.mimeType = params.response.mimeType;
+        // type is more accurate on responseReceived (CDP sometimes refines it)
+        if (params.type !== undefined) r.type = params.type;
+      });
     },
 
     ingestLoadingFinished(p) {
-      const decoded = decodeEvent("Network.loadingFinished", p);
-      const params = decoded.success ? decoded.data : undefined;
-      const id = params?.requestId;
-      if (!id) return;
-      const r = records.get(id);
-      if (!r) return;
-      if (params?.encodedDataLength !== undefined) r.responseBodySize = params.encodedDataLength;
-      r.durationMs = Date.now() - r.requestStartedMs;
+      update("Network.loadingFinished", p, (r, params) => {
+        if (params.encodedDataLength !== undefined) r.responseBodySize = params.encodedDataLength;
+        r.durationMs = Date.now() - r.requestStartedMs;
+      });
     },
 
     ingestLoadingFailed(p) {
-      const decoded = decodeEvent("Network.loadingFailed", p);
-      const params = decoded.success ? decoded.data : undefined;
-      const id = params?.requestId;
-      if (!id) return;
-      const r = records.get(id);
-      if (!r) return;
-      r.failed = true;
-      if (params?.errorText !== undefined) r.errorText = params.errorText;
-      r.durationMs = Date.now() - r.requestStartedMs;
+      update("Network.loadingFailed", p, (r, params) => {
+        r.failed = true;
+        if (params.errorText !== undefined) r.errorText = params.errorText;
+        r.durationMs = Date.now() - r.requestStartedMs;
+      });
     },
 
     drain(filter) {
@@ -141,19 +136,11 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
         matched.push({ ...r });
       }
 
-      const total = matched.length;
-      const limit = Math.min(filter.limit ?? 50, 500);
-      const limited = matched.slice(-limit);
-
-      const bufferOverflowed = overflowed;
-      overflowed = false;
-
-      return { records: limited, total, bufferOverflowed };
+      return records.page(matched, filter.limit);
     },
 
     clear() {
       records.clear();
-      overflowed = false;
     },
   };
 };
