@@ -1,12 +1,3 @@
-/**
- * S20: the web-search-researcher subagent config references only real tools.
- *
- * Guards against the pre-Phase-3 regression where the agent named the
- * non-existent web_search / web_fetch tools. Pure string checks over the
- * markdown file — no browser, no subagent runtime.
- *
- * Run: npm test
- */
 import { test, before, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

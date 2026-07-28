@@ -1,20 +1,3 @@
-/**
- * Concurrency regression for harness tab creation, against a real browser.
- *
- * browser_read_page is registered unserialized, so several isolated tabs can be
- * opened at the same moment. Two risks live here:
- *
- *   1. Each concurrent caller finding "no harness window" and creating its own
- *      — two blank windows before profiles existed, two LAUNCHED profile windows
- *      after. ensureHarnessWindow single-flights per client to prevent it.
- *   2. Callers sharing that single creation and all claiming the same seed tab.
- *      Only the caller that started the creation may claim it; the rest must
- *      open their own tab beside it.
- *
- * Runs pinned and unpinned inside a throwaway --user-data-dir.
- *
- * Run: npx tsx test/manual/profile-concurrency-test.ts
- */
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -62,7 +45,6 @@ const killTree = (pid: number | undefined): void => {
     try {
       execFileSync("taskkill.exe", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
     } catch {
-      // already gone
     }
     return;
   }
@@ -72,7 +54,6 @@ const killTree = (pid: number | undefined): void => {
     try {
       process.kill(pid, "SIGKILL");
     } catch {
-      // already gone
     }
   }
 };
@@ -101,7 +82,6 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
         const res = await fetch(`http://127.0.0.1:${PORT}/json/version`);
         if (res.ok) endpoint = ((await res.json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl;
       } catch {
-        // not up yet
       }
     }
     if (!endpoint) {
@@ -110,7 +90,6 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
     }
 
     if (pinned) {
-      // Materialise the profile the run pins to.
       spawn(exePath, [...base, "--profile-directory=Profile 2", "about:blank"], {
         detached: true,
         stdio: "ignore",
@@ -166,7 +145,6 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
     try {
       rmSync(udd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch {
-      // a locked temp dir is not worth failing over
     }
   }
 }

@@ -1,15 +1,3 @@
-/**
- * Unit test (mock transport) for window-scoped session binding + tab teardown.
- *
- * Covers the two fixes:
- *  1. The session binds to a real Chrome windowId. New tabs land in that window;
- *     tabs opened by an owned page (popups / window.open) are auto-adopted so the
- *     session controls them; nothing outside the window is ever owned.
- *  2. closeOwnedTabs() closes every owned tab and clears the window binding — the
- *     teardown the extension runs on session shutdown so no stale tabs survive.
- *
- * Run: npx tsx test/manual/window-binding-test.ts
- */
 import { createBrowserClient } from "../../src/client";
 import { createOwnershipRegistry } from "../../src/cdp/ownership";
 import type { CdpTransport } from "../../src/cdp/transport";
@@ -24,7 +12,6 @@ const check = (cond: boolean, label: string): void => {
   else { failed++; console.error(`  ✗ ${label}`); }
 };
 
-// ── A minimal in-memory CDP browser the mock transport drives. ──────────────
 type FakeTarget = { targetId: string; type: string; url: string; title: string; windowId: number; openerId?: string };
 
 const createMockTransport = (): CdpTransport & {
@@ -38,7 +25,6 @@ const createMockTransport = (): CdpTransport & {
   let targetSeq = 0;
   let windowSeq = 100;
 
-  // Event queue plumbing so session.ts's consumeEvents() can await targetCreated.
   const listeners: Array<() => void> = [];
   let buffer: CdpEvent[] = [];
   let waiter: (() => void) | null = null;
@@ -83,7 +69,6 @@ const createMockTransport = (): CdpTransport & {
         const windowId = newWindow || !opener ? ++windowSeq : (targets.get(opener)?.windowId ?? ++windowSeq);
         const t: FakeTarget = { targetId: id, type: "page", url: (params["url"] as string) ?? "about:blank", title: "", windowId, ...(opener ? { openerId: opener } : {}) };
         targets.set(id, t);
-        // Chrome fires targetCreated for every new target (discover:true).
         push({ method: "Target.targetCreated", params: { targetInfo: { targetId: id, type: "page", url: t.url, openerId: opener } } });
         return ok({ targetId: id });
       }
@@ -123,7 +108,6 @@ const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 20));
 async function main(): Promise<void> {
   console.log("window-binding-test\n");
 
-  // ── Registry: windowId binding is stored + cleared. ───────────────────────
   {
     const reg = createOwnershipRegistry();
     check(reg.harnessWindowId() === undefined, "windowId starts undefined");
@@ -137,7 +121,6 @@ async function main(): Promise<void> {
     check(reg.harnessWindowId() === undefined && notified === 1, "clearing windowId notifies");
   }
 
-  // ── newTab: creates the dedicated window and captures its real windowId. ──
   {
     const transport = createMockTransport();
     const client = createBrowserClient({ namespace: "t", transport });
@@ -154,16 +137,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Popup adoption: a tab opened by an owned page is auto-owned. ──────────
   {
     const transport = createMockTransport();
     const client = createBrowserClient({ namespace: "t", transport });
     await client.start();
     const cur = client.current()!;
 
-    // A page the session controls opens a child target (window.open / _blank).
-    // Chrome emits Target.targetCreated with openerId = our owned tab; the
-    // session must adopt it so the tab is controllable and cleaned up later.
     const child = await client.session().callBrowser("Target.createTarget", { url: "https://child.test", openerId: cur.targetId });
     await tick();
     check(child.success, "owned page opens a child target");
@@ -172,7 +151,6 @@ async function main(): Promise<void> {
       check(client.owns(id), "child target opened by an owned tab is auto-adopted");
     }
 
-    // A target the user opens in their own window has no owned opener → never adopted.
     const stranger = await client.session().callBrowser("Target.createTarget", { url: "https://user.test", newWindow: true });
     await tick();
     if (stranger.success) {
@@ -181,7 +159,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // ── Reattach self-heal: re-adopt live window-mates of a surviving owned tab. ─
   {
     const transport = createMockTransport();
     transport.seed({ targetId: "own-1", type: "page", url: "https://a.test", title: "", windowId: 500 });
@@ -198,11 +175,8 @@ async function main(): Promise<void> {
     check(!client.owns("user-9"), "reattach: a tab in a DIFFERENT window is never adopted");
   }
 
-  // ── Restart-collision guard: stale windowId must not adopt the user's tabs. ─
   {
     const transport = createMockTransport();
-    // Chrome restarted: our owned tab id is dead; windowId 500 now belongs to
-    // the user's own window full of their tabs.
     transport.seed({ targetId: "user-a", type: "page", url: "https://user-a.test", title: "", windowId: 500 });
     transport.seed({ targetId: "user-b", type: "page", url: "https://user-b.test", title: "", windowId: 500 });
     const client = createBrowserClient({
@@ -216,7 +190,6 @@ async function main(): Promise<void> {
     check(client.current() !== null && !["user-a", "user-b"].includes(client.current()!.targetId), "restart: attaches to a fresh harness tab, not a user tab");
   }
 
-  // ── Teardown: closeOwnedTabs closes every owned tab + clears binding. ─────
   {
     const transport = createMockTransport();
     const client = createBrowserClient({ namespace: "t", transport });
