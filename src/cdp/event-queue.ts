@@ -1,4 +1,3 @@
-
 import { type Result, err } from "../util/result";
 import { type CdpError, cdpError } from "./errors";
 import type { CdpEvent } from "./types";

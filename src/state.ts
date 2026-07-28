@@ -1,4 +1,3 @@
-
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { asArrayOf, asNumber, asString, isRecord } from "./util/guards";
 

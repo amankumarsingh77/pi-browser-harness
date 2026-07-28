@@ -1,4 +1,3 @@
-
 export type OwnershipRegistry = {
   add(targetId: string): void;
   remove(targetId: string): void;

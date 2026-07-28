@@ -3,7 +3,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 
 // Deliberately mirrors pi's expandTildePath (never `~\…`) rather than improving on it, or the pin lands somewhere pi does not look.
@@ -26,7 +25,6 @@ export const agentDir = (): string => {
 };
 
 export const pinFilePath = (): string => join(agentDir(), "browser-harness.json");
-
 
 const localAppData = (): string => process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
 

@@ -34,14 +34,12 @@ async function main() {
   await ipcServer.start();
   console.log("Daemon started ✓");
 
-
   console.log("\nConnecting pi client (DaemonTransport)...");
   const transport = createDaemonTransport("pi-e2e-test");
 
   const connectResult = await transport.connect("");
   check(connectResult.success, `Client connect: ${connectResult.success ? "ok" : connectResult.error.message}`);
   check(transport.state() === "open", "Transport state is open");
-
 
   let rawRequests: WireRequest[] = [];
   ipcServer.onMessage((msg, client) => {

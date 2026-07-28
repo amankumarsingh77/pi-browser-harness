@@ -47,8 +47,7 @@ function findBrowser(): string | undefined {
       try {
         const resolved = execFileSync("which", [name], { encoding: "utf8" }).trim();
         if (resolved) return resolved;
-      } catch {
-      }
+      } catch {}
     }
   }
   return undefined;
@@ -96,8 +95,7 @@ async function waitForEndpoint(deadlineMs = 30_000): Promise<boolean> {
     try {
       const res = await fetch(`http://127.0.0.1:${PORT}/json/version`);
       if (res.ok) return true;
-    } catch {
-    }
+    } catch {}
     await sleep(500);
   }
   return false;
@@ -132,8 +130,7 @@ async function main(): Promise<void> {
     if (process.platform === "win32") {
       try {
         execFileSync("taskkill.exe", ["/pid", String(browser.pid), "/T", "/F"], { stdio: "ignore" });
-      } catch {
-      }
+      } catch {}
     } else {
       try {
         // detached:true put the browser in its own process group, so the negative pid signals the whole group.
@@ -141,14 +138,12 @@ async function main(): Promise<void> {
       } catch {
         try {
           browser.kill("SIGKILL");
-        } catch {
-        }
+        } catch {}
       }
     }
     try {
       rmSync(udd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    } catch {
-    }
+    } catch {}
   };
 
   try {

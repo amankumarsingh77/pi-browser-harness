@@ -1,4 +1,3 @@
-
 import { Type } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { Result } from "../util/result";

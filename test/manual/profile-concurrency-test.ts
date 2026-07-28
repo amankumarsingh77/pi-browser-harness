@@ -44,8 +44,7 @@ const killTree = (pid: number | undefined): void => {
   if (process.platform === "win32") {
     try {
       execFileSync("taskkill.exe", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
-    } catch {
-    }
+    } catch {}
     return;
   }
   try {
@@ -53,8 +52,7 @@ const killTree = (pid: number | undefined): void => {
   } catch {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {
-    }
+    } catch {}
   }
 };
 
@@ -81,8 +79,7 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
       try {
         const res = await fetch(`http://127.0.0.1:${PORT}/json/version`);
         if (res.ok) endpoint = ((await res.json()) as { webSocketDebuggerUrl: string }).webSocketDebuggerUrl;
-      } catch {
-      }
+      } catch {}
     }
     if (!endpoint) {
       check(false, `${label}: browser exposed its DevTools endpoint`);
@@ -144,8 +141,7 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
     killTree(browser.pid);
     try {
       rmSync(udd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    } catch {
-    }
+    } catch {}
   }
 }
 

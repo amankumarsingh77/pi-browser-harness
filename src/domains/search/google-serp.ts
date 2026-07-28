@@ -1,4 +1,3 @@
-
 export type SerpAnchor = {
   readonly href: string;
   readonly heading: string;

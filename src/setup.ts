@@ -1,11 +1,9 @@
-
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "./client";
 import { ensureDaemon } from "./daemon/spawn";
 import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 import { isBrowserRunning } from "./profile/browser-process";
 import { promptForProfileIfUnset } from "./profile/command";
-
 
 export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): void {
   pi.registerCommand("browser-setup", {
@@ -21,9 +19,7 @@ export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): v
   });
 }
 
-
 export type SetupResult = { success: true; data: string } | { success: false; error: string };
-
 
 export async function performSetup(client: BrowserClient, ctx?: ExtensionContext): Promise<SetupResult> {
   const chromeRunning = await isBrowserRunning();

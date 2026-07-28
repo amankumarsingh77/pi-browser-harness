@@ -1,6 +1,4 @@
-
 import { isRecord } from "../util/guards";
-
 
 export type WireRequest = {
   readonly type: "request";
@@ -36,7 +34,6 @@ export type WireControl = {
 };
 
 export type WireMessage = WireRequest | WireResponse | WireEvent | WireControl;
-
 
 export const isWireMessage = (v: unknown): v is WireMessage => {
   if (!isRecord(v)) return false;
@@ -85,7 +82,6 @@ export const isWireMessage = (v: unknown): v is WireMessage => {
   }
 };
 
-
 export const serialize = (msg: WireMessage): string => JSON.stringify(msg);
 
 export const deserialize = (line: string): WireMessage | null => {
@@ -98,7 +94,6 @@ export const deserialize = (line: string): WireMessage | null => {
   if (!isWireMessage(parsed)) return null;
   return parsed;
 };
-
 
 // Windows requires a named pipe (`\\.\pipe\<name>`); a Unix path is not a valid `net` listen/connect target there.
 export const DAEMON_SOCKET_PATH =

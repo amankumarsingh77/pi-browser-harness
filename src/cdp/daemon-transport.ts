@@ -1,4 +1,3 @@
-
 import { createConnection, type Socket } from "node:net";
 import { createInterface } from "node:readline";
 import { type Result, err, ok } from "../util/result";
@@ -13,7 +12,6 @@ import {
   deserialize,
   serialize,
 } from "../daemon/protocol";
-
 
 export const createDaemonTransport = (clientId: string): CdpTransport => {
   let socket: Socket | null = null;
@@ -35,7 +33,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
 
     for (const cb of closeListeners) cb();
   };
-
 
   const connect = (_url: string, opts?: { timeoutMs?: number }): Promise<Result<void, CdpError>> => {
     const timeoutMs = opts?.timeoutMs ?? 10_000;
@@ -117,8 +114,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
           }
         });
 
-        sock.on("error", () => {
-        });
+        sock.on("error", () => {});
 
         sock.on("close", () => {
           clearTimeout(connectTimer);
@@ -140,7 +136,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     });
   };
 
-
   const close = async (): Promise<void> => {
     if (registered && socket && !socket.destroyed) {
       const dereg: WireControl = { type: "control", action: "deregister", clientId };
@@ -148,7 +143,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     }
     cleanup("close() called");
   };
-
 
   const request = (
     method: string,
@@ -175,9 +169,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
     return sendWithTimeout(pending, id, method, timeoutMs, "Daemon", () => sock.write(serialize(req) + "\n"));
   };
 
-
   const events = (): AsyncIterable<CdpEvent> => queue.iter;
-
 
   const state = (): "open" | "closed" | "connecting" => {
     if (!socket) return "closed";
