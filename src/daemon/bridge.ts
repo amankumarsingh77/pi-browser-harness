@@ -17,8 +17,6 @@ export type CdpBridge = {
   stop(): Promise<void>;
   handleRequest(req: WireRequest, clientId: string, send: SendToClient): Promise<void>;
   isAlive(): boolean;
-  recordSession(clientId: string, sessionId: string): void;
-  releaseSession(sessionId: string): void;
   getSessionOwner(sessionId: string): string | undefined;
   removeClient(clientId: string): void;
   onEvent(handler: EventHandler): void;
@@ -96,10 +94,6 @@ class EventRouter {
       const owner = this.owners.get(event.sessionId);
       return owner ? [owner] : [];
     }
-    return [...this.clientSessions.keys()];
-  }
-
-  allClients(): string[] {
     return [...this.clientSessions.keys()];
   }
 }
@@ -357,8 +351,6 @@ export const createCdpBridge = (): CdpBridge => {
     stop,
     handleRequest,
     isAlive: () => ws !== null && ws.readyState === WebSocket.OPEN,
-    recordSession: (cid, sid) => router.record(cid, sid),
-    releaseSession: (sid) => router.release(sid),
     getSessionOwner: (sid) => router.getOwner(sid),
     removeClient: (cid) => { mux.clearClient(cid); router.removeClient(cid); },
     onEvent: (h) => { eventHandler = h; },

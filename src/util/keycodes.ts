@@ -4,7 +4,5 @@ const VIRTUAL_KEY_CODES: Readonly<Record<string, number>> = {
   Home: 36, End: 35, PageUp: 33, PageDown: 34,
 };
 
-export const SPECIAL_KEYS: ReadonlyArray<string> = Object.keys(VIRTUAL_KEY_CODES);
-
 export const virtualKeyCode = (key: string): number =>
   VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);

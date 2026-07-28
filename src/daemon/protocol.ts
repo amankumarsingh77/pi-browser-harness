@@ -105,8 +105,6 @@ export const DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export const DAEMON_MAX_CLIENTS = 16;
 
-export const DAEMON_STALE_SOCKET_CLEANUP = true;
-
 export const CDP_CONNECT_TIMEOUT_MS = 10_000;
 
 export const CDP_COMMAND_TIMEOUT_MS = 10_000;

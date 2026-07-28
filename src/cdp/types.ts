@@ -46,13 +46,6 @@ export type DaemonStatus = {
   readonly remoteBrowserId?: string;
 };
 
-const INTERNAL_PREFIXES: ReadonlyArray<string> = [
-  "chrome://", "chrome-untrusted://", "devtools://", "chrome-extension://", "about:",
-];
-
-export const isInternalUrl = (url: string): boolean =>
-  INTERNAL_PREFIXES.some((p) => url.startsWith(p));
-
 export const isCdpRawMessage = (v: unknown): v is CdpRawMessage => {
   if (!isRecord(v)) return false;
   const id = v["id"];

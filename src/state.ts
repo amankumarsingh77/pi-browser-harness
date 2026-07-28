@@ -3,7 +3,6 @@ import { asArrayOf, asNumber, asString, isRecord } from "./util/guards";
 
 export type BrowserState = {
   readonly namespace: string;
-  readonly remoteBrowserId?: string;
   readonly ownedTargetIds?: ReadonlyArray<string>;
   readonly harnessWindowTargetId?: string;
   readonly harnessWindowId?: number;
@@ -21,13 +20,11 @@ export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
 const asPersistedState = (v: unknown): Partial<BrowserState> | undefined => {
   if (!isRecord(v)) return undefined;
   const namespace = asString(v["namespace"]);
-  const remoteBrowserId = asString(v["remoteBrowserId"]);
   const ownedTargetIds = asArrayOf(v["ownedTargetIds"], asString);
   const harnessWindowTargetId = asString(v["harnessWindowTargetId"]);
   const harnessWindowId = asNumber(v["harnessWindowId"]);
   return {
     ...(namespace !== undefined ? { namespace } : {}),
-    ...(remoteBrowserId !== undefined ? { remoteBrowserId } : {}),
     ...(ownedTargetIds !== undefined ? { ownedTargetIds } : {}),
     ...(harnessWindowTargetId !== undefined ? { harnessWindowTargetId } : {}),
     ...(harnessWindowId !== undefined ? { harnessWindowId } : {}),

@@ -7,7 +7,6 @@ import {
   isWireMessage,
   DAEMON_SOCKET_PATH,
   DAEMON_MAX_CLIENTS,
-  DAEMON_STALE_SOCKET_CLEANUP,
 } from "./protocol";
 
 export type ClientSocket = {
@@ -29,8 +28,6 @@ export type IpcServer = {
   onDisconnect(handler: ConnectionHandler): void;
   send(clientId: string, msg: WireMessage): void;
   broadcast(msg: WireMessage): void;
-  disconnectClient(clientId: string): void;
-  clients(): ReadonlyMap<string, ClientSocket>;
   clientCount(): number;
 };
 
@@ -45,11 +42,9 @@ export const createIpcServer = (): IpcServer => {
 
   const start = (): Promise<void> =>
     new Promise((resolve, reject) => {
-      if (DAEMON_STALE_SOCKET_CLEANUP) {
-        try {
-          unlinkSync(DAEMON_SOCKET_PATH);
-        } catch {}
-      }
+      try {
+        unlinkSync(DAEMON_SOCKET_PATH);
+      } catch {}
 
       server = createServer({ pauseOnConnect: false }, (socket: Socket) => {
         if (clients.size >= DAEMON_MAX_CLIENTS) {
@@ -63,10 +58,7 @@ export const createIpcServer = (): IpcServer => {
 
         sockets.set(tempId, currentClient);
 
-        let lineCount = 0;
-
         rl.on("line", (line: string) => {
-          lineCount++;
           let msg: WireMessage | null;
           try {
             const parsed: unknown = JSON.parse(line);
@@ -178,12 +170,6 @@ export const createIpcServer = (): IpcServer => {
         this.send(clientId, msg);
       }
     },
-    disconnectClient(clientId) {
-      const client = clients.get(clientId);
-      if (!client) return;
-      client.socket.destroy();
-    },
-    clients: (): ReadonlyMap<string, ClientSocket> => clients,
     clientCount: (): number => clients.size,
   };
 };
