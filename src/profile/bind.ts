@@ -1,22 +1,3 @@
-/**
- * Binding the harness session to a pinned profile.
- *
- * Sequence, all of it verified against a live browser:
- *   1. resolve the browser binary and any explicit --user-data-dir
- *   2. launch a window into the profile, marked with a file:// sentinel
- *   3. poll Target.getTargets for the sentinel page — its browserContextId IS
- *      the profile's context, which is otherwise undiscoverable (CDP exposes no
- *      profile identity)
- *   4. adopt that page as the harness window, blank it, drop the sentinel file
- *
- * If the sentinel never appears the bind FAILS LOUDLY. Falling through to a
- * normal createTarget would put the agent in the focus-derived default profile
- * — the exact bug this feature exists to remove — so the caller gets an
- * actionable error instead.
- *
- * The resolved context id is session-scoped state, never persisted: Chrome
- * mints new context ids on every browser run.
- */
 
 import type { BrowserClient } from "../client";
 import { attachTo } from "../cdp/attach";
@@ -28,7 +9,6 @@ import { detectRunningBrowser, resolveBrowserExecutable } from "./browser-proces
 import { openProfileWindow } from "./launch";
 import type { ProfilePin } from "./store";
 
-/** The launch delegates through ProcessSingleton, so allow for a cold profile. */
 const SEED_DEADLINE_MS = 15_000;
 const SEED_POLL_MS = 500;
 
@@ -44,16 +24,10 @@ const manualFallbackHint = (pin: ProfilePin): string =>
   `open a window for "${pin.label}" yourself (browser profile menu → ${pin.profileDir}), then retry. ` +
   `Run /browser-profile to pick a different profile, or clear the selection to use whichever window is focused.`;
 
-/**
- * Open (and adopt) a harness window inside the pinned profile. Returns the
- * seed tab's target id.
- */
 export const seedProfileWindow = async (
   client: BrowserClient,
   pin: ProfilePin,
 ): Promise<Result<string, CdpError>> => {
-  // A pin belongs to one user-data-dir. If the harness is now attached to a
-  // different browser, silently seeding the "same" profile name would be wrong.
   const connectedDir = client.userDataDir();
   if (connectedDir && connectedDir !== pin.userDataDir) {
     return err(cdpError(
@@ -63,9 +37,6 @@ export const seedProfileWindow = async (
     ));
   }
 
-  // Identify the browser by the dir we're connected to. With several Chromium
-  // browsers running, launching into the wrong one would open a window the
-  // harness cannot see — in a browser the user never pointed us at.
   const targetUserDataDir = connectedDir ?? pin.userDataDir;
   const running = await detectRunningBrowser(targetUserDataDir);
   const exePath = await resolveBrowserExecutable(running);
@@ -79,11 +50,7 @@ export const seedProfileWindow = async (
   const launched = await openProfileWindow({
     exePath,
     profileDir: pin.profileDir,
-    // Forward the user-data-dir ONLY when the running browser advertises one.
-    // ProcessSingleton keys on this path: passing the value the target process
-    // itself reports guarantees delegation, whereas supplying a default dir we
-    // reconstructed could differ by case or normalisation and start a SECOND
-    // browser instead.
+    // ProcessSingleton keys on the user-data-dir path, so forward only the value the running browser reports: a reconstructed one may differ by case and start a SECOND browser.
     ...(running.explicitUserDataDir ? { explicitUserDataDir: running.explicitUserDataDir } : {}),
   });
   if (!launched.success) {
@@ -116,9 +83,6 @@ export const seedProfileWindow = async (
   const win = await getWindowId(client.session(), seed.targetId);
   if (win.success) ownership.setHarnessWindowId(win.data);
 
-  // Blank the handshake page so the seed tab behaves like any other fresh tab,
-  // then remove the sentinel file. Best-effort: a failure here costs nothing
-  // beyond the placeholder page staying visible.
   const attached = await attachTo(client.session(), seed.targetId);
   if (attached.success) {
     await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, attached.data);

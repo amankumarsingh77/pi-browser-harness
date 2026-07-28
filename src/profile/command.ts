@@ -1,11 +1,3 @@
-/**
- * /browser-profile — choose which browser profile the agent works in.
- *
- * The selection is durable (see store.ts) and applies immediately: the current
- * harness tabs are closed and a new window is opened in the chosen profile, so
- * the agent's next action happens where the user just asked for it rather than
- * one session later.
- */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
@@ -16,11 +8,6 @@ import { browserNameForUserDataDir, userDataDirCandidates } from "./paths";
 import { pinFor, promptForProfile } from "./picker";
 import { clearPin, readPin, writePin } from "./store";
 
-/**
- * Which user-data-dir the picker should enumerate: the connected browser's
- * when known, otherwise a running browser's, otherwise the only installed one
- * that actually has profiles.
- */
 export const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string, string>> => {
   const connected = client.userDataDir();
   if (connected) return ok(connected);
@@ -43,7 +30,6 @@ export const resolveUserDataDir = async (client: BrowserClient): Promise<Result<
   );
 };
 
-/** Enumerate profiles for the resolved dir, or explain why we cannot. */
 const loadProfiles = async (
   client: BrowserClient,
 ): Promise<Result<{ userDataDir: string; profiles: ReadonlyArray<BrowserProfile> }, string>> => {
@@ -56,11 +42,6 @@ const loadProfiles = async (
   return ok({ userDataDir: dir.data, profiles });
 };
 
-/**
- * Re-seed the live session so the new profile takes effect now. Closing the
- * owned tabs and restarting the client makes start() open a window in the
- * pinned profile and attach to it.
- */
 const applyToLiveSession = async (client: BrowserClient): Promise<Result<void, string>> => {
   if (!client.status().alive) return ok(undefined);
   await client.closeOwnedTabs();
@@ -127,11 +108,6 @@ export function registerProfileCommand(pi: ExtensionAPI, client: BrowserClient):
   });
 }
 
-/**
- * First-run prompt used by setup: pick a profile when none is pinned yet.
- * Returns a note to append to the setup output; the caller always continues,
- * because a cancelled or unavailable picker must leave existing behavior intact.
- */
 export const promptForProfileIfUnset = async (
   client: BrowserClient,
   ctx: ExtensionContext | undefined,
