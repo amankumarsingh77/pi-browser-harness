@@ -59,6 +59,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "node --conditions=import --import tsx --test \"test/{profile,deep-research,domains,cdp,util}/**/*-test.ts\"",
+    "boundaries": "tsx scripts/check-boundaries.ts",
+    "check": "npm run typecheck && npm run boundaries && npm test",
     "prepublishOnly": "tsc --noEmit"
   },
   "publishConfig": {
