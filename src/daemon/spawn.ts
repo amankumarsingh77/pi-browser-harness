@@ -32,16 +32,6 @@ const cleanupStaleSocket = (): void => {
   unlink(DAEMON_SOCKET_PATH).catch(() => {});
 };
 
-/**
- * Whether the daemon endpoint could plausibly exist, judged without connecting.
- *
- * On POSIX a missing socket file means the daemon definitely isn't running, so
- * callers can short-circuit. Windows named pipes are NOT filesystem entries —
- * access() always fails on `\\.\pipe\…` even while the daemon is serving it — so
- * on Windows the answer is always "maybe" and the caller must probe instead.
- *
- * Platform and path are parameters so the branch is testable off-platform.
- */
 export const daemonSocketMayExist = async (
   platform: NodeJS.Platform = process.platform,
   socketPath: string = DAEMON_SOCKET_PATH,

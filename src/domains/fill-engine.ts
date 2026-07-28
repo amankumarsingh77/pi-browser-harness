@@ -1,18 +1,3 @@
-/**
- * The one in-page fill implementation, shared by browser_fill and
- * browser_fill_form so the two can no longer disagree about the same element.
- *
- * `this` is the target element and `value` is the requested value. Two call-site
- * differences are parameters rather than forks:
- *   rejectSelect — browser_fill refuses a <select> and points at
- *                  browser_select_option; browser_fill_form fills it.
- *   focusFirst   — browser_fill_form focuses the field first; browser_fill
- *                  documents that it does not move focus.
- *
- * Returns a PageResult (see form.ts): { ok, reason?, kind?, value?, text?,
- * checked?, changed?, options?, tag? }.
- */
-
 export type FillOptions = {
   readonly rejectSelect: boolean;
   readonly focusFirst: boolean;
