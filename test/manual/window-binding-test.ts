@@ -1,6 +1,6 @@
 import { createBrowserClient } from "../../src/client";
 import { createOwnershipRegistry } from "../../src/cdp/ownership";
-import type { CdpTransport } from "../../src/cdp/transport";
+import type { CdpTransport } from "../../src/cdp/types";
 import type { CdpEvent } from "../../src/cdp/types";
 import { ok, type Result } from "../../src/util/result";
 import type { CdpError } from "../../src/cdp/errors";

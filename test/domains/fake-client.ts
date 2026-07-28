@@ -1,7 +1,7 @@
 import { createCdpSession, type CdpSession } from "../../src/cdp/session";
 import { createOwnershipRegistry, type OwnershipRegistry } from "../../src/cdp/ownership";
 import { type CdpError, cdpError } from "../../src/cdp/errors";
-import type { CdpTransport } from "../../src/cdp/transport";
+import type { CdpTransport } from "../../src/cdp/types";
 import type { CdpEvent } from "../../src/cdp/types";
 import type { BrowserClient } from "../../src/client";
 import { createMutex } from "../../src/util/mutex";

@@ -1,10 +1,18 @@
 import { Type } from "typebox";
 import { safeJs } from "../util/js-template";
-import { virtualKeyCode } from "../util/keycodes";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall, evalJs } from "./cdp-call";
 import { resolveRefToObjectId } from "./ref-resolve";
+
+const VIRTUAL_KEY_CODES: Readonly<Record<string, number>> = {
+  Enter: 13, Tab: 9, Backspace: 8, Escape: 27, Delete: 46, " ": 32,
+  ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
+  Home: 36, End: 35, PageUp: 33, PageDown: 34,
+};
+
+const virtualKeyCode = (key: string): number =>
+  VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
 
 const TypeArgs = Type.Object({
   text: Type.String({ description: "Text to type" }),

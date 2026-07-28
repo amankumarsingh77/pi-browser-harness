@@ -1,4 +1,6 @@
+import type { Result } from "../util/result";
 import { isRecord } from "../util/guards";
+import type { CdpError } from "./errors";
 
 export type CdpEvent = {
   readonly method: string;
@@ -62,4 +64,19 @@ export const isCdpRawMessage = (v: unknown): v is CdpRawMessage => {
     if (code !== undefined && typeof code !== "number") return false;
   }
   return true;
+};
+
+export const DEFAULT_TIMEOUT_MS = 15_000;
+
+export type CdpTransport = {
+  connect(url: string, opts?: { timeoutMs?: number }): Promise<Result<void, CdpError>>;
+  close(): Promise<void>;
+  request(
+    method: string,
+    params: Record<string, unknown>,
+    opts?: { sessionId?: string | null; timeoutMs?: number },
+  ): Promise<Result<unknown, CdpError>>;
+  events(): AsyncIterable<CdpEvent>;
+  state(): "open" | "closed" | "connecting";
+  onClose(cb: () => void): () => void;
 };

@@ -2,7 +2,7 @@ import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
-import { evaluateJson } from "../cdp/evaluate";
+import { evaluateJson } from "../cdp/session";
 import type { ToolErr } from "../util/tool";
 import { cdpCallBrowser, cdpCallOnTarget, cdpErrToToolErr, evalJs } from "./cdp-call";
 

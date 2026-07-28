@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { decodeResult } from "../../src/cdp/commands";
 import { createCdpSession } from "../../src/cdp/session";
-import type { CdpTransport } from "../../src/cdp/transport";
+import type { CdpTransport } from "../../src/cdp/types";
 import type { CdpEvent } from "../../src/cdp/types";
 import { type Result, ok, err } from "../../src/util/result";
 import { type CdpError, cdpError } from "../../src/cdp/errors";

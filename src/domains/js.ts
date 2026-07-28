@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
-import { formatBytes } from "../util/bytes";
+import { formatBytes } from "../util/truncate";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { evalJs } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
