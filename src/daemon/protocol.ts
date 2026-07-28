@@ -35,7 +35,7 @@ export type WireControl = {
 
 export type WireMessage = WireRequest | WireResponse | WireEvent | WireControl;
 
-export const isWireMessage = (v: unknown): v is WireMessage => {
+const isWireMessage = (v: unknown): v is WireMessage => {
   if (!isRecord(v)) return false;
   const t = v["type"];
   if (typeof t !== "string") return false;

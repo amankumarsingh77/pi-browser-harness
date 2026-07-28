@@ -14,16 +14,3 @@ export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
-
-export type Deadline = {
-  readonly remainingMs: () => number;
-  readonly expired: () => boolean;
-};
-
-export const deadline = (totalMs: number): Deadline => {
-  const end = Date.now() + totalMs;
-  return {
-    remainingMs: () => Math.max(0, end - Date.now()),
-    expired: () => Date.now() >= end,
-  };
-};

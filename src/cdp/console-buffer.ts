@@ -1,4 +1,5 @@
 import { decodeEvent } from "./events";
+import { createRecordStore } from "./record-store";
 
 export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
 
@@ -111,21 +112,10 @@ const formatStackTrace = (
 };
 
 export const createConsoleBuffer = (capacity = 500): ConsoleBuffer => {
-  const records = new Map<number, ConsoleRecord>();
+  const records = createRecordStore<number, ConsoleRecord>(capacity);
   let nextSeq = 1;
-  let overflowed = false;
-
-  const evictOldestIfFull = (): void => {
-    while (records.size >= capacity) {
-      const oldest = records.keys().next();
-      if (oldest.done) return;
-      records.delete(oldest.value);
-      overflowed = true;
-    }
-  };
 
   const insert = (rec: ConsoleRecord): void => {
-    evictOldestIfFull();
     records.set(rec.seq, rec);
   };
 
@@ -187,20 +177,12 @@ export const createConsoleBuffer = (capacity = 500): ConsoleBuffer => {
         matched.push({ ...r });
       }
 
-      const total = matched.length;
-      const limit = Math.min(filter.limit ?? 50, 500);
-      const limited = matched.slice(-limit);
-
-      const bufferOverflowed = overflowed;
-      overflowed = false;
-
-      return { records: limited, total, bufferOverflowed };
+      return records.page(matched, filter.limit);
     },
 
     clear() {
       records.clear();
       nextSeq = 1;
-      overflowed = false;
     },
   };
 };

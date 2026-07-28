@@ -6,18 +6,13 @@ import { Type } from "typebox";
 import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
+import { formatBytes } from "../util/bytes";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { evalJs } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
 import { asNumber, asRecord, asString, isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_BYTES = 120;
-
-const formatBytes = (n: number): string => {
-  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
-  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${n} B`;
-};
 
 // The AsyncFunction constructor is the documented way to compile user source; a plain `unknown` cast would lose the constructor signature, so this typed cast stays.
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as

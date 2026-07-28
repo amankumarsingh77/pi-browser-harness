@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
+import { formatBytes } from "../util/bytes";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
@@ -99,11 +100,6 @@ const renderNetworkMarkdown = (
 
   const failed = records.filter((r) => r.failed || (r.status !== undefined && r.status >= 500)).length;
   const totalBytes = records.reduce((s, r) => s + (r.responseBodySize ?? 0), 0);
-  const formatBytes = (n: number): string => {
-    if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
-    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${n} B`;
-  };
   const showWindow = (() => {
     const finished = records.filter((r) => r.durationMs !== undefined);
     if (finished.length === 0) return "";
