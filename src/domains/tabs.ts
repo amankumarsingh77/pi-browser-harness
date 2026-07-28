@@ -87,8 +87,6 @@ export const switchTabTool = defineBrowserTool({
   parameters: SwitchTabArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    // Resolve to a concrete targetId (exact, or unique hex prefix). We resolve
-    // first so the ownership check sees the canonical id, not the prefix.
     let resolved = args.targetId;
     if (!client.owns(resolved)) {
       const isHexPrefix = /^[0-9A-Fa-f]{8,}$/.test(args.targetId);

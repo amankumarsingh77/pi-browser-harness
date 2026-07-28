@@ -182,7 +182,7 @@ export const consoleTool = defineBrowserTool({
     const text = renderConsoleMarkdown(drained.records, {
       total: drained.total,
       bufferOverflowed: drained.bufferOverflowed,
-      expanded: true, // full text always returned to the LLM; renderResult handles compact view for humans
+      expanded: true,
       nextCursor,
     });
     const trunc = await applyTruncation(text, "console");

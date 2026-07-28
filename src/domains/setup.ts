@@ -1,10 +1,3 @@
-/**
- * browser_setup tool — agent-callable browser initialization.
- *
- * The agent can call this directly when browser tools fail with
- * "not initialized" instead of asking the user. Idempotent: safe
- * to call even when already connected.
- */
 
 import { Type } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
@@ -29,12 +22,9 @@ export const setupTool = defineBrowserTool({
   ],
   parameters: SetupArgs,
   concurrency: "parallel",
-  // ensureAlive:false — this tool IS the setup; it must bypass the socket guard
   ensureAlive: false,
   renderCall: () => new Text("🔧 Initializing browser...", 0, 0),
   async handler(_args, { client, extensionCtx }): Promise<Result<ToolOk, ToolErr>> {
-    // extensionCtx carries the UI, so the agent calling browser_setup gets the
-    // same first-run profile picker the user gets from /browser-setup.
     const result = await performSetup(client, extensionCtx);
     if (result.success) {
       return ok({ text: result.data });

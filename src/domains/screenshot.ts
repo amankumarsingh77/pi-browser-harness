@@ -110,10 +110,7 @@ export const screenshotTool = defineBrowserTool({
         maxHeightCells: 24,
         filename: filePath,
       });
-      // Image's text fallback (when terminal lacks inline-image support) does
-      // not respect the rendered width, so a long file path can blow past the
-      // terminal width and crash the host TUI. Wrap the component to truncate
-      // each rendered line to fit.
+      // Image's text fallback does not respect the rendered width, so an unwrapped long path can blow past the terminal width and crash the host TUI.
       return {
         invalidate: () => image.invalidate(),
         render: (width: number) =>
@@ -151,7 +148,6 @@ export const captureWithCrosshair = async (
     await rename(tmp, cap.data.path);
     return ok({ path: cap.data.path });
   } catch {
-    // Crosshair overlay is best-effort; on failure return the plain screenshot.
     return ok({ path: cap.data.path });
   }
 };

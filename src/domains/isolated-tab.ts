@@ -1,15 +1,3 @@
-/**
- * Isolated-attach tab lifecycle (ADR-0002 v1). Opens a harness-owned tab,
- * attaches to it by its own CDP sessionId, and drives it via callOnTarget /
- * evaluateJs(expr, sid) WITHOUT ever touching the global "current" tab — so a
- * search or page-read never disturbs the tab the user is looking at, even when
- * several subagents run concurrently.
- *
- * Mirrors the create/attach sequence in browser_open_urls
- * (src/domains/navigate.ts:84-139). Every page evaluation is bounded by a
- * timeout, so a JS dialog on the (uninstrumented) isolated tab surfaces as a
- * typed timeout rather than hanging — see the dialog-hang caveat in plan.md.
- */
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
@@ -17,7 +5,6 @@ import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 import { evaluateJson } from "../cdp/evaluate";
 import type { ToolErr } from "../util/tool";
 
-/** A tab attached by its own sessionId, ready to drive via callOnTarget. */
 export type IsolatedTab = {
   readonly targetId: string;
   readonly sessionId: string;
@@ -28,14 +15,8 @@ const READY_POLL_INTERVAL_MS = 50;
 
 const toToolErr = (message: string, kind: ToolErr["kind"] = "cdp_error"): ToolErr => ({ kind, message });
 
-/**
- * Open a harness-owned tab and attach to it, returning its targetId + private
- * sessionId. Does not navigate. The caller MUST `closeIsolatedTab` when done.
- */
 export const openIsolatedTab = async (client: BrowserClient): Promise<Result<IsolatedTab, ToolErr>> => {
-  // Routed through the target factory so an isolated tab lands in the pinned
-  // profile like every other harness tab — otherwise a search or page read
-  // would run with a different profile's cookies than the visible tabs.
+  // Routed through the target factory so an isolated tab lands in the pinned profile, not another profile's cookies.
   const window = await ensureHarnessWindow(client);
   if (!window.success) return err(toToolErr(window.error.message));
   let targetId: string;
@@ -62,7 +43,6 @@ export const openIsolatedTab = async (client: BrowserClient): Promise<Result<Iso
   return ok({ targetId, sessionId });
 };
 
-/** Navigate an isolated tab to a URL (does not wait for load). */
 export const navigateIsolatedTab = async (
   client: BrowserClient,
   tab: IsolatedTab,
@@ -75,7 +55,6 @@ export const navigateIsolatedTab = async (
   return ok(undefined);
 };
 
-/** Poll the isolated tab until document.readyState === 'complete' or timeout. */
 export const waitForIsolatedLoad = async (
   client: BrowserClient,
   tab: IsolatedTab,
@@ -108,7 +87,6 @@ export const evalInIsolatedTab = async <T>(
   return ok(r.data);
 };
 
-/** Close an isolated tab and drop its ownership. Best-effort; never throws. */
 export const closeIsolatedTab = async (client: BrowserClient, tab: IsolatedTab): Promise<void> => {
   await client.closeTab(tab.targetId).catch(() => {});
 };

@@ -38,13 +38,10 @@ export const scrollTool = defineBrowserTool({
     const cy = args.y ?? Math.round(info.data.height / 2);
     const dx = args.deltaX ?? 0;
     const dy = args.deltaY ?? 300;
-    // The page target must be focused or Input events are dropped silently
-    // (mouseWheel hangs; synthesizeScrollGesture returns ok but no scroll).
-    // Page.bringToFront makes the target the active one in the browser.
+    // The page target must be focused or Input events are dropped silently: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling.
     const front = await cdpCall(client, "Page.bringToFront", {});
     if (!front.success) return front;
-    // Establish compositor mouse position before mouseWheel; without this,
-    // CDP sometimes drops the wheel event with a timeout.
+    // Establish compositor mouse position first, or CDP sometimes drops the wheel event with a timeout.
     const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,
     });

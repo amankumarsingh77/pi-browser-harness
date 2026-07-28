@@ -40,11 +40,8 @@ export type SlimNode = {
   description?: string;
   state?: string;
   children: SlimNode[];
-  /** Internal: kept for the post-build box fetch. Stripped before returning to the LLM. */
   _backendId?: number;
-  /** Stable handle (e.g. "e12") for interaction tools. Survives re-renders via backendNodeId. */
   ref?: string;
-  /** Click target — center of the element's bounding box, in viewport CSS pixels. */
   box?: Box;
 };
 
@@ -63,9 +60,7 @@ const INTERACTIVE_ROLES = new Set([
   "spinbutton",
 ]);
 
-// Roles whose live DOM value/checked state should override the (often stale)
-// AX-tree value. The AX `value` is unreliable for freshly-typed or controlled
-// inputs, so for these we read the real DOM property at snapshot time.
+// The AX `value` is stale for freshly-typed or controlled inputs, so for these roles the live DOM property is read instead.
 const VALUE_ROLES = new Set([
   "textbox",
   "searchbox",
@@ -91,7 +86,6 @@ const collectState = (props: RawAxNode["properties"]): string | undefined => {
     const name = p.name;
     if (!name) continue;
     const raw = p.value?.value;
-    // Boolean flags worth surfacing in the outline.
     if (raw === true && (name === "focused" || name === "required" || name === "disabled" || name === "checked" || name === "expanded" || name === "selected" || name === "pressed" || name === "modal")) {
       flags.push(name);
     }
@@ -104,12 +98,9 @@ export const buildTree = (
   rawNodes: ReadonlyArray<RawAxNode>,
   opts: { interestingOnly: boolean; maxNodes: number },
 ): SlimNode[] => {
-  // Index for parent/child lookups.
   const byId = new Map<string, RawAxNode>();
   for (const n of rawNodes) byId.set(n.nodeId, n);
 
-  // CDP doesn't mark a single root explicitly; the root nodes are the ones
-  // whose parentId isn't in the index (typically just one — RootWebArea).
   const rootIds: string[] = [];
   for (const n of rawNodes) {
     if (!n.parentId || !byId.has(n.parentId)) rootIds.push(n.nodeId);
@@ -120,8 +111,7 @@ export const buildTree = (
   const slim = (node: RawAxNode): SlimNode | undefined => {
     if (budget <= 0) return undefined;
     if (opts.interestingOnly && node.ignored) {
-      // Skip the ignored node but recurse through its children — Chrome often
-      // ignores wrapper divs but the meaningful descendants are still there.
+      // Chrome often ignores wrapper divs while their descendants remain meaningful, so recurse through an ignored node's children.
       const out: SlimNode[] = [];
       for (const cid of node.childIds ?? []) {
         const child = byId.get(cid);
@@ -129,10 +119,6 @@ export const buildTree = (
         const slimChild = slim(child);
         if (slimChild) out.push(slimChild);
       }
-      // Hoist children into the parent. We return undefined; the parent's
-      // recursion will see them by re-walking — but that double-counts. Instead
-      // we handle hoisting at the parent level. So here just signal "skip me"
-      // by returning undefined; the parent will hoist by checking ignored flag.
       return out.length > 0 ? { role: "_hoist", children: out } : undefined;
     }
     budget--;
@@ -147,7 +133,6 @@ export const buildTree = (
       if (!child) continue;
       const slimChild = slim(child);
       if (!slimChild) continue;
-      // Hoist any synthetic _hoist nodes' children into this level.
       if (slimChild.role === "_hoist") children.push(...slimChild.children);
       else children.push(slimChild);
     }
@@ -187,7 +172,6 @@ const summarize = (nodes: ReadonlyArray<SlimNode>): string => {
     }
   };
   walk(nodes);
-  // Group landmarks (roles that are top-level structural).
   const landmarkRoles = new Set(["banner", "navigation", "main", "complementary", "contentinfo", "search", "form", "region"]);
   let landmarks = 0;
   for (const [role, c] of counts) if (landmarkRoles.has(role)) landmarks += c;
@@ -211,8 +195,6 @@ const renderOutline = (nodes: ReadonlyArray<SlimNode>): string => {
       if (n.name) line += ` "${n.name}"`;
       if (n.value && n.value !== n.name) line += ` = ${JSON.stringify(n.value)}`;
       if (n.state) line += ` (${n.state})`;
-      // Surface the stable ref + click coordinates for interactive nodes. Agents
-      // pass `ref` to interaction tools (survives re-renders); @(x,y) is a fallback.
       if (n.ref) line += ` [${n.ref}]`;
       if (n.box && INTERACTIVE_ROLES.has(n.role)) {
         line += ` @(${n.box.cx},${n.box.cy})`;
@@ -225,18 +207,12 @@ const renderOutline = (nodes: ReadonlyArray<SlimNode>): string => {
   return lines.join("\n");
 };
 
-/** Strip internal _backendId from a slim tree before returning to callers. */
 const stripInternals = (nodes: ReadonlyArray<SlimNode>): SlimNode[] =>
   nodes.map((n) => {
     const { _backendId: _bid, ...rest } = n;
     return { ...rest, children: stripInternals(n.children) };
   });
 
-/**
- * Walk all slim nodes and collect (slimNode, backendId) pairs for interactive
- * roles. Caller fetches DOM.getBoxModel for each and writes box back into the
- * slim node by reference.
- */
 export const collectInteractiveTargets = (
   nodes: ReadonlyArray<SlimNode>,
 ): Array<{ node: SlimNode; backendId: number }> => {
@@ -253,13 +229,6 @@ export const collectInteractiveTargets = (
   return out;
 };
 
-/**
- * Read the live DOM value for a form control by backend node id. Resolves the
- * node to a JS object then reads the property that matters for its type:
- * `.value` for inputs/selects/textareas, `.checked` (→ "checked"/"unchecked")
- * for checkboxes/radios. Returns undefined on any failure so the caller falls
- * back to the AX value. Mirrors the box-fetch error handling: never throws.
- */
 const liveValue = async (session: CdpSession, backendId: number): Promise<string | undefined> => {
   const resolved = await session.call("DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) return undefined;
@@ -309,33 +278,22 @@ export const snapshotTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const session = client.session();
 
-    // 1. AX tree
     const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
     if (!axRes.success) return axRes;
     const rawNodes = axRes.data.nodes;
 
-    // 2. Page url/title
     const piRes = await client.pageInfo();
     if (!piRes.success) return err({ kind: "cdp_error", message: piRes.error.message });
     const pageUrl = "dialog" in piRes.data ? "" : piRes.data.url;
     const pageTitle = "dialog" in piRes.data ? "" : piRes.data.title;
 
-    // 3. Slim + format
     const slim = buildTree(rawNodes, {
       interestingOnly: args.interestingOnly ?? true,
       maxNodes: args.maxNodes ?? 1000,
     });
 
-    // 4. Fetch bounding boxes for interactive nodes so the agent can click
-    //    without a screenshot round-trip. Capped budget so a slow page can't
-    //    wedge the call.
     const targets = collectInteractiveTargets(slim);
 
-    // Assign stable refs (e1, e2, …) to every interactive target. Interaction
-    // tools resolve these refs to backendNodeIds at call time, so they stay
-    // valid across re-renders. The ref → backendNodeId map (and the per-ref
-    // signature baseline for the post-mutation diff) is published below, after
-    // the box/live-value fetch so the signature reflects the live DOM value.
     const refMap = new Map<string, number>();
     targets.forEach(({ node, backendId }, i) => {
       const ref = `e${i + 1}`;
@@ -353,10 +311,6 @@ export const snapshotTool = defineBrowserTool({
           if (!box.success) return;
           if (box.data.x < 0 || box.data.y < 0) return;
           node.box = box.data;
-          // Override the AX value with the live DOM property for form controls.
-          // The AX `value` is stale for freshly-typed / controlled inputs, so the
-          // agent can't trust it as a read-back signal. Reading .value/.checked
-          // from the actual element fixes that.
           if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
           const live = await liveValue(session, backendId);
           if (live !== undefined) node.value = live;
@@ -365,9 +319,6 @@ export const snapshotTool = defineBrowserTool({
       clearTimeout(timer);
     }
 
-    // Publish refs to the active tab. The signature (role|name|value|state) is
-    // the baseline the post-mutation auto-diff compares against, so it must use
-    // the live values resolved above.
     const refSig = new Map<string, string>();
     for (const { node } of targets) {
       if (node.ref === undefined) continue;
@@ -379,7 +330,6 @@ export const snapshotTool = defineBrowserTool({
     const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);
     const trunc = await applyTruncation(text, "snapshot");
 
-    // 4. Optional screenshot — JPEG q=80 to match screenshotTool's default.
     let shotPath: string | undefined;
     if (args.includeScreenshot) {
       const shot = await session.call("Page.captureScreenshot", { format: "jpeg", quality: 80 });
@@ -429,9 +379,6 @@ export const snapshotTool = defineBrowserTool({
       return new Markdown(md, 0, 0, getMarkdownTheme());
     }
 
-    // Expanded view: read truncated text from result.content (the spilled file
-    // is too large to inline) — the same `text` we returned from handler is in
-    // result.content[0]. Fall back to a placeholder if shape is unexpected.
     const content = result.content[0];
     const treeText = content && content.type === "text" ? content.text : "";
 
@@ -451,7 +398,6 @@ export const snapshotTool = defineBrowserTool({
 
     if (!details.screenshotPath) return treeBlock;
 
-    // Mirror screenshotTool's width-clamp wrapper for the inline image.
     try {
       const buf = readFileSync(details.screenshotPath);
       const b64 = buf.toString("base64");

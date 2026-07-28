@@ -131,7 +131,6 @@ const renderNetworkMarkdown = (
     return `${headerLines.join("\n")}\n\n${rows}${more}`;
   }
 
-  // Expanded: full table + optional body sections.
   const tableHeader = `| # | Method | Status | URL | Type | ms |\n|---|---|---|---|---|---|`;
   const tableRows = records
     .map((r, i) => {
@@ -269,7 +268,7 @@ export const networkRequestsTool = defineBrowserTool({
       includeBodies: args.includeResponseBodies ?? false,
       total: drained.total,
       bufferOverflowed: drained.bufferOverflowed,
-      expanded: true, // full text always returned to the LLM; renderResult handles compact view for humans
+      expanded: true,
     });
     const trunc = await applyTruncation(text, "network");
 

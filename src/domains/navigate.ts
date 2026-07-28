@@ -88,28 +88,21 @@ export const openUrlsTool = defineBrowserTool({
   renderCall: (a) => new Text(`🌐 Opening ${a.urls.length} URL${a.urls.length !== 1 ? "s" : ""}…`, 0, 0),
   async handler(args, { client, onUpdate }): Promise<Result<ToolOk, ToolErr>> {
     const total = args.urls.length;
-    // Phase 1: create tabs. All must land in ONE window. If the harness window
-    // already exists, open every url as its child in parallel. If it doesn't
-    // (fresh/closed), create the FIRST url as a new dedicated window (binding
-    // its windowId) and open the rest as children of it — a parallel
-    // newWindow:true per url would otherwise scatter tabs across N windows.
+    // All tabs must land in ONE window: a parallel newWindow:true per url would scatter them across N windows, so the first url creates the window and the rest open as its children.
     const url0 = args.urls[0];
     if (url0 === undefined) return err({ kind: "invalid_state", message: "no URLs provided" });
     const window = await ensureHarnessWindow(client);
     if (!window.success) return err({ kind: "cdp_error", message: window.error.message });
     const seededWindow = window.data.targetId;
-    // A freshly created window's seed tab serves as the first URL's tab.
     const seedResult: TabResult | undefined = window.data.freshlyCreated
       ? { url: url0, targetId: seededWindow, ok: true }
       : undefined;
     const created = await Promise.all(args.urls.map(async (url, i): Promise<TabResult> => {
-      // Reuse the seed tab (created above) for the first url instead of duplicating it.
       if (i === 0 && seedResult) return seedResult;
       const r = await openHarnessTab(client, seededWindow);
       if (!r.success) return { url, targetId: "", ok: false, error: r.error.message };
       return { url, targetId: r.data, ok: true };
     }));
-    // Phase 2: attach + navigate each created tab in parallel.
     let completed = 0;
     const settled = await Promise.all(
       created.filter((t) => t.ok).map(async (tab): Promise<TabResult> => {
@@ -121,8 +114,6 @@ export const openUrlsTool = defineBrowserTool({
           if (!enabled.success) return { ...tab, ok: false, error: enabled.error.message };
           const nav = await client.session().callOnTarget("Page.navigate", { url: tab.url }, sid);
           if (!nav.success) return { ...tab, ok: false, error: nav.error.message };
-          // Mark the tab with a green circle so the user can see which
-          // tabs the agent opened. Best-effort; don't fail on CSP blocks.
           client.evaluateJs(
             safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
             sid
@@ -130,11 +121,10 @@ export const openUrlsTool = defineBrowserTool({
           return tab;
         } finally {
           completed++;
-          // onUpdate must never escape: a renderer crash would otherwise
-          // tear down the tool call.
+          // onUpdate must never escape: a renderer crash would otherwise tear down the tool call.
           try {
             onUpdate({ text: `Opening URLs… ${completed}/${created.filter((t) => t.ok).length} navigated` });
-          } catch { /* swallow */ }
+          } catch {}
         }
       }),
     );
@@ -142,7 +132,6 @@ export const openUrlsTool = defineBrowserTool({
     const all: ReadonlyArray<TabResult> = [...settled, ...failures];
     const okTabs = all.filter((r) => r.ok);
     const failTabs = all.filter((r) => !r.ok);
-    // Phase 3: activate the last successfully-opened tab so the user sees something.
     if (okTabs.length > 0) {
       const last = okTabs[okTabs.length - 1];
       if (last) {

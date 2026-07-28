@@ -1,27 +1,15 @@
-/**
- * Pure Google SERP parsing — no CDP, no browser. Everything here is a pure
- * function over data captured from the page, so it is unit-testable against
- * saved fixtures (see test/deep-research/serp-parser-test.ts).
- *
- * ADR-0001: results are extracted by structure/semantics (anchors carrying an
- * <h3> heading in the main results column), never by brittle Google CSS class
- * names, and Google redirect wrappers are unwound to the real target URL.
- */
 
-/** One raw anchor captured in-page: a link with a heading and nearby snippet. */
 export type SerpAnchor = {
   readonly href: string;
   readonly heading: string;
   readonly snippet: string;
 };
 
-/** The JSON payload the in-page extraction expression returns. */
 export type SerpExtraction = {
   readonly anchors: ReadonlyArray<SerpAnchor>;
   readonly pageText: string;
 };
 
-/** A parsed, ranked search result — the tool's public output shape. */
 export type SearchResult = {
   readonly title: string;
   readonly url: string;
@@ -29,7 +17,6 @@ export type SearchResult = {
   readonly rank: number;
 };
 
-/** Why a SERP yielded no usable results, or that it did. */
 export type SerpVerdict = "ok" | "captcha" | "no_results";
 
 const CAPTCHA_MARKERS: ReadonlyArray<string> = [
@@ -42,10 +29,6 @@ const CAPTCHA_MARKERS: ReadonlyArray<string> = [
   "our systems have detected unusual traffic",
 ];
 
-/**
- * Decode a Google redirect wrapper (`/url?q=<real>&sa=...`) to its target.
- * Returns the input unchanged when it is not a wrapper.
- */
 const unwrapRedirect = (href: string): string => {
   const wrapper = href.match(/^(?:https?:\/\/[^/]*google\.[^/]*)?\/url\?/i);
   if (!wrapper) return href;
@@ -66,7 +49,6 @@ const isExternalResult = (url: string): boolean => {
   }
 };
 
-/** Normalized key for dedupe: origin + pathname, trailing slash and hash removed. */
 const dedupeKey = (url: string): string => {
   try {
     const u = new URL(url);
@@ -76,11 +58,6 @@ const dedupeKey = (url: string): string => {
   }
 };
 
-/**
- * Parse captured anchors into ranked results: unwrap redirects, keep only
- * external http(s) links, dedupe by normalized url (first wins), rank by input
- * order, cap to `limit`.
- */
 export const parseGoogleSerp = (anchors: ReadonlyArray<SerpAnchor>, limit: number): ReadonlyArray<SearchResult> => {
   const seen = new Set<string>();
   const results: SearchResult[] = [];
@@ -101,11 +78,6 @@ export const parseGoogleSerp = (anchors: ReadonlyArray<SerpAnchor>, limit: numbe
   return results;
 };
 
-/**
- * Decide whether the SERP is usable, blocked by a CAPTCHA, or genuinely empty.
- * `resultCount` is the number of parsed results; `pageText` is a bounded slice
- * of the page's visible text.
- */
 export const classifySerp = (pageText: string, resultCount: number): SerpVerdict => {
   if (resultCount > 0) return "ok";
   const lower = pageText.toLowerCase();

@@ -1,17 +1,6 @@
-/**
- * The JavaScript source evaluated in a loaded page to capture candidate content
- * blocks + metadata for the pure readability extractor (readability.ts). Crosses
- * the CDP boundary via Runtime.evaluate (returnByValue) and returns a JSON
- * string shaped like PageCapture.
- *
- * The DOM walk lives here (unavoidable); all scoring/selection is pure and lives
- * in readability.ts, so the decision logic stays unit-testable.
- */
 
-/** Max bytes of body-text fallback captured for thin/structure-less pages. */
 const BODY_TEXT_LIMIT = 20_000;
 
-/** Build the capture expression. No interpolated values ⇒ no injection surface. */
 export const buildPageCaptureExpr = (): string => `
   (() => {
     const BOILERPLATE = new Set(['NAV', 'HEADER', 'FOOTER', 'ASIDE']);

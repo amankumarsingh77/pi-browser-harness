@@ -1,12 +1,3 @@
-/**
- * Shared TUI renderer for text-heavy tool output (browser_web_search,
- * browser_read_page). Gives the native pi expand/collapse (Ctrl+O) behavior:
- * a compact preview by default, the full body when expanded — mirroring the
- * pattern in browser_execute_js (src/domains/js.ts:81-109).
- *
- * The full text always goes to the LLM via ToolOk.text; this only governs the
- * human-facing TUI view.
- */
 import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
@@ -15,13 +6,9 @@ import { isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_LINES = 6;
 
-/** Structured payload a text-heavy tool stores so renderResult can rebuild views. */
 export type ExpandableText = {
-  /** One-line summary shown above the body in both states (e.g. "5 results · google"). */
   readonly summary: string;
-  /** The full rendered body (markdown/plain). */
   readonly body: string;
-  /** Path to the on-disk full output when the LLM text was truncated, if any. */
   readonly fullOutputPath?: string;
 };
 
@@ -31,10 +18,6 @@ const isExpandableText = (value: unknown): value is ExpandableText =>
 const extractRender = (details: unknown): unknown =>
   isRecord(details) ? details["render"] : undefined;
 
-/**
- * Build a renderResult over an ExpandableText stored in `details.render`.
- * `label` names the tool for the error fallback (e.g. "web_search").
- */
 export const renderExpandableText = (
   label: string,
   result: { readonly details?: unknown },
