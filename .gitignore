@@ -10,3 +10,5 @@ scripts/*
 !scripts/check-boundaries.ts
 !scripts/boundary-allowlist.ts
 data/
+.worktrees/
+.harness/
