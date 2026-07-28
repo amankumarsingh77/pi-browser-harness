@@ -1,14 +1,3 @@
-/**
- * CdpBridge — persistent WebSocket to Chrome, ID multiplexing, event routing.
- *
- * A single long-lived process connection to Chrome that proxies CDP traffic
- * for multiple pi clients connected via the IpcServer. One Allow dialog ever.
- *
- * References:
- *   - CDP message format: https://github.com/aslushnikov/getting-started-with-cdp#protocol-fundamentals
- *   - CDP sessions + IDs: https://github.com/aslushnikov/getting-started-with-cdp#targets--sessions
- *   - Target domain: https://chromedevtools.github.io/devtools-protocol/tot/Target/
- */
 
 import WebSocket from "ws";
 import { discoverWsUrl } from "../cdp/discovery";
@@ -18,7 +7,6 @@ import type { WireRequest, WireResponse, WireEvent } from "./protocol";
 import { CDP_CONNECT_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS } from "./protocol";
 import { asString, isRecord } from "../util/guards";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
 
 export type SendToClient = (clientId: string, msg: WireResponse | WireEvent) => void;
 
@@ -27,12 +15,9 @@ export type EventHandler = (event: WireEvent, targetClientIds: string[]) => void
 export type CloseHandler = () => void;
 
 export type CdpBridge = {
-  /** Start the bridge. Resolves when the daemon IPC + Chrome discovery loop
-   *  are initialized (not when Chrome is connected — that may take retries). */
   start(): Promise<void>;
   stop(): Promise<void>;
   handleRequest(req: WireRequest, clientId: string, send: SendToClient): Promise<void>;
-  /** True when the Chrome WebSocket is open and ready. */
   isAlive(): boolean;
   recordSession(clientId: string, sessionId: string): void;
   releaseSession(sessionId: string): void;
@@ -42,7 +27,6 @@ export type CdpBridge = {
   onClose(handler: CloseHandler): void;
 };
 
-// ── ID Multiplexer ────────────────────────────────────────────────────────────
 
 interface PendingEntry {
   clientId: string;
@@ -79,11 +63,10 @@ class IdMultiplexer {
   }
 }
 
-// ── Event Router ───────────────────────────────────────────────────────────────
 
 class EventRouter {
-  private owners = new Map<string, string>();       // sessionId → clientId
-  private clientSessions = new Map<string, Set<string>>(); // clientId → sessions
+  private owners = new Map<string, string>();
+  private clientSessions = new Map<string, Set<string>>();
 
   record(clientId: string, sessionId: string): void {
     const prev = this.owners.get(sessionId);
@@ -112,11 +95,6 @@ class EventRouter {
     this.clientSessions.delete(clientId);
   }
 
-  /**
-   * Route a CDP event to client(s).
-   * Session-scoped → only the owning client.
-   * Browser-level (no sessionId) → all connected clients.
-   */
   route(event: WireEvent): string[] {
     if (event.sessionId) {
       const owner = this.owners.get(event.sessionId);
@@ -130,7 +108,6 @@ class EventRouter {
   }
 }
 
-// ── Implementation ─────────────────────────────────────────────────────────────
 
 export const createCdpBridge = (): CdpBridge => {
   let ws: WebSocket | null = null;
@@ -140,7 +117,6 @@ export const createCdpBridge = (): CdpBridge => {
   let eventHandler: EventHandler | null = null;
   let closeHandler: CloseHandler | null = null;
 
-  // daemonId → { send, timer, isAttach }
   const callbacks = new Map<number, {
     send: SendToClient;
     clientId: string;
@@ -149,7 +125,6 @@ export const createCdpBridge = (): CdpBridge => {
     isAttach: boolean;
   }>();
 
-  // ── Handle raw CDP messages from Chrome ─────────────────────────────────
 
   const onChromeMessage = (raw: string): void => {
     let parsed: unknown;
@@ -157,12 +132,9 @@ export const createCdpBridge = (): CdpBridge => {
     if (!isCdpRawMessage(parsed)) return;
     const msg: CdpRawMessage = parsed;
 
-    // ---- Response (has id) ----
     if (msg.id !== undefined) {
       const cb = callbacks.get(msg.id);
       if (!cb) {
-        // Stale response — client already timed out or disconnected.
-        // Still clean up the multiplexer mapping.
         mux.resolve(msg.id);
         return;
       }
@@ -178,7 +150,6 @@ export const createCdpBridge = (): CdpBridge => {
           error: { code: msg.error.code ?? -1, message: msg.error.message },
         });
       } else {
-        // Track session ownership for attach responses
         if (cb.isAttach && msg.result) {
           const sessionId = isRecord(msg.result) ? asString(msg.result["sessionId"]) : undefined;
           if (sessionId) {
@@ -192,10 +163,8 @@ export const createCdpBridge = (): CdpBridge => {
       return;
     }
 
-    // ---- Event (no id, has method) ----
     if (!msg.method) return;
 
-    // Inspector.detached — release session ownership
     if (msg.method === "Inspector.detached" && msg.sessionId) {
       router.release(msg.sessionId);
     }
@@ -207,7 +176,6 @@ export const createCdpBridge = (): CdpBridge => {
       ...(msg.sessionId !== undefined ? { sessionId: msg.sessionId } : {}),
     };
 
-    // Route through the event handler for the IpcServer to broadcast
     if (eventHandler) {
       const targets = router.route(wireEvent);
       if (targets.length > 0) {
@@ -216,29 +184,19 @@ export const createCdpBridge = (): CdpBridge => {
     }
   };
 
-  // ── Connect to Chrome ───────────────────────────────────────────────────
 
-  // ── Auto-reconnecting Chrome connection ───────────────────────────────
 
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
   let stopped = false;
 
-  /**
-   * Try to discover Chrome and open a WebSocket. On failure, schedule
-   * an exponential backoff retry (capped at 60s). When Chrome finally
-   * becomes available, the bridge connects automatically — no manual
-   * daemon restart needed.
-   */
   const tryConnect = (): void => {
     if (stopped) return;
     if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 
     const attempt = async (): Promise<void> => {
-      // Already connected — nothing to do.
       if (ws && ws.readyState === WebSocket.OPEN) return;
 
-      // Resolve URL (discover if not cached, or clear cache on retry)
       const cachedUrl = wsUrl;
       let url: string;
       if (cachedUrl === null || cachedUrl === "" || reconnectAttempt > 0) {
@@ -275,7 +233,6 @@ export const createCdpBridge = (): CdpBridge => {
           clearTimeout(timer);
           ws = sock;
           reconnectAttempt = 0;
-          // Enable target discovery so we see page events
           ws.send(JSON.stringify({ id: 0, method: "Target.setDiscoverTargets", params: { discover: true } }));
           console.log("[pi-browser-daemon] Connected to Chrome ✓");
           settleOnce();
@@ -293,7 +250,6 @@ export const createCdpBridge = (): CdpBridge => {
         sock.on("close", () => {
           clearTimeout(timer);
           ws = null;
-          // Reject all pending callbacks
           for (const [daemonId, cb] of callbacks) {
             clearTimeout(cb.timer);
             cb.send(cb.clientId, {
@@ -305,13 +261,11 @@ export const createCdpBridge = (): CdpBridge => {
             mux.resolve(daemonId);
           }
           closeHandler?.();
-          // Auto-reconnect on unexpected close
           scheduleRetry();
         });
       });
 
       await settledPromise;
-      // If connection didn't succeed, schedule a retry
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         scheduleRetry();
       }
@@ -320,20 +274,16 @@ export const createCdpBridge = (): CdpBridge => {
     attempt().catch(() => scheduleRetry());
   };
 
-  /** Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s, 60s (capped). */
   const scheduleRetry = (): void => {
     if (stopped) return;
     const delay = Math.min(1000 * Math.pow(2, Math.min(reconnectAttempt, 6)), 60_000);
     reconnectAttempt++;
-    wsUrl = null; // force re-discovery on next attempt
+    wsUrl = null;
     reconnectTimer = setTimeout(tryConnect, delay);
   };
 
   const start = async (): Promise<void> => {
     stopped = false;
-    // Don't await — the retry loop runs in the background.
-    // The daemon is "started" when the IPC server is listening, not when
-    // Chrome is connected.
     tryConnect();
   };
 
@@ -351,8 +301,6 @@ export const createCdpBridge = (): CdpBridge => {
     clientId: string,
     send: SendToClient,
   ): Promise<void> => {
-    // ponytail: wait for Chrome to connect (user may still be clicking "Allow").
-    // Bridge retries in background; this polls so the client doesn't fail first try.
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       const deadline = Date.now() + 15_000;
       while (Date.now() < deadline) {
@@ -372,7 +320,6 @@ export const createCdpBridge = (): CdpBridge => {
 
     const daemonId = mux.allocate(clientId, req.id);
 
-    // Store callback for the response
     const timer = setTimeout(() => {
       callbacks.delete(daemonId);
       mux.resolve(daemonId);

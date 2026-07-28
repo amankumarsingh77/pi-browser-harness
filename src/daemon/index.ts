@@ -1,12 +1,3 @@
-/**
- * Browser daemon entry point — standalone long-lived process.
- *
- * Owns a single persistent WebSocket to Chrome. Exposes a Unix domain socket
- * for pi instances to connect through. One Allow dialog ever (per Chrome
- * lifetime), zero repeated prompts.
- *
- * Run: npx tsx src/daemon/index.ts
- */
 
 import { createIpcServer } from "./server";
 import { createCdpBridge, type SendToClient } from "./bridge";
@@ -18,9 +9,7 @@ async function main() {
   const ipcServer = createIpcServer();
   const cdpBridge = createCdpBridge();
 
-  // ── Wire IpcServer → CdpBridge ─────────────────────────────────────────
 
-  // When a pi client sends a CDP request, proxy it through the bridge to Chrome.
   ipcServer.onMessage((msg, client) => {
     if (msg.type !== "request") return;
 
@@ -31,19 +20,16 @@ async function main() {
     cdpBridge.handleRequest(msg, client.id, send);
   });
 
-  // When Chrome sends an event, route it to the correct pi client(s).
   cdpBridge.onEvent((event, targetClientIds) => {
     for (const cid of targetClientIds) {
       ipcServer.send(cid, event);
     }
   });
 
-  // When a client disconnects, clean up its CDP state.
   ipcServer.onDisconnect((client) => {
     cdpBridge.removeClient(client.id);
   });
 
-  // When Chrome disconnects, notify all clients.
   cdpBridge.onClose(() => {
     console.log("[pi-browser-daemon] Chrome disconnected");
     ipcServer.broadcast({
@@ -53,11 +39,7 @@ async function main() {
     });
   });
 
-  // ── Idle timeout ───────────────────────────────────────────────────────
 
-  // The daemon exits after DAEMON_IDLE_TIMEOUT_MS with zero connected clients.
-  // This prevents zombie processes when pi sessions end and never reconnect.
-  // The timeout resets whenever a client connects.
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = (): void => {
@@ -78,7 +60,6 @@ async function main() {
   ipcServer.onConnect(() => { cancelIdleTimer(); });
   ipcServer.onDisconnect(() => { resetIdleTimer(); });
 
-  // ── Start ──────────────────────────────────────────────────────────────
 
   try {
     await ipcServer.start();
@@ -88,14 +69,10 @@ async function main() {
     process.exit(1);
   }
 
-  // Connect to Chrome (auto-retries with backoff in the background).
-  // The daemon is ready immediately — Chrome may connect later.
   await cdpBridge.start();
 
-  // Start the idle timer (no clients yet at startup).
   resetIdleTimer();
 
-  // ── Graceful shutdown ──────────────────────────────────────────────────
 
   const shutdown = async () => {
     console.log("[pi-browser-daemon] Shutting down...");
