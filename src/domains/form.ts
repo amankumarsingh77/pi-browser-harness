@@ -4,6 +4,7 @@ import { safeJs } from "../util/js-template";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall } from "./cdp-call";
+import { fillBody } from "./fill-engine";
 import { interactiveDiff, resolveRefToObjectId } from "./ref-resolve";
 
 const FillArgs = Type.Object({
@@ -29,7 +30,13 @@ const FillArgs = Type.Object({
  */
 const runOnElement = async (
   client: BrowserClient,
-  opts: { ref?: string | undefined; selector?: string | undefined; fnBody: string; arg: unknown },
+  opts: {
+    ref?: string | undefined;
+    selector?: string | undefined;
+    fnBody: string;
+    arg: unknown;
+    notFound?: unknown;
+  },
 ): Promise<Result<unknown, ToolErr>> => {
   if (opts.ref !== undefined) {
     const objectId = await resolveRefToObjectId(client, opts.ref);
@@ -52,7 +59,7 @@ const runOnElement = async (
   const prelude = safeJs`
     (() => {
       const el = document.querySelector(${opts.selector});
-      if (!el) return { status: "not_found" };
+      if (!el) return ${opts.notFound ?? { status: "not_found" }};
       const __arg = ${opts.arg};
       return (function (arg) {`;
   const expr = `${prelude} ${opts.fnBody} }).call(el, __arg); })()`;
@@ -61,75 +68,21 @@ const runOnElement = async (
   return ok(r.data);
 };
 
-/**
- * Result shape returned by the in-page fill script. Discriminated by `status`
- * so the handler can map page-level outcomes to typed ToolErr kinds.
- */
-type FillResult =
-  | { status: "ok"; tag: string; kind: string; value: string }
-  | { status: "not_found" }
-  | { status: "not_fillable"; tag: string };
+const FILL_BODY = `const value = arg;\n${fillBody({ rejectSelect: true, focusFirst: false })}`;
 
-const isFillResult = (v: unknown): v is FillResult => {
-  if (typeof v !== "object" || v === null || !("status" in v)) return false;
-  if (v.status === "not_found") return true;
-  if (v.status === "not_fillable") return "tag" in v && typeof v.tag === "string";
-  if (v.status === "ok") {
-    return "tag" in v && typeof v.tag === "string"
-      && "kind" in v && typeof v.kind === "string"
-      && "value" in v && typeof v.value === "string";
-  }
-  return false;
-};
-
-// Element-scoped fill logic. `this` is the target element, `arg` is the value.
-// Write via the native prototype value setter so React's _valueTracker
-// registers the change — assigning el.value directly does NOT, which is why
-// controlled inputs revert on re-render. Shared verbatim by the ref path
-// (callFunctionOn) and the selector path (querySelector + .call).
-const FILL_FN = `
-  const el = this;
-  const tag = el.tagName;
-  const proto =
-    el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-    : el instanceof HTMLInputElement ? HTMLInputElement.prototype
-    : null;
-  if (proto) {
-    const desc = Object.getOwnPropertyDescriptor(proto, "value");
-    const setter = desc && desc.set;
-    if (setter) setter.call(el, arg);
-    else el.value = arg;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { status: "ok", tag, kind: el.type || tag.toLowerCase(), value: el.value };
-  }
-  if (el.isContentEditable) {
-    // Rich-text editors (Slack/Notion/ProseMirror) listen for beforeinput/input.
-    el.focus();
-    let done = false;
-    try {
-      const sel = window.getSelection();
-      if (sel) { sel.removeAllRanges(); const rng = document.createRange(); rng.selectNodeContents(el); sel.addRange(rng); }
-      done = document.execCommand("insertText", false, arg);
-    } catch (e) { done = false; }
-    if (!done) {
-      el.textContent = arg;
-      el.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    }
-    return { status: "ok", tag, kind: "contenteditable", value: el.textContent || "" };
-  }
-  return { status: "not_fillable", tag };
-`;
+const NOT_FOUND: PageResult = { ok: false, reason: "not_found" };
 
 export const fillTool = defineBrowserTool({
   name: "browser_fill",
   label: "Browser Fill",
   description:
-    "Fill a form field (input/textarea/contenteditable). PREFERRED: pass `ref` (e.g. 'e7') from browser_snapshot — survives re-renders. Fallback: a CSS `selector`. Writes through the native value setter and fires bubbling 'input'/'change' events, so React/Vue/Angular controlled components and rich-text editors update correctly — unlike browser_type. Returns the field's value after writing, plus a compact diff of page changes.",
+    "Fill a form field (input/textarea/contenteditable), or tick a checkbox/radio by passing 'true'/'false'. PREFERRED: pass `ref` (e.g. 'e7') from browser_snapshot — survives re-renders. Fallback: a CSS `selector`. Writes through the native value setter and fires bubbling 'input'/'change' events, so React/Vue/Angular controlled components and rich-text editors update correctly — unlike browser_type. Refuses a disabled field rather than writing a value the page will ignore. Returns the field's value after writing, plus a compact diff of page changes.",
   promptSnippet: "Fill a form field by ref (preferred) or selector (works with React/Vue controlled inputs)",
   promptGuidelines: [
     "PREFER `ref` from browser_snapshot (the '[eN]' handle) over a guessed CSS selector — refs survive re-renders and don't require you to invent a selector.",
     "Pass the desired value; no browser_click is needed first.",
+    "For a checkbox or radio pass 'true' or 'false' — it toggles `checked`, not the submit value. browser_set_checked does the same thing with a boolean.",
+    "A disabled field is refused: the error says so, rather than reporting a write the page never accepted.",
     "A 'ref is stale' error means the page changed — re-run browser_snapshot to get fresh refs.",
     "Use browser_type instead only for keystroke-sensitive widgets (autocomplete, masked/segmented inputs).",
     "Fill sets the value but does not focus or submit. To submit a tag/autocomplete input, follow with browser_dispatch_key({ ref, key: 'Enter' }) — not browser_press_key, which targets the focused element and may miss this field.",
@@ -139,28 +92,50 @@ export const fillTool = defineBrowserTool({
   parameters: FillArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FILL_FN, arg: args.value });
+    const r = await runOnElement(client, {
+      ref: args.ref,
+      selector: args.selector,
+      fnBody: FILL_BODY,
+      arg: args.value,
+      notFound: NOT_FOUND,
+    });
     if (!r.success) return r;
-    const res = isFillResult(r.data) ? r.data : undefined;
+    const res = isPageResult(r.data) ? r.data : undefined;
     const target = args.ref ?? args.selector ?? "";
-    if (res === undefined || res.status === "not_found") {
+    if (res === undefined || res.reason === "not_found") {
       return err({
         kind: "invalid_state",
         message: `No element matched: ${target}`,
         details: { ref: args.ref, selector: args.selector },
       });
     }
-    if (res.status === "not_fillable") {
+    if (!res.ok) {
+      const details = { ref: args.ref, selector: args.selector, ...(res.tag !== undefined ? { tag: res.tag } : {}) };
+      if (res.kind === "select") {
+        return err({
+          kind: "invalid_state",
+          message: `Element <select> is not fillable (not an input, textarea, or contenteditable): ${target}. For <select> use browser_select_option.`,
+          details,
+        });
+      }
       return err({
         kind: "invalid_state",
-        message: `Element <${res.tag.toLowerCase()}> is not fillable (not an input, textarea, or contenteditable): ${target}. For <select> use browser_select_option.`,
-        details: { ref: args.ref, selector: args.selector, tag: res.tag },
+        message: `Could not fill ${target}: ${res.reason ?? "unknown reason"}`,
+        details,
       });
     }
+    const shown = res.value !== undefined ? JSON.stringify(res.value) : `checked=${res.checked === true}`;
     const diff = await interactiveDiff(client);
     return ok({
-      text: `Filled ${target} = ${JSON.stringify(res.value)}${diff}`,
-      details: { ref: args.ref, selector: args.selector, value: args.value, verified: res.value, tag: res.tag, kind: res.kind },
+      text: `Filled ${target} = ${shown}${diff}`,
+      details: {
+        ref: args.ref,
+        selector: args.selector,
+        value: args.value,
+        verified: res.value ?? res.checked,
+        ...(res.tag !== undefined ? { tag: res.tag } : {}),
+        ...(res.kind !== undefined ? { kind: res.kind } : {}),
+      },
     });
   },
 });
@@ -320,6 +295,7 @@ export type PageResult = {
   readonly text?: string;
   readonly checked?: boolean;
   readonly changed?: boolean;
+  readonly tag?: string;
   readonly options?: ReadonlyArray<{ value: string; text: string }>;
 };
 
@@ -336,6 +312,7 @@ const isPageResult = (v: unknown): v is PageResult => {
   if ("text" in v && typeof v.text !== "string") return false;
   if ("checked" in v && typeof v.checked !== "boolean") return false;
   if ("changed" in v && typeof v.changed !== "boolean") return false;
+  if ("tag" in v && typeof v.tag !== "string") return false;
   if ("options" in v && !(Array.isArray(v.options) && v.options.every(isOption))) return false;
   return true;
 };
