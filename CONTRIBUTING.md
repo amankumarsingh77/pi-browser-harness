@@ -29,34 +29,25 @@ npm install
 ### 3. Run the local checks
 
 ```bash
-npm run typecheck
+npm run check
 npm pack --dry-run
 ```
 
-`npm run typecheck` validates the TypeScript source. `npm pack --dry-run` verifies that the package can be packed for publishing and shows which files will be included.
+`npm run check` runs the typecheck, the type-safety boundary scan, and the test suite. All three must pass before a PR. `npm pack --dry-run` verifies that the package can be packed for publishing and shows which files will be included.
 
 ---
 
-## Project structure
+## Architecture
 
-```text
-.
-├── src/
-│   ├── index.ts       # Extension entry point and command registration
-│   ├── tools.ts       # Browser tool schemas, handlers, and result rendering hooks
-│   ├── daemon.ts      # Connection lifecycle for the browser-harness daemon
-│   ├── protocol.ts    # Types for browser/daemon protocol messages
-│   ├── setup.ts       # /browser-setup implementation and Chrome detection
-│   ├── state.ts       # Session state persistence
-│   ├── prompt.ts      # Browser usage guidance injected into the agent prompt
-│   └── renderers.ts   # TUI renderers for screenshots and tab listings
-├── skills/
-│   └── pi-browser-harness/
-│       └── SKILL.md   # Agent skill documentation
-├── README.md          # User-facing documentation
-├── CHANGELOG.md       # Release notes
-└── package.json       # npm package metadata and pi manifest
-```
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) before making a non-trivial change. It covers:
+
+- the layer diagram and which directories a `domains/*` file may and may not import from,
+- the typed and runtime-validated CDP boundary in `src/cdp/commands.ts` and `src/cdp/events.ts`, and how to add a command,
+- the nine-rule tool authoring contract,
+- an end-to-end worked example of adding a tool and testing it against the fake client,
+- the conventions in this codebase that look like mistakes but are not.
+
+The source carries almost no comments by policy, so that document is where the non-obvious conventions live.
 
 ---
 
@@ -93,8 +84,10 @@ Use the normal browser workflow when testing: screenshot → act → screenshot 
 
 ## Code conventions
 
-- Write TypeScript and keep the project passing `npm run typecheck`.
+- Write TypeScript and keep the project passing `npm run check`.
 - Keep `strict` TypeScript mode clean. Do not introduce implicit `any` values.
+- No unchecked casts. `npm run boundaries` fails the build on `as any`, `as {`, `as unknown as`, `@ts-ignore`, and non-null assertions in `src/`. A green `tsc` is not evidence of type safety — see `docs/ARCHITECTURE.md` section 3.
+- Prefer no comments. Explain a non-obvious convention in `docs/ARCHITECTURE.md`, not inline.
 - Prefer small, focused changes over broad rewrites.
 - Keep tool descriptions, parameter descriptions, and prompt guidelines clear and user-facing.
 - Preserve the existing error-handling style: return useful, actionable messages to the agent instead of leaking low-level details when possible.
@@ -105,24 +98,16 @@ Use the normal browser workflow when testing: screenshot → act → screenshot 
 
 ## Adding a new browser tool
 
-Most browser tools are registered in `src/tools.ts` through `pi.registerTool`.
+The full worked example is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — section 4 (the contract) and section 5 (the steps). In short: one file under `src/domains/`, a typebox args schema at the top, a `defineBrowserTool` call carrying its own `concurrency`, an entry in `ALL_TOOLS` in `src/registry.ts`, and a test under `test/domains/` written against `createFakeClient`.
 
-When adding a tool:
+Beyond that:
 
-1. Add or reuse the underlying daemon method in `src/daemon.ts` and protocol types in `src/protocol.ts` when needed.
-2. Register the pi tool in `src/tools.ts` with:
-   - a stable `browser_*` name,
-   - a concise label and description,
-   - a TypeBox parameter schema,
-   - prompt snippets and guidelines that explain when to use it,
-   - clear result text and structured details where useful.
-3. Update prompt guidance in `src/prompt.ts` if the tool changes recommended workflows.
-4. Add or update a renderer in `src/renderers.ts` if the tool returns visual or rich output.
-5. Document the tool in `README.md` and note the change in `CHANGELOG.md`.
-6. Run:
+1. Update prompt guidance in `src/prompt.ts` if the tool changes recommended workflows.
+2. Document the tool in `README.md` and note the change in `CHANGELOG.md`.
+3. Run:
 
    ```bash
-   npm run typecheck
+   npm run check
    npm pack --dry-run
    ```
 
@@ -143,9 +128,11 @@ Keep tool behavior predictable. The agent should be able to verify actions with 
 4. Run local checks:
 
    ```bash
-   npm run typecheck
+   npm run check
    npm pack --dry-run
    ```
+
+   `npm run check` must be green before the PR is opened.
 
 5. Test in pi with a local path install when the change affects runtime behavior.
 6. Update documentation and CHANGELOG entries when user-visible behavior changes.
