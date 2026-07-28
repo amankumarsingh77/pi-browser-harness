@@ -1,8 +1,3 @@
-/**
- * Lightweight async mutex (~10 lines). Acquire returns a release function.
- * When the mutex is free, acquire() resolves immediately. When held,
- * callers are queued and execute serially in FIFO order.
- */
 export type Mutex = {
   acquire(): Promise<() => void>;
 };

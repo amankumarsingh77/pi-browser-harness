@@ -57,10 +57,7 @@ export type BrowserToolDefinition<S extends TSchema> = {
   readonly ensureAlive?: boolean;
 };
 
-// Type-erased entry for the registry's heterogeneous TOOLS array.
-// renderCall accepts `never` so any concrete args type satisfies it via
-// function-parameter contravariance (a handler that takes SpecificT is
-// assignable to one that takes never, because never is a subtype of everything).
+// renderCall accepts `never` so any concrete args type satisfies it via function-parameter contravariance.
 export type AnyBrowserToolDefinition = Omit<BrowserToolDefinition<TSchema>, "renderCall" | "renderResult"> & {
   readonly renderCall?: (args: never, theme: Theme) => Component;
   readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
@@ -104,9 +101,6 @@ export const registerBrowserTool = (
   client: BrowserClient,
   def: AnyBrowserToolDefinition,
 ): void => {
-  // AnyBrowserToolDefinition is type-erased; we recover the schema-typed surface
-  // by casting def to the generic form. The cast is safe because defineBrowserTool
-  // ensures the handler, parameters, and renderCall were all created with the same S.
   type S = TSchema;
   const defRenderCall = def.renderCall;
   const defRenderResult = def.renderResult;
@@ -120,8 +114,7 @@ export const registerBrowserTool = (
     ...(defRenderCall
       ? {
           renderCall: (args: Static<S>, theme: Theme, _ctx: Parameters<NonNullable<ToolDefinition<S>["renderCall"]>>[2]) =>
-            // Cast from never->Component to unknown->Component: safe because at runtime
-            // args is always the concrete Static<S> value the tool was defined with.
+            // Sanctioned cast: at runtime args is always the concrete Static<S> value the tool was defined with.
             (defRenderCall as (args: unknown, theme: Theme) => Component)(args, theme),
         }
       : {}),
@@ -137,9 +130,6 @@ export const registerBrowserTool = (
       : {}),
     async execute(_toolCallId, args, signal, onUpdate, extensionCtx) {
       if (def.ensureAlive !== false) {
-        // Check daemon socket exists before attempting browser control.
-        // If missing, the user hasn't run /browser-setup yet. Return a clear
-        // error so the agent knows to direct the user to initialize.
         if (!(await daemonSocketMayExist())) {
           return toToolResult(
             {
