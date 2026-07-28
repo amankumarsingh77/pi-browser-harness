@@ -339,7 +339,7 @@ of it: `@mariozechner/pi-coding-agent` publishes no `"require"` condition, and t
 unresolvable. It also *matches* production — pi loads the extension with jiti and aliases that
 package to `dist/index.js` by absolute path, which is what the `import` condition selects.
 
-**The test glob is `test/{profile,deep-research,domains,cdp,util}/**/*-test.ts`.** A test placed
+**The test glob is `test/{profile,domains,cdp,util}/**/*-test.ts`.** A test placed
 in any other directory — `test/schemas/`, `test/daemon/` — **silently never runs.** `test/manual/`
 is excluded on purpose: those need live Chrome.
 
