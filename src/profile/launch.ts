@@ -1,19 +1,5 @@
-/**
- * Opening a browser window for a chosen profile.
- *
- * CDP cannot do this: `Target.createTarget` rejects another profile's
- * browserContextId ("Failed to find browser context with id"), and a bare
- * createTarget lands in `defaultBrowserContextId`, which follows window focus.
- * The only way in is the browser's own command line — Chromium's
- * ProcessSingleton hands a second launch's argv to the running browser, which
- * "does what it would have done", i.e. opens a window in `--profile-directory`.
- *
- * The window is then identified by a unique `file://` sentinel page. That
- * matters: a bare `about:blank#token` argument is discarded by Chrome (it opens
- * chrome://newtab instead), so the token has to ride on a real URL. Polling for
- * the sentinel URL — rather than diffing the target list — also keeps
- * identification correct when the user opens tabs at the same moment.
- */
+// CDP cannot open a window in another profile, so this goes through the command line: ProcessSingleton hands the argv to the running browser.
+// The sentinel must ride on a real `file://` URL — Chrome discards a bare `about:blank#token` argument and opens chrome://newtab instead.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -24,23 +10,13 @@ import { pathToFileURL } from "node:url";
 import { type Result, err, ok } from "../util/result";
 
 export type ProfileWindowRequest = {
-  /** Browser binary to invoke. */
   readonly exePath: string;
-  /** Profile subdirectory, e.g. "Profile 1". */
   readonly profileDir: string;
-  /**
-   * Only set when the RUNNING browser was launched with an explicit
-   * --user-data-dir. ProcessSingleton keys on this path, so passing one that
-   * differs by case or normalisation would start a second browser instead of
-   * delegating to the running one.
-   */
   readonly explicitUserDataDir?: string;
 };
 
 export type ProfileWindowHandle = {
-  /** file:// URL that will appear as the new window's page target. */
   readonly sentinelUrl: string;
-  /** Remove the sentinel file. Safe to call more than once. */
   readonly cleanup: () => Promise<void>;
   readonly kill: () => void;
 };
@@ -49,10 +25,6 @@ const SENTINEL_HTML = (token: string): string =>
   `<!doctype html><meta charset="utf-8"><title>${token}</title>` +
   `<body style="font:14px system-ui;padding:2rem;color:#555">pi browser harness — opening this profile…</body>`;
 
-/**
- * Ask the running browser to open a window in `profileDir`, marked with a
- * unique sentinel page the caller can then find over CDP.
- */
 export const openProfileWindow = async (
   req: ProfileWindowRequest,
 ): Promise<Result<ProfileWindowHandle, string>> => {
@@ -71,26 +43,18 @@ export const openProfileWindow = async (
 
   let child: ChildProcess;
   try {
-    // No shell: arguments are passed as an array, so profile names and paths
-    // containing spaces survive intact on every platform.
     child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
   } catch (e) {
     await rm(file, { force: true }).catch(() => {});
     return err(`could not launch ${req.exePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // spawn() reports a missing or non-executable binary ASYNCHRONOUSLY, as an
-  // 'error' event — it does not throw. Ignoring that event made an ENOENT
-  // indistinguishable from a browser that simply never opened the window, so
-  // the caller's 15s sentinel poll reported a timeout for what was really a bad
-  // executable path. Node guarantees exactly one of 'spawn' or 'error', so
-  // waiting for it costs nothing and turns the failure into a named cause.
+  // spawn() reports a bad binary asynchronously as an 'error' event rather than throwing; unhandled, an ENOENT looked like the 15s sentinel timeout.
   const spawnFailure = await new Promise<string | undefined>((resolve) => {
     child.once("spawn", () => resolve(undefined));
     child.once("error", (e: Error) => resolve(e.message));
   });
-  // A later 'error' event with no listener would throw; keep one attached for
-  // the lifetime of the detached launcher.
+  // A later 'error' event with no listener would throw, so keep one attached for the detached launcher's lifetime.
   child.on("error", () => {});
   child.unref();
 

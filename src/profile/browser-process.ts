@@ -1,34 +1,5 @@
-/**
- * Identifying the browser process the harness is attached to.
- *
- * Two questions, deliberately kept apart:
- *
- *   1. Is a Chromium-family browser RUNNING? (`detectRunningBrowser().running`)
- *      Only live-process evidence may answer this — an installed-but-closed
- *      browser must read as "not running", which is why the registry lookup
- *      below is never consulted here.
- *
- *   2. Which binary do we invoke to open a window for a chosen profile?
- *      (`resolveBrowserExecutable()`) Chromium's ProcessSingleton hands a second
- *      launch's argv to the already-running browser instead of starting another
- *      one — Windows via WM_COPYDATA (process_singleton_win.cc), Linux and macOS
- *      via the socket in the user-data-dir (process_singleton_posix.cc, which is
- *      compiled on macOS too). Here an installed path is a fine fallback.
- *
- * Whether the running browser carries an explicit `--user-data-dir` matters:
- * ProcessSingleton keys on that directory, so passing a path that differs from
- * the running browser's by case or normalisation would start a SECOND browser
- * rather than delegating. The flag is forwarded only when the running process
- * already has one.
- *
- * Every probe is best-effort; when nothing can be determined, profile launching
- * degrades to a clear message rather than guessing.
- *
- * Windows note: `wmic` is deliberately unused — Microsoft removed it by default
- * in Windows 11 24H2 and entirely in 25H2. PowerShell CIM is the supported
- * replacement, with `tasklist` for liveness and the documented App Paths
- * registry key for install location.
- */
+// `running` is derived only from live-process evidence: an installed-but-closed browser must read as "not running".
+// `wmic` is deliberately unused — Microsoft removed it by default in Windows 11 24H2 and entirely in 25H2, so PowerShell CIM plus tasklist replace it.
 
 import { execFile } from "node:child_process";
 import { access, readFile, readlink } from "node:fs/promises";
@@ -39,20 +10,15 @@ import { Compile } from "typebox/compile";
 import { parseJson } from "../schemas/parse";
 import { browserNameForUserDataDir } from "./paths";
 
-// execFile, not exec: arguments are passed as an array, with no shell involved.
 const run = promisify(execFile);
 const EXEC_TIMEOUT_MS = 5_000;
 
 export type RunningBrowser = {
-  /** True when a Chromium-family browser process is live. */
   readonly running: boolean;
-  /** Absolute path to the running browser's binary, when determinable. */
   readonly exePath?: string;
-  /** Value of an explicit --user-data-dir on the running process, if any. */
   readonly explicitUserDataDir?: string;
 };
 
-/** Chromium-family process names, lowercase, as they appear per platform. */
 const LINUX_COMMS: ReadonlyArray<string> = [
   "chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge",
   "google-chrome", "brave", "brave-browser",
@@ -62,22 +28,13 @@ const MAC_BROWSER_NAMES: ReadonlyArray<string> = [
 ];
 const WIN_IMAGE_NAMES: ReadonlyArray<string> = ["chrome.exe", "msedge.exe", "brave.exe"];
 
-/**
- * Chromium tags every child process with `--type=<role>`; only the browser
- * process omits it or carries `--type=browser`. Matching the flag (rather than
- * words like "renderer" anywhere in the string) keeps a user whose install path
- * contains such a word from being filtered out.
- */
+// Match the `--type=` flag, not words like "renderer" anywhere in the string, or an install path containing one is filtered out.
 const hasChildProcessType = (commandLine: string): boolean => {
   const lower = commandLine.toLowerCase();
   return lower.includes("--type=") && !lower.includes("--type=browser");
 };
 
-/**
- * macOS names its child processes in the executable path itself ("Google Chrome
- * Helper (Renderer)", crashpad, updaters), so the process NAME must be filtered
- * too — the same exclusions the previous setup.ts check applied.
- */
+// macOS names its child processes in the executable path itself, so the process NAME must be filtered too.
 const isMacChildProcessName = (comm: string): boolean => {
   const lower = comm.toLowerCase();
   return (
@@ -89,25 +46,14 @@ const isMacChildProcessName = (comm: string): boolean => {
   );
 };
 
-/** One running browser process, as much as the platform will tell us. */
 export type BrowserCandidate = {
   readonly exePath?: string;
   readonly explicitUserDataDir?: string;
 };
 
-/**
- * Linux marks a replaced binary in `/proc/<pid>/exe`: once the file behind a
- * running process is unlinked — which is exactly what a `google-chrome` package
- * upgrade does while the browser keeps running — the symlink reads
- * "/opt/google/chrome/chrome (deleted)". Spawning that string fails with
- * ENOENT, so the marker has to come off.
- *
- * It is stripped only as a fallback, and only when the stripped path exists: a
- * binary genuinely named "… (deleted)" must still win.
- */
+// A package upgrade under a running browser makes `/proc/<pid>/exe` read "… (deleted)", which fails to spawn with ENOENT unless the marker comes off.
 const DELETED_SUFFIX = " (deleted)";
 
-/** The path without Linux's deleted-binary marker, or undefined if unmarked. */
 export const stripDeletedSuffix = (path: string): string | undefined =>
   path.endsWith(DELETED_SUFFIX) && path.length > DELETED_SUFFIX.length
     ? path.slice(0, -DELETED_SUFFIX.length)
@@ -122,12 +68,6 @@ const exists = async (path: string): Promise<boolean> => {
   }
 };
 
-/**
- * A spawnable executable path for a raw readlink/argv value: the value itself
- * when it exists, else the same value with the deleted-binary marker removed.
- * Undefined when neither form is on disk — a path we cannot spawn must never be
- * handed on as if it were usable.
- */
 export const spawnableExePath = async (raw: string): Promise<string | undefined> => {
   if (raw.length === 0) return undefined;
   if (await exists(raw)) return raw;
@@ -136,7 +76,6 @@ export const spawnableExePath = async (raw: string): Promise<string | undefined>
   return undefined;
 };
 
-/** Path comparison that tolerates separator and case differences per platform. */
 const samePath = (a: string, b: string): boolean => {
   const norm = (p: string): string => {
     const unified = p.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -145,22 +84,11 @@ const samePath = (a: string, b: string): boolean => {
   return norm(a) === norm(b);
 };
 
-/**
- * Rank a candidate against the user-data-dir the harness is actually connected
- * to. Several Chromium browsers can run at once (Chrome plus Brave, or a second
- * instance on a custom dir), and launching a profile window into the wrong one
- * would open a window the harness cannot see — while disturbing a browser the
- * user never pointed us at.
- */
 export const rankBrowserCandidate = (candidate: BrowserCandidate, preferUserDataDir?: string): number => {
   if (!preferUserDataDir) return 1;
   if (candidate.explicitUserDataDir) {
-    // An explicit dir is decisive in both directions: exact match wins, and a
-    // different one means this is definitively another browser instance.
     return samePath(candidate.explicitUserDataDir, preferUserDataDir) ? 4 : 0;
   }
-  // No flag: the process uses its default dir. Prefer the one whose executable
-  // belongs to the same browser family as the target directory.
   const family = browserNameForUserDataDir(preferUserDataDir).toLowerCase();
   const exe = (candidate.exePath ?? "").toLowerCase();
   if (!exe) return 1;
@@ -171,7 +99,6 @@ export const rankBrowserCandidate = (candidate: BrowserCandidate, preferUserData
   return 1;
 };
 
-/** Extract `--user-data-dir=<path>` from a command line, quoted or bare. */
 export const parseUserDataDirFlag = (commandLine: string): string | undefined => {
   const match = /--user-data-dir=(?:"([^"]*)"|'([^']*)'|(\S+))/.exec(commandLine);
   if (!match) return undefined;
@@ -179,7 +106,6 @@ export const parseUserDataDirFlag = (commandLine: string): string | undefined =>
   return value && value.length > 0 ? value : undefined;
 };
 
-// ── Linux ──────────────────────────────────────────────────────────────────
 
 const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   let pids: string[];
@@ -201,7 +127,6 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   for (const pid of pids) {
     let cmdline: string;
     try {
-      // /proc/<pid>/cmdline is NUL-separated argv.
       cmdline = (await readFile(`/proc/${pid}/cmdline`, "utf8")).replace(/\0/g, " ").trim();
     } catch {
       continue;
@@ -211,12 +136,8 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
     try {
       link = await readlink(`/proc/${pid}/exe`);
     } catch {
-      // /proc/<pid>/exe is unreadable for processes we don't own.
     }
-    // argv[0] backs up the symlink in both directions: unreadable for a process
-    // we don't own, and pointing at an unlinked binary after an in-place
-    // upgrade. Chrome's browser process rewrites its argv to the bare
-    // executable path, so on Linux argv[0] is the live install location.
+    // Chrome rewrites its argv to the bare executable path, so argv[0] is the live install location when /proc/<pid>/exe is unreadable or stale.
     const exePath =
       (link ? await spawnableExePath(link) : undefined) ??
       (await spawnableExePath(cmdline.split(" ")[0] ?? ""));
@@ -229,7 +150,6 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   return candidates;
 };
 
-// ── macOS ──────────────────────────────────────────────────────────────────
 
 const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   let lines: string[];
@@ -256,7 +176,6 @@ const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
       const { stdout } = await run("ps", ["-ww", "-o", "args=", "-p", pid], { timeout: EXEC_TIMEOUT_MS });
       args = stdout.trim();
     } catch {
-      // args are optional — only the --user-data-dir probe needs them
     }
     if (args && hasChildProcessType(args)) continue;
     const explicit = args ? parseUserDataDirFlag(args) : undefined;
@@ -268,7 +187,6 @@ const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   return candidates;
 };
 
-// ── Windows ────────────────────────────────────────────────────────────────
 
 const POWERSHELL_QUERY = [
   "$ErrorActionPreference='SilentlyContinue';",
@@ -315,22 +233,17 @@ const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
       }
     }
   } catch {
-    // PowerShell missing or blocked by policy — fall through to tasklist.
   }
 
-  // Liveness-only fallback: tasklist still ships on every supported Windows.
-  // It reveals no path, so the candidate is a bare "something is running".
   try {
     const { stdout } = await run("tasklist.exe", [], { timeout: EXEC_TIMEOUT_MS, windowsHide: true });
     const lower = stdout.toLowerCase();
     if (WIN_IMAGE_NAMES.some((n) => lower.includes(n))) return [{}];
   } catch {
-    // best-effort
   }
   return [];
 };
 
-/** Installed-browser locations to try when the live process reveals no path. */
 const winInstallCandidates = (): ReadonlyArray<string> => {
   const roots = [
     process.env["PROGRAMFILES"],
@@ -348,7 +261,6 @@ const winInstallCandidates = (): ReadonlyArray<string> => {
   return roots.flatMap((root) => suffixes.map((suffix) => join(root, suffix)));
 };
 
-/** Query the Shell's App Paths registration for a browser's install location. */
 const winRegistryExecutable = async (): Promise<string | undefined> => {
   for (const image of WIN_IMAGE_NAMES) {
     for (const hive of ["HKLM", "HKCU"]) {
@@ -362,22 +274,13 @@ const winRegistryExecutable = async (): Promise<string | undefined> => {
         const path = match?.[1]?.trim();
         if (path) return path;
       } catch {
-        // key absent for this browser/hive — try the next
       }
     }
   }
   return undefined;
 };
 
-// ── Public API ─────────────────────────────────────────────────────────────
 
-/**
- * Live-process facts about the running Chromium-family browser. `running` is
- * derived only from process evidence, never from an install location.
- *
- * `preferUserDataDir` should be the dir the harness is connected to; with more
- * than one browser running it decides which process is described.
- */
 export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<RunningBrowser> => {
   const candidates =
     process.platform === "darwin"
@@ -406,19 +309,10 @@ export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<
   };
 };
 
-/** True when a Chromium-family browser process is running. */
 export const isBrowserRunning = async (): Promise<boolean> => (await detectRunningBrowser()).running;
 
-/**
- * The binary to invoke when opening a window for a chosen profile: the running
- * browser's own executable when known, otherwise a documented install location.
- * Undefined when nothing usable is found.
- */
 export const resolveBrowserExecutable = async (running?: RunningBrowser): Promise<string | undefined> => {
   const detected = running ?? (await detectRunningBrowser());
-  // Re-check spawnability here too: this function is the single gate every
-  // launch passes through, and a caller may hand us a RunningBrowser collected
-  // before the binary was replaced on disk.
   const usable = detected.exePath ? await spawnableExePath(detected.exePath) : undefined;
   if (usable) return usable;
   if (process.platform !== "win32") return undefined;
@@ -430,7 +324,6 @@ export const resolveBrowserExecutable = async (running?: RunningBrowser): Promis
       await access(candidate);
       return candidate;
     } catch {
-      // not installed here
     }
   }
   return undefined;

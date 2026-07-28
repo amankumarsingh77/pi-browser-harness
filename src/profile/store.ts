@@ -1,19 +1,4 @@
-/**
- * Durable persistence for the selected browser profile.
- *
- * The pin must outlive session termination, so it cannot live in pi's session
- * entries (`pi.appendEntry`, see src/state.ts) — those die with the session.
- * It is a small JSON file in pi's agent config dir instead, shared by every
- * project on the machine.
- *
- * The pin deliberately stores only `{ userDataDir, profileDir }`. A
- * `browserContextId` is NOT persisted: Chrome mints fresh context ids on every
- * browser run, so a stored one would be a stale pointer at best and a pointer
- * into the wrong profile at worst. The context is re-resolved on each connect.
- *
- * Every read failure degrades to "no pin" rather than throwing — a corrupt
- * file must never break browser control.
- */
+// A `browserContextId` is deliberately NOT persisted: Chrome mints fresh context ids per browser run, so a stored one could point into the wrong profile.
 
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -25,13 +10,9 @@ import { type Result, err, ok } from "../util/result";
 import { pinFilePath } from "./paths";
 
 export type ProfilePin = {
-  /** User-data-dir the profile belongs to — guards against browser switches. */
   readonly userDataDir: string;
-  /** Profile subdirectory, e.g. "Profile 1". */
   readonly profileDir: string;
-  /** Label captured at selection time, for display without a disk re-read. */
   readonly label: string;
-  /** ISO timestamp of the selection. */
   readonly savedAt: string;
 };
 
@@ -63,11 +44,6 @@ const PinFileSchema = Type.Object(
 
 const pinFileValidator = Compile(PinFileSchema);
 
-/**
- * The persisted pin, or null when nothing is pinned, the file is missing, or
- * it cannot be parsed. A file written by a newer version is treated as "no
- * pin" rather than guessed at.
- */
 export const readPin = async (): Promise<ProfilePin | null> => {
   let raw: string;
   try {
@@ -88,10 +64,6 @@ export const readPin = async (): Promise<ProfilePin | null> => {
   };
 };
 
-/**
- * Replace the pin atomically: a sibling temp file plus rename, so a crash
- * mid-write can never leave a half-written pin behind.
- */
 const writePinFile = async (profile: ProfilePin | null): Promise<Result<void, string>> => {
   const target = pinFilePath();
   const tmp = `${target}.${randomUUID()}.tmp`;
@@ -107,8 +79,6 @@ const writePinFile = async (profile: ProfilePin | null): Promise<Result<void, st
   }
 };
 
-/** Persist the selected profile. */
 export const writePin = (pin: ProfilePin): Promise<Result<void, string>> => writePinFile(pin);
 
-/** Clear the selection, restoring the harness's unpinned behavior. */
 export const clearPin = (): Promise<Result<void, string>> => writePinFile(null);
