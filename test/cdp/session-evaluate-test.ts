@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { evaluateJson } from "../../src/cdp/evaluate";
+import { evaluateJson } from "../../src/cdp/session";
 import type { CdpSession } from "../../src/cdp/session";
 import { err, ok } from "../../src/util/result";
 

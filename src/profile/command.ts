@@ -4,8 +4,54 @@ import { discoverEndpoint } from "../cdp/discovery";
 import { type Result, err, ok } from "../util/result";
 import { type BrowserProfile, listProfiles } from "./list";
 import { browserNameForUserDataDir, userDataDirCandidates } from "./paths";
-import { pinFor, promptForProfile } from "./picker";
-import { clearPin, readPin, writePin } from "./store";
+import { clearPin, type ProfilePin, readPin, writePin } from "./store";
+
+// `ctx.ui.select` resolves to undefined both on Escape and in non-interactive modes, so "no answer" must mean "change nothing".
+
+const CLEAR_SELECTION_LABEL = "— Clear selection (use whichever window is focused) —";
+
+type ProfileChoice =
+  | { readonly kind: "profile"; readonly profile: BrowserProfile }
+  | { readonly kind: "clear" }
+  | { readonly kind: "cancelled" };
+
+const disambiguate = (profiles: ReadonlyArray<BrowserProfile>): ReadonlyArray<string> => {
+  const counts = new Map<string, number>();
+  for (const p of profiles) counts.set(p.label, (counts.get(p.label) ?? 0) + 1);
+  return profiles.map((p) => ((counts.get(p.label) ?? 0) > 1 ? `${p.label} [${p.dir}]` : p.label));
+};
+
+const promptForProfile = async (
+  ctx: ExtensionContext,
+  profiles: ReadonlyArray<BrowserProfile>,
+  currentPin: ProfilePin | null,
+  title = "Select browser profile",
+): Promise<ProfileChoice> => {
+  if (!ctx.hasUI || profiles.length === 0) return { kind: "cancelled" };
+
+  const labels = disambiguate(profiles);
+  const rows = labels.map((label, i) => {
+    const isPinned = currentPin?.profileDir === profiles[i]?.dir;
+    return isPinned ? `✓ ${label}` : `  ${label}`;
+  });
+  const options = [...rows, CLEAR_SELECTION_LABEL];
+
+  const answer = await ctx.ui.select(title, options);
+  if (answer === undefined) return { kind: "cancelled" };
+  if (answer === CLEAR_SELECTION_LABEL) return { kind: "clear" };
+
+  const index = options.indexOf(answer);
+  const profile = index >= 0 ? profiles[index] : undefined;
+  if (!profile) return { kind: "cancelled" };
+  return { kind: "profile", profile };
+};
+
+const pinFor = (userDataDir: string, profile: BrowserProfile): ProfilePin => ({
+  userDataDir,
+  profileDir: profile.dir,
+  label: profile.label,
+  savedAt: new Date().toISOString(),
+});
 
 const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string, string>> => {
   const connected = client.userDataDir();

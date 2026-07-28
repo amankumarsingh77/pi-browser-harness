@@ -36,6 +36,7 @@ cdp/session.ts      typed call/callOnTarget/callBrowser, event routing,
                     console + network buffers
   |
 daemon/transport.ts -> daemon/*        out-of-process daemon owning the Chrome socket
+                    (CdpTransport is declared in cdp/types.ts)
   |
 Chrome (CDP over WebSocket)
 ```
@@ -46,7 +47,7 @@ Side stacks:
 |---|---|---|
 | `profile/*` | decides *which* Chrome and which profile to drive | `index.ts`, `setup.ts`, `client.ts` — never a domain |
 | `schemas/*` | shared typebox arg fragments (`Coords`, `MouseButton`) and `parseJson` | anything |
-| `util/*` | leaves — they import nothing from this repo except each other (`result`, `guards`, `mutex`, `time`, `keycodes`, `truncate`, `paths`, `js-template`, `sharp-shim`) | anything |
+| `util/*` | leaves — they import nothing from this repo except each other (`result`, `guards`, `mutex`, `truncate`, `paths`, `js-template`, `sharp-shim`, `debug`) | anything |
 
 `src/util/tool.ts` sits in `util/` for locality but is not a leaf — it is the tool runtime layer
 in the diagram above and imports `client` and `daemon/spawn`.
@@ -54,10 +55,10 @@ in the diagram above and imports `client` and `daemon/spawn`.
 ### The import rule for domains
 
 A `domains/*` file may import from `schemas/`, `util/`, other `domains/`, the `BrowserClient`
-type, and the *typed, session-level* parts of `cdp/` (`cdp/commands` types, `cdp/evaluate`,
-`cdp/target-factory`, the buffers, the `CdpSession` type).
+type, and the *typed, session-level* parts of `cdp/` (`cdp/commands` types, `cdp/target-factory`,
+the buffers, and `cdp/session` for the `CdpSession` type and `evaluateJson`).
 
-**It must never import from `daemon/`, `cdp/transport`, or `profile/`.** A domain that reaches
+**It must never import from `daemon/` or `profile/`.** A domain that reaches
 the raw transport has escaped the validated boundary in section 2; a domain that reaches
 `profile/` has coupled a tool to Chrome-launch policy.
 

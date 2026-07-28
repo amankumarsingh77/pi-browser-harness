@@ -1,7 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { makeEventQueue } from "../../src/cdp/event-queue";
-import { rejectAllPending, sendWithTimeout, type Pending } from "../../src/cdp/pending-requests";
+import { makeEventQueue, rejectAllPending, sendWithTimeout, type Pending } from "../../src/daemon/queue";
 
 describe("event queue iteration", () => {
   test("yields pushed events in order", async () => {

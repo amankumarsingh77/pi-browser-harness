@@ -2,10 +2,9 @@ import { createConnection, type Socket } from "node:net";
 import { createInterface } from "node:readline";
 import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError, classifyRemoteError } from "../cdp/errors";
-import { DEFAULT_TIMEOUT_MS, type CdpTransport } from "../cdp/transport";
+import { DEFAULT_TIMEOUT_MS, type CdpTransport } from "../cdp/types";
 import type { CdpEvent } from "../cdp/types";
-import { makeEventQueue } from "../cdp/event-queue";
-import { type Pending, makeOnClose, rejectAllPending, sendWithTimeout } from "../cdp/pending-requests";
+import { type Pending, makeEventQueue, makeOnClose, rejectAllPending, sendWithTimeout } from "./queue";
 import {
   DAEMON_SOCKET_PATH,
   type WireRequest,

@@ -6,7 +6,7 @@ import { safeJs } from "./util/js-template";
 import { type Mutex, createMutex } from "./util/mutex";
 import { discoverEndpoint } from "./cdp/discovery";
 import { type CdpError, cdpError } from "./cdp/errors";
-import type { CdpTransport } from "./cdp/transport";
+import type { CdpTransport } from "./cdp/types";
 import { type CdpSession, createCdpSession } from "./cdp/session";
 import { type OwnershipRegistry, createOwnershipRegistry } from "./cdp/ownership";
 import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";

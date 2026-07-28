@@ -1,8 +1,8 @@
-import { map, type Result, ok } from "../util/result";
-import type { CdpError } from "./errors";
+import { map, type Result, err, ok } from "../util/result";
+import { type CdpError, cdpError } from "./errors";
 import type { DialogInfo } from "./types";
 import type { OwnershipRegistry } from "./ownership";
-import type { CdpTransport } from "./transport";
+import type { CdpTransport } from "./types";
 import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
 import { decodeEvent } from "./events";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
@@ -373,4 +373,31 @@ export const createCdpSession = (
     },
   };
   return session;
+};
+
+export const evaluateJson = async <T>(
+  session: CdpSession,
+  expression: string,
+  check: (v: unknown) => v is T,
+  opts?: { sessionId?: string | undefined; timeoutMs?: number | undefined },
+): Promise<Result<T, CdpError>> => {
+  const params = {
+    expression,
+    returnByValue: true,
+    awaitPromise: true,
+  };
+  const callOpts = opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {};
+  const r = opts?.sessionId !== undefined
+    ? await session.callOnTarget("Runtime.evaluate", params, opts.sessionId, callOpts)
+    : await session.call("Runtime.evaluate", params, callOpts);
+  if (!r.success) return r;
+  const { result, exceptionDetails } = r.data;
+  if (exceptionDetails !== undefined) {
+    return err(cdpError("remote_error", exceptionDetails.text, "Runtime.evaluate"));
+  }
+  const value = result.value;
+  if (!check(value)) {
+    return err(cdpError("invalid_response", `unexpected evaluate shape (type: ${result.type}) for: ${expression.slice(0, 60)}`, "Runtime.evaluate"));
+  }
+  return ok(value);
 };
