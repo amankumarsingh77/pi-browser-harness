@@ -3,6 +3,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBrowserClient } from "../../src/client";
+import { createDaemonTransport } from "../../src/cdp/daemon-transport";
+import { isDaemonRunning, spawnDaemon } from "../../src/daemon/spawn";
 import { closeIsolatedTab, openIsolatedTab } from "../../src/domains/isolated-tab";
 
 const PORT = Number(process.env["PROFILE_CONC_PORT"] ?? 9488);
@@ -56,6 +58,25 @@ const killTree = (pid: number | undefined): void => {
   }
 };
 
+// The daemon owns the only socket to Chrome and reads BU_CDP_WS once, at spawn — so each scenario needs its own daemon pointed at its own browser.
+const startDaemonFor = async (endpoint: string): Promise<{ readonly pid: number | undefined } | null> => {
+  process.env["BU_CDP_WS"] = endpoint;
+  const child = spawnDaemon();
+  if (!child) return null;
+  for (let i = 0; i < 50; i++) {
+    if (await isDaemonRunning()) return { pid: child.pid };
+    await sleep(200);
+  }
+  killTree(child.pid);
+  return null;
+};
+
+const stopDaemon = async (pid: number | undefined): Promise<void> => {
+  killTree(pid);
+  for (let i = 0; i < 50 && (await isDaemonRunning()); i++) await sleep(200);
+  delete process.env["BU_CDP_WS"];
+};
+
 async function scenario(exePath: string, label: string, pinned: boolean): Promise<void> {
   const udd = mkdtempSync(join(tmpdir(), "pi-profile-conc-"));
   const base = [
@@ -72,6 +93,7 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
   });
   browser.unref();
 
+  let daemonPid: number | undefined;
   try {
     let endpoint: string | undefined;
     for (let i = 0; i < 60 && !endpoint; i++) {
@@ -94,9 +116,15 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
       await sleep(6_000);
     }
 
-    process.env["BU_CDP_WS"] = endpoint;
+    const daemon = await startDaemonFor(endpoint);
+    check(daemon !== null, `${label}: daemon started against the test browser`);
+    if (!daemon) return;
+    daemonPid = daemon.pid;
+
+    const namespace = `conc-${pinned ? "pinned" : "plain"}`;
     const client = createBrowserClient({
-      namespace: `conc-${pinned ? "pinned" : "plain"}`,
+      namespace,
+      transport: createDaemonTransport(namespace),
       ...(pinned
         ? { profilePin: { userDataDir: udd, profileDir: "Profile 2", label: "pinned", savedAt: "" } }
         : {}),
@@ -138,6 +166,7 @@ async function scenario(exePath: string, label: string, pinned: boolean): Promis
     await client.closeOwnedTabs();
     await client.stop();
   } finally {
+    await stopDaemon(daemonPid);
     killTree(browser.pid);
     try {
       rmSync(udd, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -150,6 +179,11 @@ async function main(): Promise<void> {
   if (!exePath) {
     console.error("No Chrome/Chromium found — set CHROME_BIN. Skipping.");
     process.exit(process.env["CI"] ? 1 : 0);
+  }
+  // A daemon that is already up is bound to a different Chrome, and the socket path is fixed — this test would silently drive the wrong browser.
+  if (await isDaemonRunning()) {
+    console.error("A pi browser daemon is already running. Stop it before running this test.");
+    process.exit(1);
   }
   console.log(`browser: ${exePath}\n`);
 

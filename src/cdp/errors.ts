@@ -12,6 +12,10 @@ export type CdpError = {
   readonly method?: string;
 };
 
+// Chrome reports a dead session as a generic protocol error, so the message text is the only signal that a reattach — not a retry — is what will fix it.
+export const classifyRemoteError = (message: string): CdpErrorKind =>
+  message.includes("Session with given id not found") ? "session_not_found" : "remote_error";
+
 export const cdpError = (
   kind: CdpErrorKind,
   message: string,
