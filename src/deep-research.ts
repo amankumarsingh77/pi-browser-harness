@@ -1,18 +1,6 @@
-/**
- * Deep research — the /deep-research slash command. An explicit entry point
- * (alongside the auto-triggering deep-research skill) that kicks off a research
- * run for a given question.
- *
- * The command is thin: it validates a non-empty question and injects a user
- * message that starts the deep-research flow. The actual orchestration
- * (decompose → fan out web-search-researcher subagents → synthesize a cited
- * report) lives in skills/deep-research/SKILL.md, which the injected prompt
- * triggers. pi.sendUserMessage always starts a turn.
- */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-// ── Shared core: build the prompt that starts a deep-research run ───────────
 
 export function buildDeepResearchPrompt(question: string): string {
   return (
@@ -23,7 +11,6 @@ export function buildDeepResearchPrompt(question: string): string {
   );
 }
 
-// ── Public: register the /deep-research slash command ──────────────────────
 
 export function registerDeepResearchCommand(pi: ExtensionAPI): void {
   pi.registerCommand("deep-research", {

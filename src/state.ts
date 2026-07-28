@@ -1,9 +1,3 @@
-/**
- * Session persistence for pi-browser-harness.
- *
- * Persists the daemon namespace and (when applicable) the remote browser ID
- * across session reloads and branch navigation.
- */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { asArrayOf, asNumber, asString, isRecord } from "./util/guards";
@@ -25,13 +19,6 @@ export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
   pi.appendEntry<BrowserState>("browser-harness-state", state);
 };
 
-/**
- * Find the last browser-harness-state entry in the current branch
- * and return the restored state, merged with defaults.
- *
- * If `currentNamespace` is supplied (e.g. from the --browser-namespace flag),
- * it overrides whatever is in the persisted entry.
- */
 const asPersistedState = (v: unknown): Partial<BrowserState> | undefined => {
   if (!isRecord(v)) return undefined;
   const namespace = asString(v["namespace"]);

@@ -1,26 +1,3 @@
-/**
- * pi-browser-harness — browser control extension for pi.
- *
- * Gives pi agents full control of a real Chrome browser via CDP.
- * Connects to the user's running Chrome (chrome://inspect/#remote-debugging),
- * registers browser_* tools, and injects browser control guidance into the
- * system prompt.
- *
- * Install:
- *   pi install npm:pi-browser-harness
- *   # or copy to .pi/extensions/pi-browser-harness/
- *
- * Commands:
- *   /browser-setup          — guided setup wizard
- *   /browser-profile        — choose which browser profile the agent uses
- *   /browser-status         — show client status and current page
- *   /browser-reload-daemon  — restart the browser client
- *   /deep-research <q>      — research a question on the web, write a cited report
- *
- * Flags:
- *   --browser-namespace <name>   — override namespace (default: auto)
- *   --browser-debug-clicks       — enable debug click overlay
- */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserClient, createBrowserClient } from "./client";
@@ -108,15 +85,9 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
 
-    // The pinned profile lives on disk, not in the session, so it survives
-    // session termination. Re-read it every session start: another pi session
-    // may have changed it since this client was created.
+    // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
     const profilePin = await readPin();
 
-    // Create the client lazily on first session. The daemon transport
-    // is created but NOT connected — that only happens when the user
-    // runs /browser-setup or a browser tool call finds an existing socket.
-    // This means zero Chrome prompts for non-browser pi sessions.
     if (!client) {
       const transport = createDaemonTransport(state.namespace);
 
@@ -141,22 +112,13 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
               ? { harnessWindowId: snap.harnessWindowId }
               : {}),
           };
-          // Ownership changes can fire from CDP events at any time,
-          // including after session replacement when pi's ctx is stale.
-          // Persistence is best-effort — failure must not crash the event consumer.
-          // ponytail: try/catch is the simplest guard against stale-ctx.
-          try { persistState(pi, state); } catch { /* stale ctx — safe to ignore */ }
+          try { persistState(pi, state); } catch {}
         },
       });
     } else {
-      // Client carried over from a previous session — adopt whatever pin is on
-      // disk now, which another pi session may have changed.
       client.setProfilePin(profilePin);
     }
 
-    // Do NOT call client.start() here — browser control is on-demand.
-    // The first browser tool call or /browser-setup triggers the actual
-    // daemon socket connection and Chrome prompt.
 
     if (!toolsRegistered) {
       registerAllTools(pi, client);
@@ -170,24 +132,13 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     if (client) {
       try {
-        // Detach from the page target (removes the "Chrome is being controlled"
-        // banner) but keep the transport alive for the next session.
         await client.detach();
-        // Close every tab this session opened so no stale harness tabs linger
-        // in the user's browser between sessions. This also clears the persisted
-        // ownership + window binding via onOwnershipChange, so the next session
-        // starts with a fresh dedicated window rather than reattaching to leftovers.
         await client.closeOwnedTabs();
       } catch (e) {
         console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
       }
-      // ponytail: keep the transport alive across sessions.
-      // Do NOT call client.stop() or null out client — the daemon connection
-      // persists and eliminates the per-session "Allow Remote Debugging" prompt.
-      // Only Chrome restart or daemon death triggers a new prompt.
+      // Do NOT stop the client or null it out: the surviving daemon connection is what eliminates the per-session "Allow Remote Debugging" prompt.
     }
-    // Persist last — closeOwnedTabs mutates `state` through onOwnershipChange,
-    // so this captures the cleared ownership set.
     persistState(pi, state);
     await cleanupTempDirs();
   });
