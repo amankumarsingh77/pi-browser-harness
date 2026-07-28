@@ -1,4 +1,3 @@
-
 const BODY_TEXT_LIMIT = 20_000;
 
 export const buildPageCaptureExpr = (): string => `

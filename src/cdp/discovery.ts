@@ -114,8 +114,7 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
       raw = await readFile(portFile, "utf8");
       try {
         mtimeMs = (await stat(portFile)).mtimeMs;
-      } catch {
-      }
+      } catch {}
     } catch (e) {
       // EPERM/EACCES is common under sandboxes; remember it and fall back to network probing rather than failing the whole discovery.
       const code = errnoCode(e);

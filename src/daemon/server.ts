@@ -1,4 +1,3 @@
-
 import { createServer, type Server, type Socket } from "node:net";
 import { createInterface, type Interface } from "node:readline";
 import { unlinkSync } from "node:fs";
@@ -10,7 +9,6 @@ import {
   DAEMON_MAX_CLIENTS,
   DAEMON_STALE_SOCKET_CLEANUP,
 } from "./protocol";
-
 
 export type ClientSocket = {
   id: string;
@@ -36,7 +34,6 @@ export type IpcServer = {
   clientCount(): number;
 };
 
-
 export const createIpcServer = (): IpcServer => {
   let server: Server | null = null;
   const sockets = new Map<string, ClientSocket>();
@@ -51,8 +48,7 @@ export const createIpcServer = (): IpcServer => {
       if (DAEMON_STALE_SOCKET_CLEANUP) {
         try {
           unlinkSync(DAEMON_SOCKET_PATH);
-        } catch {
-        }
+        } catch {}
       }
 
       server = createServer({ pauseOnConnect: false }, (socket: Socket) => {
@@ -113,8 +109,7 @@ export const createIpcServer = (): IpcServer => {
           messageHandler?.(msg, currentClient);
         });
 
-        socket.on("error", () => {
-        });
+        socket.on("error", () => {});
 
         socket.on("close", () => {
           const found = clients.get(currentClient.id) ?? sockets.get(tempId);
@@ -176,8 +171,7 @@ export const createIpcServer = (): IpcServer => {
       if (!client) return;
       try {
         client.socket.write(JSON.stringify(msg) + "\n");
-      } catch {
-      }
+      } catch {}
     },
     broadcast(msg) {
       for (const [clientId] of clients) {

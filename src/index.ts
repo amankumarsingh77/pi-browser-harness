@@ -1,4 +1,3 @@
-
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserClient, createBrowserClient } from "./client";
 import { getBrowserSystemPrompt } from "./prompt";
@@ -118,7 +117,6 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     } else {
       client.setProfilePin(profilePin);
     }
-
 
     if (!toolsRegistered) {
       registerAllTools(pi, client);

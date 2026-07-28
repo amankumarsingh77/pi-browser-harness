@@ -1,4 +1,3 @@
-
 import WebSocket from "ws";
 import { discoverWsUrl } from "../cdp/discovery";
 import { isCdpRawMessage } from "../cdp/types";
@@ -6,7 +5,6 @@ import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
 import { CDP_CONNECT_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS } from "./protocol";
 import { asString, isRecord } from "../util/guards";
-
 
 export type SendToClient = (clientId: string, msg: WireResponse | WireEvent) => void;
 
@@ -26,7 +24,6 @@ export type CdpBridge = {
   onEvent(handler: EventHandler): void;
   onClose(handler: CloseHandler): void;
 };
-
 
 interface PendingEntry {
   clientId: string;
@@ -62,7 +59,6 @@ class IdMultiplexer {
     this.localToRemote.delete(clientId);
   }
 }
-
 
 class EventRouter {
   private owners = new Map<string, string>();
@@ -108,7 +104,6 @@ class EventRouter {
   }
 }
 
-
 export const createCdpBridge = (): CdpBridge => {
   let ws: WebSocket | null = null;
   let wsUrl: string | null = null;
@@ -124,7 +119,6 @@ export const createCdpBridge = (): CdpBridge => {
     timer: ReturnType<typeof setTimeout>;
     isAttach: boolean;
   }>();
-
 
   const onChromeMessage = (raw: string): void => {
     let parsed: unknown;
@@ -183,8 +177,6 @@ export const createCdpBridge = (): CdpBridge => {
       }
     }
   };
-
-
 
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;

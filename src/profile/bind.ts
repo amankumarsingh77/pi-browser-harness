@@ -1,4 +1,3 @@
-
 import type { BrowserClient } from "../client";
 import { attachTo } from "../cdp/attach";
 import type { ResultOf } from "../cdp/commands";

@@ -1,6 +1,4 @@
-
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-
 
 export function buildDeepResearchPrompt(question: string): string {
   return (
@@ -10,7 +8,6 @@ export function buildDeepResearchPrompt(question: string): string {
     `Question: ${question}`
   );
 }
-
 
 export function registerDeepResearchCommand(pi: ExtensionAPI): void {
   pi.registerCommand("deep-research", {

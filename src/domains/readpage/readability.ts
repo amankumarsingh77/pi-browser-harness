@@ -1,4 +1,3 @@
-
 export type ContentBlock = {
   readonly kind: "paragraph" | "heading" | "listitem" | "blockquote" | "other";
   readonly text: string;

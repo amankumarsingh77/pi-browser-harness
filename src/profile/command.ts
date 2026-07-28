@@ -1,4 +1,3 @@
-
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
 import { discoverEndpoint } from "../cdp/discovery";

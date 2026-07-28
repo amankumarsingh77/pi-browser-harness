@@ -106,7 +106,6 @@ export const parseUserDataDirFlag = (commandLine: string): string | undefined =>
   return value && value.length > 0 ? value : undefined;
 };
 
-
 const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   let pids: string[];
   try {
@@ -135,8 +134,7 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
     let link: string | undefined;
     try {
       link = await readlink(`/proc/${pid}/exe`);
-    } catch {
-    }
+    } catch {}
     // Chrome rewrites its argv to the bare executable path, so argv[0] is the live install location when /proc/<pid>/exe is unreadable or stale.
     const exePath =
       (link ? await spawnableExePath(link) : undefined) ??
@@ -149,7 +147,6 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   }
   return candidates;
 };
-
 
 const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   let lines: string[];
@@ -175,8 +172,7 @@ const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
     try {
       const { stdout } = await run("ps", ["-ww", "-o", "args=", "-p", pid], { timeout: EXEC_TIMEOUT_MS });
       args = stdout.trim();
-    } catch {
-    }
+    } catch {}
     if (args && hasChildProcessType(args)) continue;
     const explicit = args ? parseUserDataDirFlag(args) : undefined;
     candidates.push({
@@ -186,7 +182,6 @@ const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   }
   return candidates;
 };
-
 
 const POWERSHELL_QUERY = [
   "$ErrorActionPreference='SilentlyContinue';",
@@ -232,15 +227,13 @@ const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
         if (candidates.length > 0) return candidates;
       }
     }
-  } catch {
-  }
+  } catch {}
 
   try {
     const { stdout } = await run("tasklist.exe", [], { timeout: EXEC_TIMEOUT_MS, windowsHide: true });
     const lower = stdout.toLowerCase();
     if (WIN_IMAGE_NAMES.some((n) => lower.includes(n))) return [{}];
-  } catch {
-  }
+  } catch {}
   return [];
 };
 
@@ -273,13 +266,11 @@ const winRegistryExecutable = async (): Promise<string | undefined> => {
         const match = /REG_[A-Z_]+\s+(.+)$/m.exec(stdout.trim());
         const path = match?.[1]?.trim();
         if (path) return path;
-      } catch {
-      }
+      } catch {}
     }
   }
   return undefined;
 };
-
 
 export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<RunningBrowser> => {
   const candidates =
@@ -323,8 +314,7 @@ export const resolveBrowserExecutable = async (running?: RunningBrowser): Promis
     try {
       await access(candidate);
       return candidate;
-    } catch {
-    }
+    } catch {}
   }
   return undefined;
 };

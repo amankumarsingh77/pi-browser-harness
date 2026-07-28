@@ -1,4 +1,3 @@
-
 import { decodeEvent } from "./events";
 
 export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
@@ -43,8 +42,7 @@ const compileTextMatcher = (pattern: string): ((text: string) => boolean) => {
     try {
       const re = new RegExp(pattern.slice(1, -1));
       return (text) => re.test(text);
-    } catch {
-    }
+    } catch {}
   }
   return (text) => text.includes(pattern);
 };

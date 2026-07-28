@@ -1,4 +1,3 @@
-
 import { createIpcServer } from "./server";
 import { createCdpBridge, type SendToClient } from "./bridge";
 import { DAEMON_IDLE_TIMEOUT_MS } from "./protocol";
@@ -8,7 +7,6 @@ async function main() {
 
   const ipcServer = createIpcServer();
   const cdpBridge = createCdpBridge();
-
 
   ipcServer.onMessage((msg, client) => {
     if (msg.type !== "request") return;
@@ -39,7 +37,6 @@ async function main() {
     });
   });
 
-
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = (): void => {
@@ -60,7 +57,6 @@ async function main() {
   ipcServer.onConnect(() => { cancelIdleTimer(); });
   ipcServer.onDisconnect(() => { resetIdleTimer(); });
 
-
   try {
     await ipcServer.start();
     console.log("[pi-browser-daemon] IPC server listening");
@@ -72,7 +68,6 @@ async function main() {
   await cdpBridge.start();
 
   resetIdleTimer();
-
 
   const shutdown = async () => {
     console.log("[pi-browser-daemon] Shutting down...");

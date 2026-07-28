@@ -1,4 +1,3 @@
-
 import { decodeEvent } from "./events";
 
 export type NetworkRecord = {
@@ -47,8 +46,7 @@ const compileUrlMatcher = (pattern: string): ((url: string) => boolean) => {
     try {
       const re = new RegExp(pattern.slice(1, -1));
       return (url) => re.test(url);
-    } catch {
-    }
+    } catch {}
   }
   return (url) => url.includes(pattern);
 };
