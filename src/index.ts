@@ -8,7 +8,8 @@ import { type BrowserState, defaultState, persistState, restoreState } from "./s
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
 import { createDaemonTransport } from "./cdp/daemon-transport";
-import { asString } from "./util/guards";
+import { setDebugClicks } from "./util/debug";
+import { asBoolean, asString } from "./util/guards";
 
 export default function browserHarnessExtension(pi: ExtensionAPI): void {
   const flagNs = asString(pi.getFlag("browser-namespace"));
@@ -82,6 +83,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
+    setDebugClicks(asBoolean(pi.getFlag("browser-debug-clicks")) ?? false);
 
     // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
     const profilePin = await readPin();

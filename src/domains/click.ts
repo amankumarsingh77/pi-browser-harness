@@ -3,6 +3,7 @@ import { Text } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
 import { Coords, MouseButton } from "../schemas/common";
 import { type Result, ok } from "../util/result";
+import { debugClicksEnabled } from "../util/debug";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
 import { cdpCall } from "./cdp-call";
 import { captureWithCrosshair } from "./screenshot";
@@ -62,7 +63,7 @@ export const clickTool = defineBrowserTool({
     "A 'ref is stale' error means the page changed — re-run browser_snapshot to get fresh refs.",
     "After clicking, read the appended page-changes diff to confirm the action landed before moving on (no separate snapshot needed for a quick check).",
     "Coordinates are viewport CSS pixels (not device pixels). Compositor-level clicks pass through iframes, shadow DOM, and cross-origin content.",
-    "If a click doesn't register, set BH_DEBUG_CLICKS=1 to get annotated screenshots (debug only). For React/Vue components ignoring clicks, try browser_dispatch_key.",
+    "If a click doesn't register, run pi with --browser-debug-clicks (or set BH_DEBUG_CLICKS=1) to get annotated screenshots. For React/Vue components ignoring clicks, try browser_dispatch_key.",
   ],
   parameters: ClickArgs,
   concurrency: "serialized",
@@ -79,7 +80,7 @@ export const clickTool = defineBrowserTool({
     if (!clicked.success) return clicked;
 
     const diff = await interactiveDiff(client);
-    if (process.env["BH_DEBUG_CLICKS"]) {
+    if (debugClicksEnabled()) {
       const debug = await captureWithCrosshair(client, { x, y });
       if (debug.success) {
         return ok({

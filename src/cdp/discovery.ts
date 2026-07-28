@@ -101,7 +101,16 @@ type Candidate = {
   readonly userDataDir: string;
 };
 
+// Read here rather than in the client: the daemon owns the only socket to Chrome, so an override the daemon cannot see has no effect.
+export const endpointFromEnv = (env: NodeJS.ProcessEnv = process.env): CdpEndpoint | undefined => {
+  const wsUrl = env["BU_CDP_WS"]?.trim();
+  return wsUrl ? { wsUrl } : undefined;
+};
+
 export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
+  const override = endpointFromEnv();
+  if (override) return ok(override);
+
   const dirs = userDataDirCandidates();
 
   const candidates: Candidate[] = [];

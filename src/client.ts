@@ -140,12 +140,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   const start = async (): Promise<Result<void, CdpError>> => {
     if (transport.state() === "open" && session.current()) return ok(undefined);
-    const envUrl = process.env["BU_CDP_WS"];
     let wsUrl: string;
     if (remote?.cdpUrl) {
       wsUrl = remote.cdpUrl;
-    } else if (envUrl) {
-      wsUrl = envUrl;
     } else {
       const discovered = await discoverEndpoint();
       if (!discovered.success) return discovered;
