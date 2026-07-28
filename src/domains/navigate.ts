@@ -12,7 +12,7 @@ const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
 });
 
-export type NavOutcome =
+type NavOutcome =
   | { readonly kind: "in_place"; readonly targetId: string }
   | { readonly kind: "new_tab_created"; readonly targetId: string; readonly reason: "no_tabs" };
 
