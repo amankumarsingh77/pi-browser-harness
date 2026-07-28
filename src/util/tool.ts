@@ -8,8 +8,7 @@ import type {
   ToolRenderResultOptions,
 } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
-import { access } from "node:fs/promises";
-import { DAEMON_SOCKET_PATH } from "../daemon/protocol";
+import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
 import type { Result } from "./result";
 
@@ -141,9 +140,7 @@ export const registerBrowserTool = (
         // Check daemon socket exists before attempting browser control.
         // If missing, the user hasn't run /browser-setup yet. Return a clear
         // error so the agent knows to direct the user to initialize.
-        try {
-          await access(DAEMON_SOCKET_PATH);
-        } catch {
+        if (!(await daemonSocketMayExist())) {
           return toToolResult(
             {
               success: false,
