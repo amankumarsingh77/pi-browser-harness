@@ -21,8 +21,13 @@ registry.ts         flat tool catalog (ALL_TOOLS, 40 tools): imports only, zero 
 util/tool.ts        tool runtime: liveness guard -> concurrency lock -> handler
                     -> Result-to-AgentToolResult conversion
   |
-domains/*           one file per capability. Pure tool definitions.
-                    The only layer expected to grow.
+domains/*           one file per capability. Tool files hold tools; shared logic
+                    lives in helper-only modules beside them (cdp-call, ax-tree,
+                    element-call, box, ref-resolve, fill-engine, isolated-tab,
+                    screenshot-capture, target). The only layer expected to grow.
+  |
+domains/cdp-call.ts the ONLY door from a tool to the browser: cdpCall,
+                    cdpCallOnTarget, cdpCallBrowser, evalJs, cdpErrToToolErr
   |
 client.ts           BrowserClient facade: session, ownership, mutation mutex,
                     profile pin
@@ -30,7 +35,7 @@ client.ts           BrowserClient facade: session, ownership, mutation mutex,
 cdp/session.ts      typed call/callOnTarget/callBrowser, event routing,
                     console + network buffers
   |
-cdp/daemon-transport.ts -> daemon/*    out-of-process daemon owning the Chrome socket
+daemon/transport.ts -> daemon/*        out-of-process daemon owning the Chrome socket
   |
 Chrome (CDP over WebSocket)
 ```
@@ -49,15 +54,22 @@ in the diagram above and imports `client` and `daemon/spawn`.
 ### The import rule for domains
 
 A `domains/*` file may import from `schemas/`, `util/`, other `domains/`, the `BrowserClient`
-type, and the *typed, session-level* parts of `cdp/` (`cdp/commands` types, `cdp/attach`,
-`cdp/window`, `cdp/evaluate`, `cdp/target-factory`, the buffers, the `CdpSession` type).
+type, and the *typed, session-level* parts of `cdp/` (`cdp/commands` types, `cdp/evaluate`,
+`cdp/target-factory`, the buffers, the `CdpSession` type).
 
 **It must never import from `daemon/`, `cdp/transport`, or `profile/`.** A domain that reaches
 the raw transport has escaped the validated boundary in section 2; a domain that reaches
 `profile/` has coupled a tool to Chrome-launch policy.
 
-This currently holds across all of `src/domains/`. It is **not** machine-enforced —
-`scripts/check-boundaries.ts` checks casts, not imports. Verify it by eye in review.
+The import rule itself is **not** machine-enforced — verify it by eye in review. What *is*
+enforced is the narrower rule that matters most: two boundary-scanner rules, `raw-cdp-call` and
+`raw-evaluate`, are scoped to `src/domains/` and fail the build when any file but `cdp-call.ts`
+reaches `session.call*` or `evaluateJs` directly. The scope matters — `client.ts` and `cdp/` are
+the layer that legitimately owns the session, so the rules deliberately do not apply there.
+
+The rules match the two call shapes that exist today (`client.session().call…` and a `CdpSession`
+held in a local named `session`). They are a guardrail, not a proof: renaming that local would
+slip past them.
 
 ---
 
@@ -118,23 +130,38 @@ So:
   (`ev(Anything)`) and never call `decodeEvent` at all — the session only needs to know they
   fired.
 
-### `cdpCall` vs `session.call`
+### How a tool reaches the browser
 
-`cdpCall(client, method, params)` (`src/domains/cdp-call.ts`) is `session().call` plus the
-`CdpError -> ToolErr` mapping, retiring the `if (!r.success) return err({ kind: "cdp_error" })`
-couplet after every call. Domains use it by default.
+`src/domains/cdp-call.ts` is the only door, and the scanner enforces it (section 1):
 
-`params` is **required**, unlike `session.call`. A no-argument CDP method needs an explicit `{}`:
+| Helper | Use for |
+|---|---|
+| `cdpCall(client, method, params, opts?)` | the current tab |
+| `cdpCallOnTarget(client, method, params, sessionId, opts?)` | a specific attached session |
+| `cdpCallBrowser(client, method, params?, opts?)` | browser-level, no session |
+| `evalJs(client, expression, sessionId?)` | evaluating JS, returns `unknown` |
+| `cdpErrToToolErr(e, method)` | mapping a `CdpError` you got from elsewhere |
+
+Each wraps the session call and maps `CdpError -> ToolErr`, so the
+`if (!r.success) return err({ kind: "cdp_error", ... })` couplet is gone — a failed call is
+returned as-is (`if (!r.success) return r;`).
+
+`params` is **required** on `cdpCall`, unlike `session.call`. A no-argument CDP method needs an
+explicit `{}`:
 
 ```ts
 const r = await cdpCall(client, "Page.reload", {});
 ```
 
-`src/domains/snapshot.ts` **deliberately mixes both styles.** Its three `session.call` sites —
-two in `liveValue`, one in the optional-screenshot block — swallow the failure on purpose:
-`liveValue` returns `undefined` so the caller falls back to the accessibility-tree value, and a
-failed screenshot just omits the path. Neither should surface as a tool error. This is
-intentional, not drift — do not convert them to `cdpCall`.
+**A tool that wants to swallow a failure still goes through these helpers** — it just ignores the
+error instead of returning it. `liveValue` in `src/domains/ax-tree.ts` returns `undefined` so the
+caller falls back to the accessibility-tree value, and `snapshot`'s optional-screenshot block
+simply omits the path. Both call `cdpCall` and discard the error. Reaching past the helper to
+suppress an error is never the reason to do it.
+
+One honest gap: `session.attach()` and `session.windowId()` are session methods that do perform a
+CDP call, and `domains/navigate.ts` calls `attach` directly. The scanner's rules match `call*` and
+`evaluateJs`, not these two.
 
 ---
 
@@ -203,19 +230,20 @@ Nine rules. Every `domains/*` file follows them.
 
 | # | Rule | Exemplar |
 |---|---|---|
-| 1 | **One domain per file**, exporting only `<name>Tool` consts plus helpers it owns. Past roughly 250 lines, split by capability. | `src/domains/history.ts` |
+| 1 | **One domain per file, exporting only `<name>Tool` consts.** Anything a second file needs goes in a helper-only module beside it (`ax-tree.ts`, `element-call.ts`, `screenshot-capture.ts`, …) — never exported from a tool file. Past roughly 250 lines, split by capability. | `src/domains/history.ts` |
 | 2 | **Args schema at the top of the file**, named `<Name>Args`, built with typebox, with a `description` on every field. Those strings are the agent's only documentation of the tool. | `src/domains/keyboard.ts` (`TypeArgs`, `PressKeyArgs`) |
 | 3 | **`defineBrowserTool({ … })` holds all metadata, including `concurrency`.** A tool's concurrency class must not live in a different file from the tool. | every domain file |
 | 4 | **Fixed handler signature** `(args, ctx) => Promise<Result<ToolOk, ToolErr>>`. Never throw, never `console.log`, never touch `process`. Errors are values. | `src/util/tool.ts` (`ToolHandler`) |
 | 5 | **Reach Chrome only via `ctx.client`.** No domain imports the transport. | see section 1 |
 | 6 | **Element targeting goes through the shared `resolveTarget(client, args)`** in `src/domains/target.ts` — never a hand-rolled ref-vs-x/y branch. | `src/domains/click.ts` |
-| 7 | **CDP calls go through `cdpCall(client, method, params)`.** | `src/domains/history.ts` |
+| 7 | **CDP calls go through `src/domains/cdp-call.ts`** — `cdpCall`, `cdpCallOnTarget`, `cdpCallBrowser`, `evalJs`. Machine-enforced by the `raw-cdp-call` and `raw-evaluate` scanner rules. | `src/domains/history.ts` |
 | 8 | **Naming:** tool name `browser_<verb>`, `label` title-case, `promptSnippet` one line, `promptGuidelines` at most six agent-facing bullets. | pinned by `test/domains/registry-test.ts` |
 | 9 | **Every tool has a test** covering its schema and its error paths, written against a fake client so no browser is needed. | `test/domains/form-errors-test.ts` |
 
-Standing exceptions to rule 1: `src/domains/snapshot.ts` (477) and `src/domains/form.ts` (409)
-are over the 250-line guidance. Both are single coherent capabilities; splitting them is
-tracked work, not licence to add a third.
+Rule 1's two standing exceptions are largely settled: `snapshot.ts` went from 477 lines to 256
+once the tree model moved to `ax-tree.ts`, and `form.ts` from 409 to 283 once the element-call
+machinery moved to `element-call.ts`. Both sit at the guidance rather than far past it. Neither
+is licence to add a third.
 
 Rule 6 currently binds only `src/domains/click.ts`, because it is the sole tool taking
 *either* a ref *or* coordinates. `drag.ts` takes explicit coordinates only and `scroll.ts`
@@ -339,9 +367,9 @@ of it: `@mariozechner/pi-coding-agent` publishes no `"require"` condition, and t
 unresolvable. It also *matches* production — pi loads the extension with jiti and aliases that
 package to `dist/index.js` by absolute path, which is what the `import` condition selects.
 
-**The test glob is `test/{profile,domains,cdp,util}/**/*-test.ts`.** A test placed
-in any other directory — `test/schemas/`, `test/daemon/` — **silently never runs.** `test/manual/`
-is excluded on purpose: those need live Chrome.
+**The test glob is `test/{profile,domains,cdp,daemon,util}/**/*-test.ts`.** A test placed
+in any other directory — `test/schemas/`, say — **silently never runs**, so adding a directory
+means adding it here too. `test/manual/` is excluded on purpose: those need live Chrome.
 
 **`Box` (`src/domains/box.ts`) has six fields — `x, y, width, height, cx, cy` — and all six are
 consumed.** `cx`/`cy` are the click point. `width`/`height` reach the model through

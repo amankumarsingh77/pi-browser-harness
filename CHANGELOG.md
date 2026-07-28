@@ -4,7 +4,22 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **`--browser-debug-clicks` now does something.** The flag was registered and documented but never read; the only working switch was the undocumented `BH_DEBUG_CLICKS` environment variable. Both now drive the same setting.
+- **`BU_CDP_WS` now actually attaches to a remote browser.** The client read the variable and passed the URL to `transport.connect()`, but the daemon transport discards that argument and always dials the daemon socket — and the daemon's own discovery never looked at the variable, so setting it changed nothing. The override moved into `discoverEndpoint`, which both processes go through. It is read when the daemon starts, so a running daemon must be stopped first.
+- **A disconnected client's pending requests no longer fire at a dead socket.** `removeClient` cleared the daemon's id multiplexer but not its callback map, so a gone client's command timeouts stayed armed and later tried to answer it.
+
+### Changed
+
+- **One route from a tool to the browser.** Four coexisted; `src/domains/cdp-call.ts` is now the only one, and two boundary-scanner rules scoped to `src/domains/` keep it that way. A CDP timeout now surfaces as `kind: "timeout"` instead of `cdp_error` at the sites that previously flattened it.
+- **Shared logic moved out of tool files** into `ax-tree.ts`, `element-call.ts`, and `screenshot-capture.ts`, so importing one tool no longer pulls in another tool's module. `cdp/attach.ts` and `cdp/window.ts` became `session.attach()` and `session.windowId()`; `cdp/daemon-transport.ts` became `daemon/transport.ts`; the request-timeout half of `cdp/event-queue.ts` became `cdp/pending-requests.ts`.
+- **The daemon's request bookkeeping is one map instead of two**, and a request that arrives while Chrome is down awaits a single connect signal rather than spinning its own 250 ms poll loop.
+
 ### Removed
+
+- **The second CDP transport.** `createCdpTransport` was a full WebSocket-to-Chrome implementation reachable only through a fallback in `client.ts` that production never took. `cdp/transport.ts` now holds just the `CdpTransport` interface, and a client must be given a transport.
+- **Dead exports and a fake config knob:** `isInternalUrl`, `SPECIAL_KEYS`, `andThen`, `mapErr`, `BrowserState.remoteBrowserId`, `IpcServer.disconnectClient`, `IpcServer.clients()`, and `DAEMON_STALE_SOCKET_CLEANUP` (a hardcoded `true` with a branch around it).
 
 - **The `deep-research` skill, the `/deep-research` command, and the `web-search-researcher` subagent.** The harness ships browser tools; orchestrating multi-agent research on top of them belongs to the agent, not to this extension. `browser_web_search` and `browser_read_page` are unaffected — search then read still works, it is just no longer wrapped in a fan-out workflow.
 

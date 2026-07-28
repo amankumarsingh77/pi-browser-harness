@@ -6,7 +6,7 @@
 
 Your profile, your logins, your cookies. The agent reads pages as an accessibility tree with stable
 element handles, fills forms that React won't revert, captures network traffic and console errors,
-searches the web, and drops to raw CDP when the tools run out. 38 tools over a single CDP connection —
+searches the web, and drops to raw CDP when the tools run out. 40 tools over a single CDP connection —
 no MCP hop, no second browser, no extra API keys.
 
 ---
@@ -311,8 +311,9 @@ re-runnable.
 | Flag / variable | Effect |
 |---|---|
 | `--browser-namespace <name>` | Override the session namespace (default: auto-generated). |
-| `--browser-debug-clicks` | Save annotated click screenshots for debugging. |
-| `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. |
+| `--browser-debug-clicks` | Save annotated click screenshots for debugging. Equivalent to `BH_DEBUG_CLICKS=1`. |
+| `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. The daemon reads this when it starts, so stop a running daemon first. |
+| `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
 
