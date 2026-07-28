@@ -18,16 +18,6 @@ const FillArgs = Type.Object({
   value: Type.String({ description: "Value to set in the field" }),
 });
 
-/**
- * Run an element-scoped function either against a CSS selector (querySelector +
- * apply) or a ref (resolve to objectId, callFunctionOn with element as `this`).
- * The shared `fnBody` is a function body where `this` is the target element and
- * the single argument is the value — identical logic on both paths. Returns the
- * function's return value (parsed) or a ToolErr.
- *
- * On the ref path a detached node yields a stale-ref error; on the selector path
- * a missing element returns { status: "not_found" } from the function body.
- */
 const runOnElement = async (
   client: BrowserClient,
   opts: {
@@ -60,9 +50,7 @@ const runOnElement = async (
   if (opts.selector === undefined) {
     return err({ kind: "invalid_state", message: "Provide either `ref` or `selector`." });
   }
-  // Selector path: bind the same trusted function body to the matched element
-  // via .call(). fnBody is harness-authored (not user input); only the selector
-  // and value are interpolated, and those go through safeJs.
+  // fnBody is harness-authored, not user input; only the selector and value are interpolated, and those go through safeJs.
   const prelude = safeJs`
     (() => {
       const el = document.querySelector(${opts.selector});
@@ -232,7 +220,6 @@ const isSelectResult = (v: unknown): v is SelectResult => {
   return false;
 };
 
-// `this` is the <select>; `arg` is { wv, wl, wi } (null = not provided).
 const SELECT_FN = `
   const el = this;
   if (el.tagName !== "SELECT") return { status: "not_select", tag: el.tagName };

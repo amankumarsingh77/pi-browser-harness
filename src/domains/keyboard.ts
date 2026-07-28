@@ -97,9 +97,7 @@ export const pressKeyTool = defineBrowserTool({
     };
     const down = await cdpCall(client, "Input.dispatchKeyEvent", downParams);
     if (!down.success) return down;
-    // For a printable character with no command modifier (Ctrl/Meta/Alt = 1|2|4),
-    // emit a `char` event so the page receives keypress/textInput and the
-    // character is actually inserted. Shift (8) is allowed (capitals/symbols).
+    // A printable character needs a `char` event for the page to receive keypress/textInput and actually insert it; Shift (8) still counts as printable.
     const hasCommandModifier = (modifiers & (1 | 2 | 4)) !== 0;
     if (isChar && !hasCommandModifier) {
       const charEv = await cdpCall(client, "Input.dispatchKeyEvent", { type: "char", text: k, key: k });
@@ -143,12 +141,8 @@ export const dispatchKeyTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const eventType = args.eventType ?? "keydown";
     const target = args.ref ?? args.selector ?? "";
-    // Legacy handlers commonly branch on e.keyCode/e.which (e.g. === 13 for
-    // Enter) rather than e.key, so populate both. virtualKeyCode maps named
-    // keys and single chars; 0 for anything unknown.
+    // Legacy handlers branch on e.keyCode/e.which rather than e.key, so populate both.
     const code = virtualKeyCode(args.key);
-    // Ref path: dispatch on the single resolved node. Selector path: dispatch on
-    // all matches (preserves the original multi-match behavior).
     if (args.ref !== undefined) {
       const objectId = await resolveRefToObjectId(client, args.ref);
       if (!objectId.success) return objectId;

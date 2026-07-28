@@ -17,8 +17,6 @@ const UploadArgs = Type.Object({
   filePath: Type.String({ description: "Absolute path to the file to upload" }),
 });
 
-// Ref path: set files directly on the resolved backendNodeId via CDP — simplest
-// and most reliable, no selector needed.
 const tryRefUpload = async (
   client: BrowserClient,
   backendId: number,
@@ -115,7 +113,6 @@ export const uploadFileTool = defineBrowserTool({
     const readable = await verifyReadable(args.filePath);
     if (!readable.success) return readable;
 
-    // Ref path: resolve to backendNodeId and set files directly via CDP.
     if (args.ref !== undefined) {
       const backendId = resolveRefToBackendId(client, args.ref);
       if (!backendId.success) return backendId;

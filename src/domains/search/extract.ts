@@ -1,21 +1,6 @@
-/**
- * The JavaScript source evaluated inside the Google SERP page to capture raw
- * anchors + page text. This string crosses the CDP boundary via
- * Runtime.evaluate (returnByValue) and returns a JSON string that
- * `parseGoogleSerp` / `classifySerp` consume on the harness side.
- *
- * ADR-0001: anchors are selected structurally (a link carrying an <h3>), not by
- * Google CSS class names, so cosmetic markup churn does not break extraction.
- */
 
-/** Max bytes of page text captured for CAPTCHA / no-results classification. */
 const PAGE_TEXT_LIMIT = 4000;
 
-/**
- * Build the extraction expression. Takes no interpolated values, so it is a
- * fixed source string (no injection surface). Returns
- * `JSON.stringify({ anchors, pageText })`.
- */
 export const buildSerpExtractionExpr = (): string => `
   (() => {
     const main = document.querySelector('#search, #rso, #main') || document.body;

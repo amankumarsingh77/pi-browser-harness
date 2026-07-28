@@ -36,9 +36,7 @@ const dispatchClick = async (
   button: "left" | "right" | "middle",
   count: number,
 ): Promise<Result<void, ToolErr>> => {
-  // Move the pointer to the target first. Some focus/hover handlers (and React
-  // synthetic events) only fire when a mousemove precedes the press, so without
-  // it a click can land without focusing the element.
+  // Some focus/hover handlers and React synthetic events only fire when a mousemove precedes the press, so without it a click lands without focusing.
   const moved = await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
   if (!moved.success) return moved;
   const pressed = await cdpCall(client, "Input.dispatchMouseEvent", {

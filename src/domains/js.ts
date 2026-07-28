@@ -18,17 +18,10 @@ const formatBytes = (n: number): string => {
   return `${n} B`;
 };
 
-// AsyncFunction constructor — the documented Node.js mechanism for compiling
-// arbitrary user-supplied source. Equivalent to `new Function` but produces an
-// async function we can `await`. The full RCE risk is contained at the source
-// boundary: see the path allowlist + timeout below. A plain `unknown` cast
-// would lose the constructor signature; we keep this single typed cast.
+// The AsyncFunction constructor is the documented way to compile user source; a plain `unknown` cast would lose the constructor signature, so this typed cast stays.
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as
   new (...args: ReadonlyArray<string>) => (...args: ReadonlyArray<unknown>) => Promise<unknown>;
 
-// ESNext module — bare `require` is not in scope. createRequire provides the
-// CJS resolver anchored to this file's URL so scripts can require() builtins
-// and installed CJS packages.
 const requireFromHere = createRequire(import.meta.url);
 
 const ExecuteJsArgs = Type.Object({
@@ -58,8 +51,6 @@ export const executeJsTool = defineBrowserTool({
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
     const valueStr = r.data === undefined ? "undefined" : JSON.stringify(r.data);
     const truncated = await applyTruncation(valueStr, "js");
-    // If the value is JSON, pretty-print for the expanded TUI view. Falls back
-    // to the raw string if parse fails (e.g. value is "undefined" sentinel).
     let pretty: string | undefined;
     try {
       const parsed: unknown = JSON.parse(valueStr);
@@ -71,8 +62,6 @@ export const executeJsTool = defineBrowserTool({
       text: truncated.text,
       details: {
         valueLength: valueStr.length,
-        // Full value for the expanded renderer. Capped at 200 KB so a giant
-        // dump doesn't bloat the conversation transcript on disk.
         full: valueStr.length > 200_000 ? valueStr.slice(0, 200_000) : valueStr,
         ...(pretty !== undefined ? { pretty: pretty.length > 200_000 ? pretty.slice(0, 200_000) : pretty } : {}),
         ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
@@ -210,7 +199,7 @@ export const runScriptTool = defineBrowserTool({
     try {
       const scriptPromise = executeFn(
         args.params ?? {},
-        client,                     // bound as `daemon` — name preserved for back-compat
+        client,
         requireFromHere,
         ac.signal,
         (u: unknown) => {
@@ -221,7 +210,7 @@ export const runScriptTool = defineBrowserTool({
           if (!isRecord(first)) return;
           const txt = first["text"];
           if (typeof txt !== "string") return;
-          try { onUpdate({ text: txt }); } catch { /* swallow */ }
+          try { onUpdate({ text: txt }); } catch {}
         },
         extensionCtx ?? { cwd: process.cwd() },
         console, fetch, JSON, Buffer, setTimeout, clearTimeout,
