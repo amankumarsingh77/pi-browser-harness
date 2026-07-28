@@ -97,6 +97,40 @@ describe("boundary check", () => {
     assert.equal(checkSource([{ path: "a.ts", text }], noExemptions).length, 0);
   });
 
+  test("flags a tool reaching the session directly", () => {
+    const forms = [
+      "const r = await client.session().call(\"DOM.resolveNode\", { backendNodeId: id });",
+      "const r = await client.session().callBrowser(\"Target.getTargets\");",
+      "const r = await client.session().callOnTarget(\"Page.enable\", {}, sid);",
+      "const r = await session.call(\"Accessibility.getFullAXTree\", {});",
+      "const r = await session.callBrowser(\"Browser.getWindowForTarget\", { targetId });",
+    ];
+    for (const text of forms) {
+      const v = checkSource([{ path: "src/domains/thing.ts", text }], noExemptions);
+      assert.equal(v.some((x) => x.rule === "raw-cdp-call"), true, text);
+    }
+  });
+
+  test("flags a tool calling evaluateJs directly", () => {
+    const v = checkSource(
+      [{ path: "src/domains/thing.ts", text: "const r = await client.evaluateJs(expr);" }],
+      noExemptions,
+    );
+    assert.equal(v.some((x) => x.rule === "raw-evaluate"), true);
+  });
+
+  test("does not flag the session layer, which owns the session", () => {
+    const text = 'const r = await session.callBrowser("Target.getTargets");\nawait client.evaluateJs(expr);';
+    for (const path of ["src/client.ts", "src/cdp/session.ts", "src/cdp/target-factory.ts"]) {
+      assert.equal(checkSource([{ path, text }], noExemptions).length, 0, path);
+    }
+  });
+
+  test("does not mistake Function.prototype.call in an evaluated snippet for a CDP call", () => {
+    const text = "const expr = `${prelude} ${opts.fnBody} }).call(el, __arg); })()`;";
+    assert.equal(checkSource([{ path: "src/domains/form.ts", text }], noExemptions).length, 0);
+  });
+
   test("reports the 1-indexed line number and the trimmed text", () => {
     const v = checkSource([{ path: "a.ts", text: "const a = 1;\n  const b = c as any;" }], noExemptions);
     assert.equal(v[0]?.line, 2);

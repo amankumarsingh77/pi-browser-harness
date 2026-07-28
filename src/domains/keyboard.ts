@@ -3,7 +3,7 @@ import { safeJs } from "../util/js-template";
 import { virtualKeyCode } from "../util/keycodes";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, evalJs } from "./cdp-call";
 import { resolveRefToObjectId } from "./ref-resolve";
 
 const TypeArgs = Type.Object({
@@ -29,7 +29,7 @@ export const typeTool = defineBrowserTool({
   parameters: TypeArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const focused = await client.evaluateJs(safeJs`
+    const focused = await evalJs(client, safeJs`
       (() => {
         const el = document.activeElement;
         const ok = !!el && el !== document.body &&
@@ -171,8 +171,8 @@ export const dispatchKeyTool = defineBrowserTool({
         return els.length;
       })()
     `;
-    const r = await client.evaluateJs(expr);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = await evalJs(client, expr);
+    if (!r.success) return r;
     const matched = Number(r.data ?? 0);
     if (matched === 0) {
       return err({

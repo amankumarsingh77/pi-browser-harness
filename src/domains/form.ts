@@ -3,7 +3,7 @@ import type { BrowserClient } from "../client";
 import { safeJs } from "../util/js-template";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, evalJs } from "./cdp-call";
 import { fillBody } from "./fill-engine";
 import { interactiveDiff, resolveRefToObjectId } from "./ref-resolve";
 
@@ -58,8 +58,8 @@ const runOnElement = async (
       const __arg = ${opts.arg};
       return (function (arg) {`;
   const expr = `${prelude} ${opts.fnBody} }).call(el, __arg); })()`;
-  const r = await client.evaluateJs(expr);
-  if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+  const r = await evalJs(client, expr);
+  if (!r.success) return r;
   return ok(r.data);
 };
 
@@ -321,14 +321,14 @@ export const resolveAndCall = async (
   if (!objectId.success) return objectId;
   const handle = objectId.data;
   try {
-    const called = await client.session().call("Runtime.callFunctionOn", {
+    const called = await cdpCall(client, "Runtime.callFunctionOn", {
       objectId: handle,
       functionDeclaration,
       arguments: args.map((v) => ({ value: v })),
       returnByValue: true,
       awaitPromise: true,
     });
-    if (!called.success) return err({ kind: "cdp_error", message: called.error.message, details: { ref } });
+    if (!called.success) return err({ ...called.error, details: { ref } });
     if (called.data.exceptionDetails !== undefined) {
       return err({ kind: "cdp_error", message: `page function threw: ${JSON.stringify(called.data.exceptionDetails)}`, details: { ref } });
     }
@@ -338,7 +338,7 @@ export const resolveAndCall = async (
     }
     return ok(value);
   } finally {
-    await client.session().call("Runtime.releaseObject", { objectId: handle });
+    await cdpCall(client, "Runtime.releaseObject", { objectId: handle });
   }
 };
 

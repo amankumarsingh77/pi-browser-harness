@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { evalJs } from "./cdp-call";
 import { sleep } from "../util/time";
 import { safeJs } from "../util/js-template";
 
@@ -79,7 +80,7 @@ export const waitForLoadTool = defineBrowserTool({
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
-      const r = await client.evaluateJs(safeJs`document.readyState`);
+      const r = await evalJs(client, safeJs`document.readyState`);
       if (r.success && r.data === "complete") {
         const ms = Date.now() - start;
         return ok({ text: `Page loaded in ${Math.round(ms / 100) / 10}s`, details: { ms } });
@@ -123,7 +124,7 @@ export const waitForTool = defineBrowserTool({
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
-      const r = await client.evaluateJs(expr);
+      const r = await evalJs(client, expr);
       if (r.success && r.data === true) {
         const ms = Date.now() - start;
         const what = args.selector !== undefined ? `${args.selector}${gone ? " gone" : ""}` : `text "${args.text}"`;

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { Type } from "typebox";
 import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
-import type { CdpSession } from "../cdp/session";
+import type { BrowserClient } from "../client";
 import type { AxNodeResult } from "../cdp/commands";
 import { type Box, boxOf } from "./box";
 import { cdpCall } from "./cdp-call";
@@ -229,8 +229,8 @@ export const collectInteractiveTargets = (
   return out;
 };
 
-const liveValue = async (session: CdpSession, backendId: number): Promise<string | undefined> => {
-  const resolved = await session.call("DOM.resolveNode", { backendNodeId: backendId });
+const liveValue = async (client: BrowserClient, backendId: number): Promise<string | undefined> => {
+  const resolved = await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) return undefined;
   const objectId = resolved.data.object.objectId;
   if (!objectId) return undefined;
@@ -239,7 +239,7 @@ const liveValue = async (session: CdpSession, backendId: number): Promise<string
     if (typeof this.value === "string") return this.value;
     return null;
   }`;
-  const r = await session.call("Runtime.callFunctionOn", {
+  const r = await cdpCall(client, "Runtime.callFunctionOn", {
     objectId,
     functionDeclaration: fn,
     returnByValue: true,
@@ -312,7 +312,7 @@ export const snapshotTool = defineBrowserTool({
           if (box.data.x < 0 || box.data.y < 0) return;
           node.box = box.data;
           if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
-          const live = await liveValue(session, backendId);
+          const live = await liveValue(client, backendId);
           if (live !== undefined) node.value = live;
         }),
       );
@@ -332,7 +332,7 @@ export const snapshotTool = defineBrowserTool({
 
     let shotPath: string | undefined;
     if (args.includeScreenshot) {
-      const shot = await session.call("Page.captureScreenshot", { format: "jpeg", quality: 80 });
+      const shot = await cdpCall(client, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
       if (shot.success) {
         shotPath = screenshotPath(client.namespace, "jpeg");
         writeFileSync(shotPath, Buffer.from(shot.data.data, "base64"));
