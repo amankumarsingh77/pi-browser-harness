@@ -4,7 +4,8 @@ benchmark/
 *.tsbuildinfo
 .DS_Store
 *.log
-docs/
+docs/*
+!docs/ARCHITECTURE.md
 scripts/*
 !scripts/check-boundaries.ts
 !scripts/boundary-allowlist.ts
