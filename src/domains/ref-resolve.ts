@@ -2,6 +2,7 @@ import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
 import { type Box, boxOf } from "./box";
+import { cdpCall } from "./cdp-call";
 import { buildTree, collectInteractiveTargets, type SlimNode } from "./snapshot";
 
 const staleErr = (ref: string): ToolErr => ({
@@ -16,7 +17,7 @@ export const resolveRefToObjectId = async (
 ): Promise<Result<string, ToolErr>> => {
   const backendId = client.session().resolveRef(ref);
   if (backendId === undefined) return err(staleErr(ref));
-  const resolved = await client.session().call("DOM.resolveNode", { backendNodeId: backendId });
+  const resolved = await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) {
     return err(staleErr(ref));
   }
@@ -49,7 +50,7 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
   const session = client.session();
   const prev = session.refSignatures();
 
-  const axRes = await session.call("Accessibility.getFullAXTree", {});
+  const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
   if (!axRes.success) return "";
   const rawNodes = axRes.data.nodes;
   const slim = buildTree(rawNodes, { interestingOnly: true, maxNodes: 1000 });

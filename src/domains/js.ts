@@ -7,6 +7,7 @@ import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { evalJs } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
 import { asNumber, asRecord, asString, isRecord } from "../util/guards";
 
@@ -47,8 +48,8 @@ export const executeJsTool = defineBrowserTool({
   parameters: ExecuteJsArgs,
   concurrency: "parallel",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.evaluateJs(args.expression, args.targetId);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = await evalJs(client, args.expression, args.targetId);
+    if (!r.success) return r;
     const valueStr = r.data === undefined ? "undefined" : JSON.stringify(r.data);
     const truncated = await applyTruncation(valueStr, "js");
     let pretty: string | undefined;

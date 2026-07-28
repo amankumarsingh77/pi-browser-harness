@@ -6,7 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { safeJs } from "../util/js-template";
 import { pdfPath } from "../util/paths";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, cdpCallBrowser, evalJs } from "./cdp-call";
 import { resolveRefToBackendId } from "./ref-resolve";
 
 const UploadArgs = Type.Object({
@@ -52,8 +52,8 @@ const tryCdpUpload = async (
   if (!nodeId) return err({ kind: "invalid_state", message: `Selector matched 0 file inputs: ${selector}` });
   const set = await cdpCall(client, "DOM.setFileInputFiles", { files: [filePath], nodeId });
   if (!set.success) return set;
-  const verify = await client.evaluateJs(safeJs`document.querySelector(${selector})?.files?.length || 0`);
-  if (!verify.success) return err({ kind: "cdp_error", message: verify.error.message });
+  const verify = await evalJs(client, safeJs`document.querySelector(${selector})?.files?.length || 0`);
+  if (!verify.success) return verify;
   if (Number(verify.data ?? 0) === 0) {
     return err({ kind: "invalid_state", message: "CDP upload reported success but file count is 0" });
   }
@@ -92,8 +92,8 @@ const jsFallbackUpload = async (
       return input.files.length;
     })()
   `;
-  const r = await client.evaluateJs(expr);
-  if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+  const r = await evalJs(client, expr);
+  if (!r.success) return r;
   if (!Number(r.data ?? 0)) return err({ kind: "invalid_state", message: "JS fallback set 0 files" });
   return ok(undefined);
 };
@@ -181,12 +181,12 @@ export const downloadTool = defineBrowserTool({
         message: `Download path unusable: ${e instanceof Error ? e.message : String(e)}`,
       });
     }
-    const r = await client.session().callBrowser("Browser.setDownloadBehavior", {
+    const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: args.downloadPath,
       eventsEnabled: true,
     });
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    if (!r.success) return r;
     return ok({
       text: `Downloads will save to: ${args.downloadPath}`,
       details: { downloadPath: args.downloadPath },

@@ -42,6 +42,19 @@ export const ALLOWLIST: ReadonlyArray<Exemption> = [
       "renderCall is stored under a per-tool Static<S> but invoked through the erased TSchema form; the generic-correlation limit makes this unavoidable and the value is the tool's own handler, created with the same S",
   },
   {
+    path: "src/domains/cdp-call.ts",
+    rule: "raw-cdp-call",
+    count: 3,
+    reason:
+      "the one door from a tool to CDP: cdpCall, cdpCallOnTarget and cdpCallBrowser each reach the session once and map CdpError to ToolErr, so no other file under src/domains needs to",
+  },
+  {
+    path: "src/domains/cdp-call.ts",
+    rule: "raw-evaluate",
+    count: 1,
+    reason: "evalJs is the single wrapper over client.evaluateJs, for the same reason",
+  },
+  {
     path: "src/domains/js.ts",
     rule: "trailing-cast",
     count: 1,

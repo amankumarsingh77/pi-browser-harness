@@ -11,7 +11,8 @@ export type Violation = {
   readonly text: string;
 };
 
-const RULES: ReadonlyArray<{ readonly rule: string; readonly re: RegExp }> = [
+// `scope` restricts a rule to one layer: the tool layer must go through domains/cdp-call.ts, while cdp/ and client.ts are the layer that owns the session.
+const RULES: ReadonlyArray<{ readonly rule: string; readonly re: RegExp; readonly scope?: RegExp }> = [
   { rule: "as-any", re: /\bas\s+any\b/ },
   { rule: "ts-ignore", re: /@ts-(ignore|expect-error|nocheck)/ },
   { rule: "non-null-assertion", re: /[A-Za-z_$)\]]!\s*(?:[.[(;,)\]}]|$)/ },
@@ -20,6 +21,8 @@ const RULES: ReadonlyArray<{ readonly rule: string; readonly re: RegExp }> = [
   { rule: "named-cast", re: /\bas\s+(?:new\s+)?[A-Z][A-Za-z0-9_]*/ },
   { rule: "function-cast", re: /\bas\s+\(/ },
   { rule: "trailing-cast", re: /\bas\s*$/ },
+  { rule: "raw-cdp-call", re: /(?:session\(\)|\bsession)\.call(?:OnTarget|Browser)?\(/, scope: /^src\/domains\// },
+  { rule: "raw-evaluate", re: /\.evaluateJs\(/, scope: /^src\/domains\// },
 ];
 
 export type SourceFile = { readonly path: string; readonly text: string };
@@ -37,8 +40,10 @@ const budgets = (exemptions: ReadonlyArray<Exemption>): Map<string, number> => {
 const rawHits = (files: ReadonlyArray<SourceFile>): ReadonlyArray<Violation> => {
   const out: Violation[] = [];
   for (const file of files) {
+    const path = normalise(file.path);
     for (const [i, line] of file.text.split("\n").entries()) {
-      for (const { rule, re } of RULES) {
+      for (const { rule, re, scope } of RULES) {
+        if (scope && !scope.test(path)) continue;
         if (re.test(line)) out.push({ path: file.path, line: i + 1, rule, text: line.trim() });
       }
     }

@@ -3,6 +3,7 @@ import { Markdown, Text } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCall } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
 import { asArrayOf, asBoolean, asNumber, asRecord, asString } from "../util/guards";
 import type { NetworkRecord } from "../cdp/network-buffer";
@@ -250,7 +251,7 @@ export const networkRequestsTool = defineBrowserTool({
       const timer = setTimeout(() => ac.abort(), BODY_BUDGET_MS);
       const fills = drained.records.map(async (r) => {
         if (ac.signal.aborted) return;
-        const bodyRes = await session.call("Network.getResponseBody", { requestId: r.requestId });
+        const bodyRes = await cdpCall(client, "Network.getResponseBody", { requestId: r.requestId });
         if (!bodyRes.success) {
           r.body = null;
           return;

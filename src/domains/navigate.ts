@@ -6,7 +6,7 @@ import { applyTruncation } from "../util/truncate";
 import { safeJs } from "../util/js-template";
 import { attachTo } from "../cdp/attach";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, cdpCallBrowser, cdpCallOnTarget, evalJs } from "./cdp-call";
 
 const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
@@ -110,11 +110,12 @@ export const openUrlsTool = defineBrowserTool({
           const attached = await attachTo(client.session(), tab.targetId);
           if (!attached.success) return { ...tab, ok: false, error: attached.error.message };
           const sid = attached.data;
-          const enabled = await client.session().callOnTarget("Page.enable", {}, sid);
+          const enabled = await cdpCallOnTarget(client, "Page.enable", {}, sid);
           if (!enabled.success) return { ...tab, ok: false, error: enabled.error.message };
-          const nav = await client.session().callOnTarget("Page.navigate", { url: tab.url }, sid);
+          const nav = await cdpCallOnTarget(client, "Page.navigate", { url: tab.url }, sid);
           if (!nav.success) return { ...tab, ok: false, error: nav.error.message };
-          client.evaluateJs(
+          evalJs(
+            client,
             safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`,
             sid
           ).catch(() => {});
@@ -135,7 +136,7 @@ export const openUrlsTool = defineBrowserTool({
     if (okTabs.length > 0) {
       const last = okTabs[okTabs.length - 1];
       if (last) {
-        await client.session().callBrowser("Target.activateTarget", { targetId: last.targetId });
+        await cdpCallBrowser(client, "Target.activateTarget", { targetId: last.targetId });
       }
     }
     const lines: string[] = [];

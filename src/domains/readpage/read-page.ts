@@ -4,6 +4,7 @@ import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
+import { cdpCallBrowser, evalJs } from "../cdp-call";
 import {
   closeIsolatedTab,
   evalInIsolatedTab,
@@ -107,11 +108,11 @@ const readOwnedTab = async (
   if (!client.owns(targetId)) {
     return err({ kind: "invalid_state", message: `Tab ${targetId} is not owned by this session.` });
   }
-  const attached = await client.session().callBrowser("Target.attachToTarget", { targetId, flatten: true });
-  if (!attached.success) return err({ kind: "cdp_error", message: attached.error.message });
+  const attached = await cdpCallBrowser(client, "Target.attachToTarget", { targetId, flatten: true });
+  if (!attached.success) return attached;
   const sessionId = attached.data.sessionId;
-  const captured = await client.evaluateJs(buildPageCaptureExpr(), sessionId);
-  if (!captured.success) return err({ kind: "cdp_error", message: captured.error.message });
+  const captured = await evalJs(client, buildPageCaptureExpr(), sessionId);
+  if (!captured.success) return captured;
   return captureToResult(captured.data);
 };
 

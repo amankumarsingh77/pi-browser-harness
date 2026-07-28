@@ -9,7 +9,7 @@ import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
 import { asRecord, asString } from "../util/guards";
 import { safeJs } from "../util/js-template";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, evalJs } from "./cdp-call";
 
 const ScreenshotArgs = Type.Object({
   fullPage: Type.Optional(Type.Boolean({ default: false, description: "Capture beyond viewport" })),
@@ -133,7 +133,7 @@ export const captureWithCrosshair = async (
   const load = await loadSharp();
   if (load.kind !== "ok") return ok({ path: cap.data.path });
   try {
-    const dprR = await client.evaluateJs(safeJs`window.devicePixelRatio`);
+    const dprR = await evalJs(client, safeJs`window.devicePixelRatio`);
     const dpr = dprR.success && typeof dprR.data === "number" ? dprR.data : 1;
     const meta = await load.sharp(cap.data.path).metadata();
     const w = meta.width ?? 0;

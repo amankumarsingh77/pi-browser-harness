@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { cdpCallBrowser } from "./cdp-call";
 
 const ListTabsArgs = Type.Object({
   includeInternal: Type.Optional(Type.Boolean({ default: true, description: "Include chrome:// pages" })),
@@ -55,8 +56,8 @@ export const currentTabTool = defineBrowserTool({
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
     const cur = client.current();
     if (!cur) return err({ kind: "invalid_state", message: "No tab attached." });
-    const ti = await client.session().callBrowser("Target.getTargetInfo", { targetId: cur.targetId });
-    if (!ti.success) return err({ kind: "cdp_error", message: ti.error.message });
+    const ti = await cdpCallBrowser(client, "Target.getTargetInfo", { targetId: cur.targetId });
+    if (!ti.success) return ti;
     const info = ti.data.targetInfo;
     const owned = client.owns(info.targetId);
     return ok({
