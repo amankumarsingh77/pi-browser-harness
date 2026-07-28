@@ -5,5 +5,7 @@ benchmark/
 .DS_Store
 *.log
 docs/
-scripts/
+scripts/*
+!scripts/check-boundaries.ts
+!scripts/boundary-allowlist.ts
 data/
