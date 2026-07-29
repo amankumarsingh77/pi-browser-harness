@@ -19,6 +19,7 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
   const frames: string[] = [];
   const inputs: Array<{ x: number; y: number; kind: InputKind }> = [];
   let sourceLostReason: string | null = null;
+  let lastSummary: RecordingSummary | null = null;
   return {
     outputPath: "/tmp/recording.mp4",
     parked: false,
@@ -34,12 +35,12 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
     noteSourceLost(reason) {
       if (sourceLostReason === null) sourceLostReason = reason;
     },
-    async finalize(_reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
-      return ok({
+    async finalize(reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
+      const summary: RecordingSummary = {
         path: "/tmp/recording.mp4",
         durationSec: 1,
         bytes: 100,
-        truncated: false,
+        truncated: reason === "capped",
         frozenSec: 0,
         framesReceived: frames.length,
         sourceWidth: null,
@@ -48,7 +49,12 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
         cursorPoints: 0,
         cursorClicks: 0,
         cursorFailed: null,
-      });
+      };
+      lastSummary = summary;
+      return ok(summary);
+    },
+    lastSummary() {
+      return lastSummary;
     },
   };
 };
@@ -159,6 +165,9 @@ describe("CdpSession recording slot", () => {
           cursorClicks: 0,
           cursorFailed: null,
         });
+      },
+      lastSummary() {
+        return null;
       },
     };
     const started = await fake.session.startRecording(sink);

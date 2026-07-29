@@ -2,13 +2,13 @@ import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpErrToToolErr } from "./cdp-call";
-import { createRecordingSink } from "./record-session";
+import { createRecordingSink, DEFAULT_MAX_SECONDS } from "./record-session";
 
 const RecordStartArgs = Type.Object({
   maxSeconds: Type.Optional(
     Type.Integer({
       minimum: 1,
-      description: "Duration cap in seconds before the recording finalizes itself and reports truncated. Defaults to 300.",
+      description: `Duration cap in seconds before the recording finalizes itself and reports truncated. Defaults to ${String(DEFAULT_MAX_SECONDS)}.`,
     }),
   ),
 });
@@ -27,8 +27,17 @@ export const recordStartTool = defineBrowserTool({
   parameters: RecordStartArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+    if (args.maxSeconds !== undefined && (!Number.isFinite(args.maxSeconds) || args.maxSeconds <= 0)) {
+      return err({
+        kind: "invalid_state",
+        message: `maxSeconds must be a positive number, got ${String(args.maxSeconds)}`,
+      });
+    }
+
+    // A sink that already finalized itself (it hit its cap) but is still sitting in the slot is
+    // not "in progress" — only refuse when the previous recording is genuinely still running.
     const active = client.session().activeRecording();
-    if (active) {
+    if (active && active.lastSummary() === null) {
       return err({
         kind: "invalid_state",
         message: `a recording is already active: ${active.outputPath}`,
@@ -36,9 +45,8 @@ export const recordStartTool = defineBrowserTool({
       });
     }
 
-    const sinkResult = await createRecordingSink(client, {
-      ...(args.maxSeconds !== undefined ? { maxSeconds: args.maxSeconds } : {}),
-    });
+    const maxSeconds = args.maxSeconds ?? DEFAULT_MAX_SECONDS;
+    const sinkResult = await createRecordingSink(client, { maxSeconds });
     if (!sinkResult.success) return sinkResult;
 
     const started = await client.session().startRecording(sinkResult.data);
@@ -49,7 +57,7 @@ export const recordStartTool = defineBrowserTool({
       : " The window could not be moved off-screen — leave it visible for the duration of the recording.";
 
     return ok({
-      text: `Recording to ${sinkResult.data.outputPath}${windowNote}`,
+      text: `Recording to ${sinkResult.data.outputPath}${windowNote} Capped at ${String(maxSeconds)}s.`,
       details: { path: sinkResult.data.outputPath, parked: sinkResult.data.parked },
     });
   },
@@ -72,7 +80,11 @@ export const recordStopTool = defineBrowserTool({
       return err({ kind: "invalid_state", message: "no recording is active" });
     }
 
-    const summary = await sink.finalize("stopped");
+    // The sink may have already finalized itself by hitting its duration cap before this call —
+    // finalize() would just error on a second call, and stopRecording() has already cleared the
+    // slot either way, so recover the summary it retained instead of losing the path.
+    const capped = sink.lastSummary();
+    const summary = capped !== null ? ok(capped) : await sink.finalize("stopped");
     if (!summary.success) {
       return err({
         kind: "io_error",
@@ -80,6 +92,7 @@ export const recordStopTool = defineBrowserTool({
       });
     }
 
+    const cappedNote = summary.data.truncated ? " — it hit its duration cap and was cut short" : "";
     const frozenNote =
       summary.data.frozenSec > 1
         ? ` — ${summary.data.frozenSec.toFixed(1)}s of that had no frames arriving (window frozen or hidden)`
@@ -95,7 +108,7 @@ export const recordStopTool = defineBrowserTool({
         : "";
 
     return ok({
-      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}${sourceLostNote}${cursorNote}`,
+      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${cappedNote}${frozenNote}${sourceLostNote}${cursorNote}`,
       details: { ...summary.data },
     });
   },

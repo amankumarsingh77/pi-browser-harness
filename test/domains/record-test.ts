@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { setImmediate as tick, setTimeout as wait } from "node:timers/promises";
 import type { HandlerContext } from "../../src/util/tool";
 import { recordStartTool, recordStopTool } from "../../src/domains/record";
-import { toCanvasPoint } from "../../src/domains/record-session";
+import { toCanvasPoint, DEFAULT_MAX_SECONDS } from "../../src/domains/record-session";
 import { buildCursorScript } from "../../src/domains/record-encoder";
 import { cdpCall } from "../../src/domains/cdp-call";
 import { createFakeClient, type FakeClient } from "./fake-client";
@@ -21,6 +21,18 @@ const originalRecordingsDir = process.env[ENV_KEY];
 
 const flush = async (ticks = 3): Promise<void> => {
   for (let i = 0; i < ticks; i++) await tick();
+};
+
+// The cap fires a fire-and-forget finalize() that closes a real ffmpeg process — how long that
+// takes depends on machine load, not wall-clock elapsed since the cap's deadline. Poll for the
+// sink to actually finish rather than guessing a wait long enough to outlast it.
+const waitForCapToFinalize = async (fake: FakeClient, timeoutMs = 5000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fake.session.activeRecording()?.lastSummary() != null) return;
+    await wait(20);
+  }
+  throw new Error("timed out waiting for the capped recording to finalize");
 };
 
 const ORIGINAL_BOUNDS = { left: 100, top: 50, width: 800, height: 600, windowState: "normal" };
@@ -544,5 +556,85 @@ describe("cursor track", () => {
   test("S14: a track with no clicks produces no flash commands at all", () => {
     const script = buildCursorScript([{ t: 0, x: 5, y: 5, kind: "move" }]);
     assert.doesNotMatch(script, /flash/, "no click means no flash chain is driven");
+  });
+});
+
+describe("duration cap", () => {
+  test("S17: a recording that reaches its cap ends itself and admits it, freeing the slot for a new one", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": ok({}),
+        "Page.stopScreencast": ok({}),
+        "Browser.getWindowBounds": ok({ bounds: ORIGINAL_BOUNDS }),
+        "Browser.setWindowBounds": ok({}),
+      },
+    });
+    const started = await recordStartTool.handler({ maxSeconds: 1 }, ctxFor(fake));
+    assert.equal(started.success, true);
+
+    emitFrames(fake, 2);
+    await flush();
+
+    await waitForCapToFinalize(fake);
+
+    assert.notEqual(
+      fake.session.activeRecording()?.lastSummary(),
+      null,
+      "the sink finalized itself on its own, without a browser_record_stop call",
+    );
+    assert.equal(fake.callsTo("Browser.setWindowBounds").length, 2, "the window was restored, exactly as on a normal stop");
+
+    const restarted = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(restarted.success, true, "a subsequent browser_record_start is accepted, not refused as a duplicate");
+    if (restarted.success) await recordStopTool.handler({}, ctxFor(fake));
+  });
+
+  test("S17: a browser_record_stop after the cap returns the capped recording's path rather than an error", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+    const started = await recordStartTool.handler({ maxSeconds: 1 }, ctxFor(fake));
+    assert.equal(started.success, true);
+    if (!started.success) return;
+    const cappedPath = (started.data.details as Record<string, unknown>)["path"] as string;
+
+    emitFrames(fake, 2);
+    await flush();
+    await waitForCapToFinalize(fake);
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.equal(details["path"], cappedPath);
+    assert.equal(details["truncated"], true, "the summary reports the recording as truncated");
+    assert.ok((details["bytes"] as number) > 0, "the file is playable");
+    assert.match(stopped.data.text, /cap/i);
+  });
+
+  test("S18: the cap defaults to five minutes and can be overridden, and rejects a non-positive override", async () => {
+    freshDir();
+    const fake = await createFakeClient({ canned: { "Page.startScreencast": ok({}) } });
+    const withDefault = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(withDefault.success, true);
+    if (withDefault.success) assert.match(withDefault.data.text, new RegExp(`Capped at ${String(DEFAULT_MAX_SECONDS)}s`));
+    await recordStopTool.handler({}, ctxFor(fake));
+
+    const fake2 = await createFakeClient({ canned: { "Page.startScreencast": ok({}) } });
+    const withOverride = await recordStartTool.handler({ maxSeconds: 30 }, ctxFor(fake2));
+    assert.equal(withOverride.success, true);
+    if (withOverride.success) assert.match(withOverride.data.text, /Capped at 30s/);
+    await recordStopTool.handler({}, ctxFor(fake2));
+
+    const fake3 = await createFakeClient();
+    for (const bad of [0, -30, Number.POSITIVE_INFINITY, Number.NaN]) {
+      const refused = await recordStartTool.handler({ maxSeconds: bad }, ctxFor(fake3));
+      assert.equal(refused.success, false, `maxSeconds ${String(bad)} must be refused`);
+      if (refused.success) continue;
+      assert.equal(refused.error.kind, "invalid_state");
+      assert.equal(fake3.session.activeRecording(), null, "not silently defaulted to a running recording");
+    }
   });
 });

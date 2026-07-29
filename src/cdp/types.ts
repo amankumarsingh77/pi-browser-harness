@@ -65,6 +65,11 @@ export type RecordingSink = {
   noteConsumerRestart(): void;
   noteSourceLost(reason: string): void;
   finalize(reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>>;
+  // Null until finalize succeeds, then holds its result. Lets a caller tell a sink that is still
+  // recording apart from one that already ended on its own (the duration cap) but is still sitting
+  // in the session's recording slot — and recover its summary without calling finalize a second
+  // time, which would just error (docs/ARCHITECTURE.md).
+  lastSummary(): RecordingSummary | null;
 };
 
 export type TabInfo = {

@@ -483,6 +483,23 @@ at collection time (`toCanvasPoint`) using the same scale-and-pad the frames go 
 stored in raw viewport coordinates drifts out of alignment on any tab whose size differs from the
 canvas.
 
+**The duration cap finalizes through the same `RecordingSink` a caller would use, not through a
+side channel.** `createRecordingSink` arms an unref'd `setTimeout` that calls `sink.finalize("capped")`
+directly once `maxSeconds` elapses (R17/R18) — the same method `browser_record_stop` calls, so
+window restoration, encoder close, and the cursor pass all run exactly as they do on a normal stop.
+`finalize` clears that timer on every path, capped or not, so a normal stop does not leave a
+pending cap timer to fire a second, erroring `finalize` call later.
+
+That self-finalizing sink is still sitting in `CdpSession`'s recording slot when the cap fires —
+nothing pops it, unlike an explicit `stopRecording()` call. Two callers need to tell it apart from
+a still-running recording without adding a new `CdpSession` method: `browser_record_start`'s
+duplicate check, and `browser_record_stop` recovering the summary a cap already produced instead of
+calling `finalize` again (which would just error "already finalized" and lose the path). Both read
+`RecordingSink.lastSummary()`, which is `null` until `finalize` first succeeds and holds that result
+afterward — a capped-but-not-yet-cleared sink answers `lastSummary() !== null`, so a new
+`browser_record_start` is accepted and simply overwrites the slot, and a following
+`browser_record_stop` returns the retained summary rather than an error.
+
 ---
 
 ## 9. Running the checks

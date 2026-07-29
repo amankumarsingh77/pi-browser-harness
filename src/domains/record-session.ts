@@ -20,6 +20,8 @@ export type CreateRecordingSinkOpts = {
 const CANVAS_WIDTH = 1280;
 const CANVAS_HEIGHT = 720;
 const FPS = 15;
+// R18: a recording nobody stops must not write forever.
+export const DEFAULT_MAX_SECONDS = 300;
 // Far outside any real display on the platforms this was probed against (library-probe.md) — moves
 // the window off every monitor without touching windowState, which is what keeps Chrome compositing it.
 const OFFSCREEN_LEFT = -4000;
@@ -89,8 +91,9 @@ const parkWindow = async (client: BrowserClient): Promise<WindowParkResult> => {
 // Mirrors src/domains/screenshot-capture.ts: a helper-only module beside the tool file, exporting plain async functions returning Result.
 export const createRecordingSink = async (
   client: BrowserClient,
-  _opts: CreateRecordingSinkOpts,
+  opts: CreateRecordingSinkOpts,
 ): Promise<Result<RecordingSink, ToolErr>> => {
+  const maxSeconds = opts.maxSeconds ?? DEFAULT_MAX_SECONDS;
   const outputPath = recordingPath(client.namespace);
   try {
     await mkdir(dirname(outputPath), { recursive: true });
@@ -135,6 +138,7 @@ export const createRecordingSink = async (
   let currentSourceHeight: number | null = null;
   let cursorPoints = 0;
   let cursorClicks = 0;
+  let lastSummary: RecordingSummary | null = null;
 
   // Called both when a new frame arrives and on every pump tick — a tick with no new frame since
   // the last write repeats the latest frame and counts as frozen wall time (R11, R12); a tick that
@@ -196,9 +200,12 @@ export const createRecordingSink = async (
       // is reported first is the one worth keeping.
       if (sourceLost === null) sourceLost = reason;
     },
-    async finalize(_reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
+    async finalize(reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
       if (finalized) return err({ message: "recording was already finalized" });
       finalized = true;
+      // Cleared here, not only on the cap path: a normal stop must not leave the cap's timer
+      // pending and firing a second "capped" finalize on an already-finalized sink.
+      if (capTimer) clearTimeout(capTimer);
       // Restoration runs even when the recording is ending on an error or the duration cap, so it
       // has to happen before the encoder is touched, not only on the success path.
       await park.restore();
@@ -206,11 +213,11 @@ export const createRecordingSink = async (
       if (pumpTimer) clearInterval(pumpTimer);
       try {
         const { bytes, durationSec, cursorFailed } = await encoder.close();
-        return ok({
+        const summary: RecordingSummary = {
           path: outputPath,
           durationSec,
           bytes,
-          truncated: false,
+          truncated: reason === "capped",
           frozenSec: frozenMs / 1000,
           framesReceived,
           sourceWidth,
@@ -219,12 +226,25 @@ export const createRecordingSink = async (
           cursorPoints,
           cursorClicks,
           cursorFailed,
-        });
+        };
+        lastSummary = summary;
+        return ok(summary);
       } catch (e) {
         return err({ message: e instanceof Error ? e.message : String(e) });
       }
     },
+    lastSummary() {
+      return lastSummary;
+    },
   };
+
+  // Armed after `sink` exists so the callback can finalize through the same object a caller would
+  // (docs/ARCHITECTURE.md) — cleared inside finalize regardless of how the recording actually ends.
+  // unref() so a pending cap never holds the process alive on its own.
+  const capTimer = setTimeout(() => {
+    void sink.finalize("capped");
+  }, maxSeconds * 1000);
+  capTimer.unref();
 
   return ok(sink);
 };
