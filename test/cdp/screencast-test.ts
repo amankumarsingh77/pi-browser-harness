@@ -18,6 +18,7 @@ const flush = async (): Promise<void> => {
 const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly inputs: Array<{ x: number; y: number; kind: InputKind }> } => {
   const frames: string[] = [];
   const inputs: Array<{ x: number; y: number; kind: InputKind }> = [];
+  let sourceLostReason: string | null = null;
   return {
     outputPath: "/tmp/recording.mp4",
     parked: false,
@@ -30,6 +31,9 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
       inputs.push({ x, y, kind });
     },
     noteConsumerRestart() {},
+    noteSourceLost(reason) {
+      if (sourceLostReason === null) sourceLostReason = reason;
+    },
     async finalize(_reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
       return ok({
         path: "/tmp/recording.mp4",
@@ -38,6 +42,9 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
         truncated: false,
         frozenSec: 0,
         framesReceived: frames.length,
+        sourceWidth: null,
+        sourceHeight: null,
+        sourceLost: sourceLostReason,
       });
     },
   };
@@ -133,8 +140,19 @@ describe("CdpSession recording slot", () => {
       },
       noteInput() {},
       noteConsumerRestart() {},
+      noteSourceLost() {},
       async finalize() {
-        return ok({ path: "/tmp/r.mp4", durationSec: 1, bytes: 1, truncated: false, frozenSec: 0, framesReceived: 0 });
+        return ok({
+          path: "/tmp/r.mp4",
+          durationSec: 1,
+          bytes: 1,
+          truncated: false,
+          frozenSec: 0,
+          framesReceived: 0,
+          sourceWidth: null,
+          sourceHeight: null,
+          sourceLost: null,
+        });
       },
     };
     const started = await fake.session.startRecording(sink);
@@ -150,5 +168,105 @@ describe("CdpSession recording slot", () => {
     assert.deepEqual(order, ["ack", "frame-handled"]);
     const ackCall = fake.callsTo("Page.screencastFrameAck")[0];
     assert.equal(ackCall?.params["sessionId"], 7);
+  });
+});
+
+// Mirrors test/cdp/session-switch-test.ts's twoTabSession helper: a fake client already attached
+// to two known tabs, so switchTo("t2") exercises a real re-attach rather than a first visit.
+const twoTabRecordingClient = async () =>
+  createFakeClient({
+    canned: {
+      "Target.getTargets": ok({
+        targetInfos: [
+          { targetId: "t1", type: "page", title: "One", url: "https://one.test/" },
+          { targetId: "t2", type: "page", title: "Two", url: "https://two.test/" },
+        ],
+      }),
+      "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" })],
+      "Target.activateTarget": ok({}),
+      "Page.startScreencast": ok({}),
+      "Page.stopScreencast": ok({}),
+    },
+    ownedTargetIds: ["t1", "t2"],
+  });
+
+describe("recording follows the session across tabs", () => {
+  test("S13: switching tabs continues the same recording", async () => {
+    const fake = await twoTabRecordingClient();
+    const sink = fakeSink();
+
+    const started = await fake.session.startRecording(sink);
+    assert.equal(started.success, true);
+    assert.equal(fake.callsTo("Page.startScreencast")[0]?.sessionId, "s1");
+
+    const switched = await fake.session.switchTo("t2");
+    assert.equal(switched.success, true);
+
+    // Not finalized at the moment of the switch — the same sink instance is still active.
+    assert.equal(fake.session.activeRecording(), sink);
+
+    const stopCalls = fake.callsTo("Page.stopScreencast");
+    assert.equal(stopCalls.length, 1);
+    assert.equal(stopCalls[0]?.sessionId, "s1", "screencast stopped on the outgoing tab's session");
+
+    const startCalls = fake.callsTo("Page.startScreencast");
+    assert.equal(startCalls.length, 2);
+    assert.equal(startCalls[1]?.sessionId, "s2", "screencast started on the incoming tab's session");
+
+    // Exactly one file is produced: the same sink is returned and finalizes once.
+    const returned = fake.session.stopRecording();
+    assert.equal(returned, sink);
+    const summary = await returned?.finalize("stopped");
+    assert.equal(summary?.success, true);
+  });
+
+  test("S13: a failed resubscribe does not fail the tab switch, and is reported on the sink", async () => {
+    const fake = await createFakeClient({
+      canned: {
+        "Target.getTargets": ok({
+          targetInfos: [
+            { targetId: "t1", type: "page", title: "One", url: "https://one.test/" },
+            { targetId: "t2", type: "page", title: "Two", url: "https://two.test/" },
+          ],
+        }),
+        "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" })],
+        "Target.activateTarget": ok({}),
+        "Page.startScreencast": [ok({}), err(cdpError("session_not_found", "gone"))],
+        "Page.stopScreencast": ok({}),
+      },
+      ownedTargetIds: ["t1", "t2"],
+    });
+    const sink = fakeSink();
+    await fake.session.startRecording(sink);
+
+    const switched = await fake.session.switchTo("t2");
+    assert.equal(switched.success, true, "the tab switch itself succeeds despite the resubscribe failure");
+
+    const summary = await fake.session.stopRecording()?.finalize("stopped");
+    assert.equal(summary?.success, true);
+    if (summary?.success) assert.match(summary.data.sourceLost ?? "", /could not resume/);
+  });
+
+  test("S22: closing the recorded tab does not corrupt the recording", async () => {
+    const fake = await createFakeClient({ canned: { "Page.startScreencast": ok({}) } });
+    const sink = fakeSink();
+
+    const started = await fake.session.startRecording(sink);
+    assert.equal(started.success, true);
+
+    assert.doesNotThrow(() => {
+      fake.emit({ method: "Target.targetDestroyed", params: { targetId: "t1" } });
+    });
+    await flush();
+
+    // The harness stays usable: the recording is still active and stop still works.
+    assert.notEqual(fake.session.activeRecording(), null, "the session stays usable");
+    const returned = fake.session.stopRecording();
+    assert.equal(returned, sink);
+    const summary = await returned?.finalize("stopped");
+    assert.equal(summary?.success, true);
+    if (summary?.success) {
+      assert.match(summary.data.sourceLost ?? "", /closed/, "the summary reports that the recording lost its source");
+    }
   });
 });

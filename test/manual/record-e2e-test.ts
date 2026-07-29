@@ -38,6 +38,24 @@ function frame() {
 requestAnimationFrame(frame);
 </script>`;
 
+// A second, distinctly-colored fixture (blue, not red) so SV1 can tell which tab a decoded frame
+// came from by sampling its centre pixel, the same way FIXTURE's corner/centre pair proves
+// letterboxing. Needs the same requestAnimationFrame loop as FIXTURE: a page that paints once and
+// then sits still gets exactly one screencast frame from Chrome, which makes "sample a frame after
+// the switch" a race against whether that lone frame has arrived yet rather than a real check.
+const FIXTURE2 = `<!doctype html><meta charset=utf-8>
+<body style="margin:0;background:#0040ff;overflow:hidden">
+<div id=t style="color:#fff;font:20px system-ui;padding:1rem"></div>
+<script>
+let n = 0;
+function frame() {
+  n++;
+  document.getElementById('t').textContent = 'tab two frame ' + n + ' t=' + (performance.now() / 1000).toFixed(2) + 's';
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>`;
+
 async function ffprobeJson(path: string): Promise<any> {
   const { stdout } = await execFileP("ffprobe", [
     "-v", "error", "-print_format", "json", "-show_streams", "-show_format", path,
@@ -277,6 +295,87 @@ async function main(): Promise<void> {
       }
       // The session still thinks a recording is active (the encoder died out from under it); clear it so cleanup below doesn't hang.
       client.session().stopRecording();
+    }
+  }
+
+  // --- SV1 (plan.md#system-verification): one recording spans two differently-sized tabs. ---
+  // The fixture tab is still at 900x600 from the setup above. A second tab is opened — CDP tabs
+  // share the harness's one window, so "differently sized" is achieved by resizing that window
+  // between the two segments, not by two separate OS windows — and the switch to it is what
+  // exercises switchTo's re-subscribe (R13). Content is told apart by fixture color: FIXTURE is
+  // red, FIXTURE2 is blue.
+  {
+    const sv1Start = await recordStartTool.handler({}, ctx);
+    check(sv1Start.success, `SV1 setup: browser_record_start succeeded: ${sv1Start.success ? "ok" : sv1Start.error.message}`);
+    if (sv1Start.success) {
+      const sv1Path = (sv1Start.data.details as Record<string, unknown>)["path"] as string;
+      const sv1WallStart = Date.now();
+
+      await sleep(2000); // drive the first (900x600, red) tab
+
+      const tab2 = await client.newTab("data:text/html," + encodeURIComponent(FIXTURE2));
+      check(tab2.success, `SV1: opened a second tab: ${tab2.success ? "ok" : tab2.error.message}`);
+      const switchAtSec = (Date.now() - sv1WallStart) / 1000;
+
+      if (tab2.success) {
+        const cur2 = client.current();
+        if (cur2) {
+          const wid2 = await client.session().windowId(cur2.targetId);
+          if (wid2.success) {
+            await client.session().callBrowser("Browser.setWindowBounds", {
+              windowId: wid2.data,
+              bounds: { width: 1400, height: 900, windowState: "normal" },
+            });
+          }
+        }
+      }
+
+      await sleep(2000); // drive the second (1400x900, blue) tab
+
+      const sv1Stop = await recordStopTool.handler({}, ctx);
+      const sv1WallClockSec = (Date.now() - sv1WallStart) / 1000;
+      check(sv1Stop.success, `SV1: browser_record_stop succeeded: ${sv1Stop.success ? "ok" : (sv1Stop as { success: false; error: { message: string } }).error.message}`);
+
+      if (sv1Stop.success) {
+        const details = sv1Stop.data.details as Record<string, unknown>;
+        check(details["sourceLost"] === null, `SV1: the resubscribe on switch succeeded — nothing was lost (got ${JSON.stringify(details["sourceLost"])})`);
+        check(existsSync(sv1Path) && statSync(sv1Path).size > 0, `SV1: one file was produced, not two: ${sv1Path}`);
+
+        const sv1Meta = await ffprobeJson(sv1Path);
+        const sv1V = sv1Meta.streams.find((s: { codec_type: string }) => s.codec_type === "video");
+        check(sv1V?.width === 1280 && sv1V?.height === 720, `SV1: every frame is 1280x720 (got ${sv1V?.width}x${sv1V?.height})`);
+
+        const sv1Duration = Number(sv1Meta.format?.duration ?? 0);
+        const withinTolerance = Math.abs(sv1Duration - sv1WallClockSec) <= sv1WallClockSec * 0.25;
+        check(withinTolerance, `SV1: duration ${sv1Duration.toFixed(2)}s covers both tabs' activity (wall clock ${sv1WallClockSec.toFixed(2)}s)`);
+
+        try {
+          const earlySec = Math.min(1.0, Math.max(0.1, sv1Duration / 4));
+          const earlyPixels = await readFramePixels(sv1Path, 1280, 720, earlySec);
+          const earlyCentre = pixelAt(earlyPixels, 1280, 640, 360);
+          const earlyCorner = pixelAt(earlyPixels, 1280, 5, 5);
+          check(
+            earlyCentre[0] > 180 && earlyCentre[2] < 100,
+            `SV1: the early frame shows the first (red) tab's content (got rgb(${earlyCentre.join(",")}))`,
+          );
+          check(
+            earlyCorner[0] < 20 && earlyCorner[1] < 20 && earlyCorner[2] < 20,
+            `SV1: the first tab's 900x600 content is letterboxed, not cropped (corner rgb(${earlyCorner.join(",")}))`,
+          );
+
+          const lateSec = Math.min(sv1Duration - 0.1, Math.max(switchAtSec + 0.5, sv1Duration - 0.5));
+          const latePixels = await readFramePixels(sv1Path, 1280, 720, lateSec);
+          const lateCentre = pixelAt(latePixels, 1280, 640, 360);
+          check(
+            lateCentre[2] > 180 && lateCentre[0] < 100,
+            `SV1: the frame after the switch point shows the second (blue) tab, with no gap in the timeline (got rgb(${lateCentre.join(",")}) at ${lateSec.toFixed(2)}s, switch was at ${switchAtSec.toFixed(2)}s)`,
+          );
+        } catch (e) {
+          check(false, `SV1: could not decode frames to verify tab content: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      if (tab2.success) await client.closeTab(tab2.data);
     }
   }
 

@@ -42,11 +42,11 @@ before(async () => {
   jpegBase64 = Buffer.from(stdout).toString("base64");
 });
 
-const emitFrames = (fake: FakeClient, count: number): void => {
+const emitFrames = (fake: FakeClient, count: number, sessionId = "s1"): void => {
   for (let i = 0; i < count; i++) {
     fake.emit({
       method: "Page.screencastFrame",
-      sessionId: "s1",
+      sessionId,
       params: { data: jpegBase64, sessionId: i, metadata: {} },
     });
   }
@@ -384,5 +384,78 @@ describe("browser_record_start / browser_record_stop", () => {
     assert.ok((stopped.data.details?.["bytes"] as number) > 0);
 
     assert.equal(fake.callsTo("Browser.setWindowBounds").length, 0, "no restore attempted");
+  });
+
+  test("S13: switching tabs continues the same recording, driven end-to-end through the tools", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Target.getTargets": ok({
+          targetInfos: [
+            { targetId: "t1", type: "page", title: "One", url: "https://one.test/" },
+            { targetId: "t2", type: "page", title: "Two", url: "https://two.test/" },
+          ],
+        }),
+        "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" })],
+        "Target.activateTarget": ok({}),
+        "Page.startScreencast": ok({}),
+        "Page.stopScreencast": ok({}),
+      },
+      ownedTargetIds: ["t1", "t2"],
+    });
+
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+
+    emitFrames(fake, 2, "s1");
+    await flush();
+
+    const switched = await fake.session.switchTo("t2");
+    assert.equal(switched.success, true);
+    assert.equal(fake.session.activeRecording() !== null, true, "the recording was never finalized at the moment of the switch");
+
+    const stopCalls = fake.callsTo("Page.stopScreencast");
+    assert.equal(stopCalls.length, 1);
+    assert.equal(stopCalls[0]?.sessionId, "s1", "screencast stopped on the outgoing tab's session");
+    const startCalls = fake.callsTo("Page.startScreencast");
+    assert.equal(startCalls.length, 2);
+    assert.equal(startCalls[1]?.sessionId, "s2", "screencast started on the incoming tab's session");
+
+    emitFrames(fake, 2, "s2");
+    await flush();
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.equal(details["sourceLost"], null, "the resubscribe succeeded, so nothing was lost");
+    assert.ok((details["bytes"] as number) > 0, "exactly one file was produced, covering both tabs");
+  });
+
+  test("S22: closing the recorded tab does not corrupt the recording", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+
+    emitFrames(fake, 2);
+    await flush();
+
+    assert.doesNotThrow(() => {
+      fake.emit({ method: "Target.targetDestroyed", params: { targetId: "t1" } });
+    });
+    await flush();
+    assert.notEqual(fake.session.activeRecording(), null, "the harness does not throw and the session stays usable");
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true, "the stop call succeeds and returns a playable file covering the time before the close");
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.ok((details["bytes"] as number) > 0);
+    assert.match(details["sourceLost"] as string, /closed/, "the summary reports that the recording lost its source");
+    assert.match(stopped.data.text, /lost its source/i);
   });
 });

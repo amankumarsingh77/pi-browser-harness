@@ -108,6 +108,9 @@ export const createRecordingSink = async (
   let lastIndex = -1;
   let frozenMs = 0;
   let pumpTimer: NodeJS.Timeout | null = null;
+  let sourceWidth: number | null = null;
+  let sourceHeight: number | null = null;
+  let sourceLost: string | null = null;
 
   // Called both when a new frame arrives and on every pump tick — a tick with no new frame since
   // the last write repeats the latest frame and counts as frozen wall time (R11, R12); a tick that
@@ -127,8 +130,14 @@ export const createRecordingSink = async (
   const sink: RecordingSink = {
     outputPath,
     parked: park.parked,
-    onFrame(data) {
+    onFrame(data, sourceDims) {
       framesReceived += 1;
+      // The first frame's dims only — later frames legitimately change on a tab switch (R13), and
+      // the summary reports where the recording started, not a running value.
+      if (sourceWidth === null && sourceDims) {
+        sourceWidth = sourceDims.width;
+        sourceHeight = sourceDims.height;
+      }
       latestFrame = Buffer.from(data, "base64");
       if (anchorMs === null) {
         anchorMs = Date.now();
@@ -145,6 +154,12 @@ export const createRecordingSink = async (
       // period as a lower-bound signal — an underestimate beats the freeze masquerading as a
       // healthy stream (docs/ARCHITECTURE.md).
       frozenMs += minIntervalMs;
+    },
+    noteSourceLost(reason) {
+      // First cause wins — a tab-switch resubscribe failure (R13) or the recorded tab closing
+      // (EC1) both mean the same thing downstream (the pump is now repeating frames), so whichever
+      // is reported first is the one worth keeping.
+      if (sourceLost === null) sourceLost = reason;
     },
     async finalize(_reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>> {
       if (finalized) return err({ message: "recording was already finalized" });
@@ -163,6 +178,9 @@ export const createRecordingSink = async (
           truncated: false,
           frozenSec: frozenMs / 1000,
           framesReceived,
+          sourceWidth,
+          sourceHeight,
+          sourceLost,
         });
       } catch (e) {
         return err({ message: e instanceof Error ? e.message : String(e) });

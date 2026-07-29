@@ -84,9 +84,11 @@ export const recordStopTool = defineBrowserTool({
       summary.data.frozenSec > 1
         ? ` — ${summary.data.frozenSec.toFixed(1)}s of that had no frames arriving (window frozen or hidden)`
         : "";
+    const sourceLostNote =
+      summary.data.sourceLost !== null ? ` — lost its source and could not resume: ${summary.data.sourceLost}` : "";
 
     return ok({
-      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}`,
+      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}${sourceLostNote}`,
       details: { ...summary.data },
     });
   },

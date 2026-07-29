@@ -109,10 +109,17 @@ export const createCdpSession = (
           break;
         }
         case "Target.targetDestroyed": {
-          if (!ownership) break;
           const decoded = decodeEvent(ev.method, ev.params);
           if (!decoded.success || !decoded.data.targetId) break;
           const destroyed = decoded.data.targetId;
+          // The recorded tab closing must not let the recording go dark: the pump keeps the
+          // timeline moving on the last frame it has (phase 2's frozen-time accounting) until the
+          // session attaches somewhere else or the user stops (EC1). Checked ahead of the
+          // ownership gate below — recording is independent of ownership tracking.
+          if (recording && destroyed === targetId) {
+            recording.noteSourceLost("the recorded tab was closed");
+          }
+          if (!ownership) break;
           ownership.remove(destroyed);
           const tab = tabs.get(destroyed);
           if (tab) {
@@ -156,7 +163,13 @@ export const createCdpSession = (
           const decoded = decodeEvent(ev.method, ev.params);
           if (!decoded.success) break;
           void req("Page.screencastFrameAck", { sessionId: decoded.data.sessionId }, ev.sessionId ?? null);
-          recording?.onFrame(decoded.data.data);
+          const { deviceWidth, deviceHeight } = decoded.data.metadata;
+          recording?.onFrame(
+            decoded.data.data,
+            deviceWidth !== undefined && deviceHeight !== undefined
+              ? { width: deviceWidth, height: deviceHeight }
+              : undefined,
+          );
           break;
         }
         default:
@@ -310,6 +323,7 @@ export const createCdpSession = (
       const attached = await attach(tid);
       if (!attached.success) return attached;
       const attachedSessionId = attached.data;
+      const outgoingSessionId = sessionId;
       const existing = tabs.get(tid);
       const tab: TabSession = existing ?? {
         sessionId: attachedSessionId,
@@ -331,6 +345,23 @@ export const createCdpSession = (
       await enableDomains(attachedSessionId);
       sessionId = tab.sessionId;
       targetId = tid;
+
+      // A recording follows the session across tabs (R13, D5): the screencast subscription is
+      // bound to one page target and dies on activation elsewhere, so it is rebuilt here on every
+      // switch. Done after sessionId/targetId are updated above — re-subscribing against a session
+      // id that is not yet current would subscribe against a stale id. A failure to resume must not
+      // fail the switch itself: the tab switch is what the user actually asked for, and a lost
+      // source is reported at stop (R2), not by breaking navigation.
+      if (recording && outgoingSessionId && outgoingSessionId !== attachedSessionId) {
+        await stopScreencastOn(session, outgoingSessionId);
+        const resubscribed = await startScreencastOn(session, attachedSessionId);
+        if (!resubscribed.success) {
+          recording.noteSourceLost(
+            `could not resume the recording on the new tab: ${resubscribed.error.message}`,
+          );
+        }
+      }
+
       return ok(undefined);
     },
     attach,

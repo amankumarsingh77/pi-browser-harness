@@ -34,6 +34,14 @@ export type RecordingSummary = {
   readonly truncated: boolean;
   readonly frozenSec: number;
   readonly framesReceived: number;
+  // The first captured frame's page dimensions, or null when the frame carried none (R8/R13:
+  // the canvas is fixed, but the summary still names what a tab switch changed the source to).
+  readonly sourceWidth: number | null;
+  readonly sourceHeight: number | null;
+  // Non-null once the recording's screencast subscription broke and could not be resumed — a
+  // failed tab-switch re-subscribe (R13) or the recorded tab closing (EC1). The recording keeps
+  // running on frozen frames rather than ending silently; this is where that gets reported.
+  readonly sourceLost: string | null;
 };
 
 // A plain message rather than ToolErr: cdp/ must not import from domains/ or the tool runtime layer, so the domain that builds a RecordingSink maps this to a ToolErr itself.
@@ -46,9 +54,10 @@ export type RecordingSink = {
   readonly outputPath: string;
   // Whether the window was successfully moved off-screen at start — record.ts reads this to tell the caller whether it's safe to leave the window alone (docs/ARCHITECTURE.md).
   readonly parked: boolean;
-  onFrame(data: string): void;
+  onFrame(data: string, sourceDims?: { readonly width: number; readonly height: number }): void;
   noteInput(x: number, y: number, kind: InputKind): void;
   noteConsumerRestart(): void;
+  noteSourceLost(reason: string): void;
   finalize(reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>>;
 };
 
