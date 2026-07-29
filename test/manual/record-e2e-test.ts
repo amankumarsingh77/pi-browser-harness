@@ -161,6 +161,92 @@ async function main(): Promise<void> {
     check(false, `could not decode a frame to verify letterboxing: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // --- S9 / S10 (phase 2): the window is parked off-screen for the duration and restored on stop. ---
+  {
+    const beforePark = windowId !== undefined
+      ? await client.session().callBrowser("Browser.getWindowBounds", { windowId })
+      : undefined;
+
+    const parkStart = await recordStartTool.handler({}, ctx);
+    check(parkStart.success, `S9 setup: browser_record_start succeeded: ${parkStart.success ? "ok" : parkStart.error.message}`);
+    if (parkStart.success) {
+      check(parkStart.data.details?.["parked"] === true, "S9: browser_record_start reports the window was parked");
+      check(/parked off-screen/.test(parkStart.data.text), "S9: the start tool's text mentions the window was parked");
+
+      await sleep(500);
+      if (windowId !== undefined && beforePark?.success) {
+        const parked = await client.session().callBrowser("Browser.getWindowBounds", { windowId });
+        if (parked.success) {
+          const b = parked.data.bounds;
+          const before = beforePark.data.bounds;
+          // -4000,-4000 is what the harness *requests* (proven exactly by the unit test against a
+          // canned transport); this window manager visibly clamps a request that far off-screen back
+          // onto the desktop (44,13 observed), so the live check asserts what CDP can actually promise
+          // on this platform — the position moved and the size was preserved — not the exact
+          // coordinate, which is a documented, platform-dependent risk (design.md "Risks & Assumptions").
+          check(
+            b.left !== before.left || b.top !== before.top,
+            `S9: window position changed from its pre-recording spot (before=(${String(before.left)},${String(before.top)}), during=(${String(b.left)},${String(b.top)}))`,
+          );
+          check(b.windowState === "normal", `S9: window state stayed normal, not minimized (got ${String(b.windowState)})`);
+          check(b.width === before.width && b.height === before.height, `S9: window kept its original size (${String(b.width)}x${String(b.height)})`);
+        } else {
+          check(false, "S9: could not read the parked window's bounds");
+        }
+      }
+
+      const parkStop = await recordStopTool.handler({}, ctx);
+      check(parkStop.success, `S10: browser_record_stop succeeded: ${parkStop.success ? "ok" : parkStop.error.message}`);
+
+      if (windowId !== undefined && beforePark?.success) {
+        await sleep(300);
+        const restored = await client.session().callBrowser("Browser.getWindowBounds", { windowId });
+        if (restored.success) {
+          const before = beforePark.data.bounds;
+          const after = restored.data.bounds;
+          check(
+            after.left === before.left && after.top === before.top && after.width === before.width && after.height === before.height,
+            `S10: window restored to its pre-recording bounds (before=${JSON.stringify(before)}, after=${JSON.stringify(after)})`,
+          );
+        } else {
+          check(false, "S10: could not read the restored window's bounds");
+        }
+      }
+    }
+  }
+
+  // --- S11 / S12 (phase 2): a minimized window freezes capture without ending the recording, and the gap is reported. ---
+  {
+    const frozenStart = await recordStartTool.handler({}, ctx);
+    check(frozenStart.success, `S11/S12 setup: browser_record_start succeeded: ${frozenStart.success ? "ok" : frozenStart.error.message}`);
+    if (frozenStart.success) {
+      await sleep(500);
+      if (windowId !== undefined) {
+        await client.session().callBrowser("Browser.setWindowBounds", { windowId, bounds: { windowState: "minimized" } });
+      }
+      await sleep(1500);
+      check(client.session().activeRecording() !== null, "S11: the recording is still active through the frozen stretch");
+      if (windowId !== undefined) {
+        await client.session().callBrowser("Browser.setWindowBounds", {
+          windowId,
+          bounds: { windowState: "normal", left: -4000, top: -4000, width: 900, height: 600 },
+        });
+      }
+      await sleep(500);
+
+      const frozenStop = await recordStopTool.handler({}, ctx);
+      check(frozenStop.success, `S11/S12: browser_record_stop succeeded: ${frozenStop.success ? "ok" : frozenStop.error.message}`);
+      if (frozenStop.success) {
+        const details = frozenStop.data.details as Record<string, unknown>;
+        const frozenSec = details["frozenSec"] as number;
+        check(frozenSec > 1, `S12: frozenSec reports the minimized stretch (${frozenSec}s)`);
+        check(/frozen/i.test(frozenStop.data.text), "S12: the stop tool's text names the frozen duration");
+        const outPath = details["path"] as string;
+        check(existsSync(outPath) && statSync(outPath).size > 0, "S11: a file was still produced despite the frozen stretch");
+      }
+    }
+  }
+
   // --- NF3 / S21: an abrupt termination still leaves a playable file. ---
   // The harness process itself cannot be killed from within its own test run, so this approximates
   // "the process dies mid-recording" by killing the encoder subprocess directly — the same failure

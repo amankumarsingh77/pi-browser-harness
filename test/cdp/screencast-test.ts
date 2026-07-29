@@ -20,6 +20,7 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
   const inputs: Array<{ x: number; y: number; kind: InputKind }> = [];
   return {
     outputPath: "/tmp/recording.mp4",
+    parked: false,
     frames,
     inputs,
     onFrame(data) {
@@ -125,6 +126,7 @@ describe("CdpSession recording slot", () => {
 
     const sink: RecordingSink = {
       outputPath: "/tmp/r.mp4",
+      parked: false,
       onFrame() {
         // Simulates slow sink processing: still recorded, but after "ack" is already in the order.
         order.push("frame-handled");

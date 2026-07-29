@@ -5,11 +5,12 @@ import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readdirSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setImmediate as tick } from "node:timers/promises";
+import { setImmediate as tick, setTimeout as wait } from "node:timers/promises";
 import type { HandlerContext } from "../../src/util/tool";
 import { recordStartTool, recordStopTool } from "../../src/domains/record";
 import { createFakeClient, type FakeClient } from "./fake-client";
-import { ok } from "../../src/util/result";
+import { ok, err } from "../../src/util/result";
+import { cdpError } from "../../src/cdp/errors";
 
 const execFileP = promisify(execFile);
 const ENV_KEY = "PI_BROWSER_RECORDINGS_DIR";
@@ -18,6 +19,8 @@ const originalRecordingsDir = process.env[ENV_KEY];
 const flush = async (ticks = 3): Promise<void> => {
   for (let i = 0; i < ticks; i++) await tick();
 };
+
+const ORIGINAL_BOUNDS = { left: 100, top: 50, width: 800, height: 600, windowState: "normal" };
 
 const ctxFor = (fake: FakeClient): HandlerContext => ({
   client: fake.client,
@@ -222,5 +225,164 @@ describe("browser_record_start / browser_record_stop", () => {
     if (r.success) return;
     assert.equal(r.error.kind, "io_error");
     assert.ok(r.error.message.includes(blocked));
+  });
+
+  test("S9: starting a recording moves the window out of the way without hiding it", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": ok({}),
+        "Browser.getWindowBounds": ok({ bounds: ORIGINAL_BOUNDS }),
+        "Browser.setWindowBounds": ok({}),
+      },
+    });
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+    if (!started.success) return;
+    assert.equal(started.data.details?.["parked"], true);
+    assert.match(started.data.text, /parked off-screen/);
+
+    const parkCalls = fake.callsTo("Browser.setWindowBounds");
+    assert.equal(parkCalls.length, 1);
+    const bounds = parkCalls[0]?.params["bounds"] as Record<string, unknown>;
+    assert.equal(bounds["windowState"], "normal");
+    assert.notEqual(bounds["left"], ORIGINAL_BOUNDS.left);
+    assert.notEqual(bounds["top"], ORIGINAL_BOUNDS.top);
+    assert.equal(bounds["width"], ORIGINAL_BOUNDS.width);
+    assert.equal(bounds["height"], ORIGINAL_BOUNDS.height);
+
+    await recordStopTool.handler({}, ctxFor(fake));
+  });
+
+  test("S10: stopping a recording puts the window back", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": ok({}),
+        "Page.stopScreencast": ok({}),
+        "Browser.getWindowBounds": ok({ bounds: ORIGINAL_BOUNDS }),
+        "Browser.setWindowBounds": ok({}),
+      },
+    });
+    await recordStartTool.handler({}, ctxFor(fake));
+    emitFrames(fake, 1);
+    await flush();
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+
+    const boundsCalls = fake.callsTo("Browser.setWindowBounds");
+    assert.equal(boundsCalls.length, 2, "one call to park, one to restore");
+    const restoreBounds = boundsCalls[1]?.params["bounds"] as Record<string, unknown>;
+    assert.equal(restoreBounds["left"], ORIGINAL_BOUNDS.left);
+    assert.equal(restoreBounds["top"], ORIGINAL_BOUNDS.top);
+    assert.equal(restoreBounds["width"], ORIGINAL_BOUNDS.width);
+    assert.equal(restoreBounds["height"], ORIGINAL_BOUNDS.height);
+    assert.equal(restoreBounds["windowState"], "normal");
+  });
+
+  test("S10: restoration also happens when the recording ends because of an encoder error", async () => {
+    const dir = freshDir();
+    chmodSync(dir, 0o555);
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": ok({}),
+        "Browser.getWindowBounds": ok({ bounds: ORIGINAL_BOUNDS }),
+        "Browser.setWindowBounds": ok({}),
+      },
+    });
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+    await flush();
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, false);
+
+    const boundsCalls = fake.callsTo("Browser.setWindowBounds");
+    assert.equal(boundsCalls.length, 2, "restore still runs even though the encoder failed");
+  });
+
+  test("S11: a stretch with no frames does not end the recording", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+
+    emitFrames(fake, 1);
+    await flush();
+    assert.notEqual(fake.session.activeRecording(), null, "still active during the silent stretch");
+
+    await wait(300);
+    assert.notEqual(fake.session.activeRecording(), null, "still active during the silent stretch");
+
+    emitFrames(fake, 1);
+    await flush();
+    assert.notEqual(fake.session.activeRecording(), null, "still active once frames resume");
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.ok((details["durationSec"] as number) > 0);
+  });
+
+  test("S12: a frozen stretch is reported rather than hidden", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+    await recordStartTool.handler({}, ctxFor(fake));
+
+    emitFrames(fake, 1);
+    await flush();
+    await wait(1200);
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.ok((details["frozenSec"] as number) > 1, `expected frozenSec > 1, got ${String(details["frozenSec"])}`);
+    assert.match(stopped.data.text, /frozen/i);
+  });
+
+  test("S12: a recording with no frozen stretch reports zero and says nothing about freezing", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+    await recordStartTool.handler({}, ctxFor(fake));
+    emitFrames(fake, 1);
+    await flush();
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.equal(details["frozenSec"], 0);
+    assert.doesNotMatch(stopped.data.text, /frozen/i);
+  });
+
+  test("S25: a window that cannot be moved does not kill the recording", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": ok({}),
+        "Page.stopScreencast": ok({}),
+        "Browser.getWindowBounds": err(cdpError("invalid_response", "getWindowBounds not supported")),
+      },
+    });
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+    if (!started.success) return;
+    assert.equal(started.data.details?.["parked"], false);
+    assert.match(started.data.text, /could not be moved/);
+
+    emitFrames(fake, 1);
+    await flush();
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    assert.ok((stopped.data.details?.["bytes"] as number) > 0);
+
+    assert.equal(fake.callsTo("Browser.setWindowBounds").length, 0, "no restore attempted");
   });
 });

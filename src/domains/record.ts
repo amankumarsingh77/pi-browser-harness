@@ -44,9 +44,13 @@ export const recordStartTool = defineBrowserTool({
     const started = await client.session().startRecording(sinkResult.data);
     if (!started.success) return err(cdpErrToToolErr(started.error, "Page.startScreencast"));
 
+    const windowNote = sinkResult.data.parked
+      ? " The window has been parked off-screen for the duration and will be restored on stop."
+      : " The window could not be moved off-screen — leave it visible for the duration of the recording.";
+
     return ok({
-      text: `Recording to ${sinkResult.data.outputPath}`,
-      details: { path: sinkResult.data.outputPath },
+      text: `Recording to ${sinkResult.data.outputPath}${windowNote}`,
+      details: { path: sinkResult.data.outputPath, parked: sinkResult.data.parked },
     });
   },
 });
@@ -76,8 +80,13 @@ export const recordStopTool = defineBrowserTool({
       });
     }
 
+    const frozenNote =
+      summary.data.frozenSec > 1
+        ? ` — ${summary.data.frozenSec.toFixed(1)}s of that had no frames arriving (window frozen or hidden)`
+        : "";
+
     return ok({
-      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)`,
+      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}`,
       details: { ...summary.data },
     });
   },

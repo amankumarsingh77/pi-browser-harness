@@ -44,6 +44,8 @@ export type RecordingFinalizeError = {
 // Lives here, not in domains/, because cdp/session.ts owns the active recording (docs/ARCHITECTURE.md) and must reference this type without importing from domains/.
 export type RecordingSink = {
   readonly outputPath: string;
+  // Whether the window was successfully moved off-screen at start — record.ts reads this to tell the caller whether it's safe to leave the window alone (docs/ARCHITECTURE.md).
+  readonly parked: boolean;
   onFrame(data: string): void;
   noteInput(x: number, y: number, kind: InputKind): void;
   noteConsumerRestart(): void;
