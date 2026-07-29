@@ -23,6 +23,33 @@ export type DialogInfo = {
   readonly defaultPrompt?: string;
 };
 
+export type InputKind = "move" | "click";
+
+export type StopReason = "stopped" | "capped" | "session_end";
+
+export type RecordingSummary = {
+  readonly path: string;
+  readonly durationSec: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly frozenSec: number;
+  readonly framesReceived: number;
+};
+
+// A plain message rather than ToolErr: cdp/ must not import from domains/ or the tool runtime layer, so the domain that builds a RecordingSink maps this to a ToolErr itself.
+export type RecordingFinalizeError = {
+  readonly message: string;
+};
+
+// Lives here, not in domains/, because cdp/session.ts owns the active recording (docs/ARCHITECTURE.md) and must reference this type without importing from domains/.
+export type RecordingSink = {
+  readonly outputPath: string;
+  onFrame(data: string): void;
+  noteInput(x: number, y: number, kind: InputKind): void;
+  noteConsumerRestart(): void;
+  finalize(reason: StopReason): Promise<Result<RecordingSummary, RecordingFinalizeError>>;
+};
+
 export type TabInfo = {
   readonly targetId: string;
   readonly title: string;

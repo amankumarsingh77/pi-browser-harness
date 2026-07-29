@@ -52,6 +52,22 @@ export const EVENTS = {
   ),
   "Page.loadEventFired": ev(Anything),
   "Page.frameNavigated": ev(Anything),
+  "Page.screencastFrame": ev(
+    Type.Object(
+      {
+        data: Type.String(),
+        sessionId: Type.Number(),
+        metadata: Type.Object(
+          {
+            deviceWidth: Type.Optional(Type.Number()),
+            deviceHeight: Type.Optional(Type.Number()),
+          },
+          open,
+        ),
+      },
+      open,
+    ),
+  ),
 
   "Runtime.consoleAPICalled": ev(
     Type.Object(

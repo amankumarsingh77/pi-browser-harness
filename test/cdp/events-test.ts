@@ -41,6 +41,7 @@ describe("cdp events", () => {
       "Page.frameNavigated",
       "Page.javascriptDialogOpening",
       "Page.loadEventFired",
+      "Page.screencastFrame",
       "Runtime.consoleAPICalled",
       "Target.targetCreated",
       "Target.targetDestroyed",

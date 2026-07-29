@@ -123,6 +123,34 @@ export const COMMANDS = {
     }),
     Empty,
   ),
+  "Browser.getWindowBounds": cmd(
+    Type.Object({ windowId: Type.Number() }),
+    Type.Object({
+      bounds: Type.Object(
+        {
+          left: Type.Optional(Type.Number()),
+          top: Type.Optional(Type.Number()),
+          width: Type.Optional(Type.Number()),
+          height: Type.Optional(Type.Number()),
+          windowState: Type.Optional(Type.String()),
+        },
+        { additionalProperties: true },
+      ),
+    }),
+  ),
+  "Browser.setWindowBounds": cmd(
+    Type.Object({
+      windowId: Type.Number(),
+      bounds: Type.Object({
+        left: Type.Optional(Type.Number()),
+        top: Type.Optional(Type.Number()),
+        width: Type.Optional(Type.Number()),
+        height: Type.Optional(Type.Number()),
+        windowState: Type.Optional(Type.String()),
+      }),
+    }),
+    Empty,
+  ),
 
   "Page.enable": cmd(Type.Object({}), Empty),
   "Page.bringToFront": cmd(Type.Object({}), Empty),
@@ -159,6 +187,18 @@ export const COMMANDS = {
     Type.Object({ accept: Type.Boolean(), promptText: Type.Optional(Type.String()) }),
     Empty,
   ),
+  "Page.startScreencast": cmd(
+    Type.Object({
+      format: Type.Optional(Type.String()),
+      quality: Type.Optional(Type.Number()),
+      maxWidth: Type.Optional(Type.Number()),
+      maxHeight: Type.Optional(Type.Number()),
+      everyNthFrame: Type.Optional(Type.Number()),
+    }),
+    Empty,
+  ),
+  "Page.stopScreencast": cmd(Type.Object({}), Empty),
+  "Page.screencastFrameAck": cmd(Type.Object({ sessionId: Type.Number() }), Empty),
 
   "Runtime.evaluate": cmd(
     Type.Object(

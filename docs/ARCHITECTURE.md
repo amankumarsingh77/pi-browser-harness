@@ -76,7 +76,7 @@ slip past them.
 
 ## 2. The CDP boundary
 
-`src/cdp/commands.ts` (34 commands) and `src/cdp/events.ts` (12 events) are the single source
+`src/cdp/commands.ts` (39 commands) and `src/cdp/events.ts` (13 events) are the single source
 of truth for **both** the TypeScript types and the runtime validation. One typebox schema per
 entry generates both, so they cannot drift.
 
@@ -413,7 +413,51 @@ place.
 
 ---
 
-## 8. Running the checks
+## 8. Recording the browser (`browser_record_start` / `browser_record_stop`)
+
+**The active recording lives on `CdpSession`, not in `domains/` module scope.** `src/domains/`
+has no module-level mutable state anywhere else — a `Map<namespace, Recorder>` there would be
+the first, in the layer this doc calls "the only layer expected to grow" (section 1). `CdpSession`
+already owns every other piece of per-connection mutable state (the per-tab console and network
+buffers), and it is the only place a CDP event is routed (`consumeEvents`), which a
+session-scoped recorder needs to receive `Page.screencastFrame`. So the recording slot sits
+beside `tabs` in `createCdpSession`'s closure, one level above `TabSession` because a single
+recording spans tab switches. `src/domains/record-session.ts` builds the `RecordingSink` (owns
+the ffmpeg process and the file) and hands it to `session.startRecording`; `cdp/` never learns
+what ffmpeg is — it sees an interface with `onFrame`, `noteInput`, `noteConsumerRestart`, and
+`finalize`. That interface is declared in `src/cdp/types.ts`, not `src/domains/record-session.ts`,
+because `cdp/` must not import from `domains/`.
+
+**`Page.screencastFrame` is acked before the frame is handed to the sink, and the ack is never
+awaited.** The ack is the protocol's only backpressure signal (NF1); waiting on the sink first
+would make Chrome's frame delivery rate depend on encoder speed. `consumeEvents`'s case fires
+`Page.screencastFrameAck` and calls `recording?.onFrame(...)` in the same synchronous turn,
+without awaiting either.
+
+**Four ffmpeg invocation facts, each a silent failure rather than an error message** (verified in
+`library-probe.md` and while building this feature):
+
+- `-framerate` must **precede** `-i`. After `-i pipe:0` ffmpeg ignores it and silently defaults
+  to 25fps.
+- The `image2pipe` demuxer cannot always find codec parameters for a raw JPEG stream on stdin —
+  it fails with "Could not find codec parameters ... unknown codec" and a non-zero exit, not a
+  warning. Passing `-vcodec mjpeg` before `-i` fixes it; omitting it works by luck on some input
+  content and fails on others; it is not always audible.
+- `-shortest` does **not** govern a filter graph — it only trims the top-level output. An overlay
+  filter fed by an endless source (the slice-4 cursor sprite) needs `shortest=1` on the overlay
+  filter itself, or ffmpeg never reaches EOF and hangs after stdin closes.
+- Set `-thread_queue_size` explicitly; the default of 8 warns (and can stall) under a fast input.
+
+A fifth, found only by actually killing a recording rather than by the probe: **`+frag_keyframe`
+alone is not enough for NF3.** It emits a new fragment only at each keyframe, and libx264's default
+GOP is several seconds; a process killed inside that window leaves a file with nothing past the
+`ftyp` box. `-g <fps>` (roughly a one-second GOP) and `-flush_packets 1` (so a finished fragment
+hits disk immediately rather than sitting in libavformat's output buffer until a clean close) are
+both required for a killed recording to actually be playable.
+
+---
+
+## 9. Running the checks
 
 ```bash
 npm run check     # typecheck + boundaries + test

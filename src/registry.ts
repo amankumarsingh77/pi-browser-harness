@@ -20,6 +20,7 @@ import { consoleTool } from "./domains/console";
 import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
 import { setupTool } from "./domains/setup";
+import { recordStartTool, recordStopTool } from "./domains/record";
 import { webSearchTool } from "./domains/search/web-search";
 import { readPageTool } from "./domains/readpage/read-page";
 
@@ -64,6 +65,8 @@ export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   runScriptTool,
   webSearchTool,
   readPageTool,
+  recordStartTool,
+  recordStopTool,
 ];
 
 export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {

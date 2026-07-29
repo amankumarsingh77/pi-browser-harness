@@ -35,6 +35,8 @@ const SERIALIZED = new Set([
   "browser_viewport_resize",
   "browser_drag_and_drop",
   "browser_web_search",
+  "browser_record_start",
+  "browser_record_stop",
 ]);
 
 describe("tool registry", () => {

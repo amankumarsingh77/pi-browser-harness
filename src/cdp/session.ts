@@ -1,12 +1,13 @@
 import { map, type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError } from "./errors";
-import type { DialogInfo } from "./types";
+import type { DialogInfo, InputKind, RecordingSink } from "./types";
 import type { OwnershipRegistry } from "./ownership";
 import type { CdpTransport } from "./types";
 import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
 import { decodeEvent } from "./events";
 import { createNetworkBuffer, type DrainResult, type NetworkFilter } from "./network-buffer";
 import { createConsoleBuffer, type ConsoleDrainResult, type ConsoleFilter } from "./console-buffer";
+import { startScreencastOn, stopScreencastOn } from "./screencast";
 
 type TabSession = {
   sessionId: string;
@@ -39,6 +40,10 @@ export type CdpSession = {
   drainPageInfoInvalidations(): boolean;
   drainNetworkBuffer(filter: NetworkFilter): DrainResult;
   drainConsoleBuffer(filter: ConsoleFilter): ConsoleDrainResult;
+  startRecording(sink: RecordingSink): Promise<Result<void, CdpError>>;
+  stopRecording(): RecordingSink | null;
+  activeRecording(): RecordingSink | null;
+  noteInput(x: number, y: number, kind: InputKind): void;
 };
 
 // Injected so seeding goes through the target factory; attachFirstPage's own `Target.createTarget` would land in whichever profile has focus.
@@ -54,6 +59,9 @@ export const createCdpSession = (
 
   const tabs = new Map<string, TabSession>();
   const sessionIdToTargetId = new Map<string, string>();
+
+  // Session-scoped, not per-tab: one recording spans tab switches, so it cannot live inside TabSession.
+  let recording: RecordingSink | null = null;
 
   let activeConsumer: Promise<void> = Promise.resolve();
 
@@ -143,6 +151,14 @@ export const createCdpSession = (
           if (tab) tab.consoleBuffer.ingestLogEntry(ev.params);
           break;
         }
+        // Session-scoped, unlike its neighbours: does not resolve a tab. Ack first and do not await it — the ack is the protocol's backpressure signal (NF1) and must not wait on the sink's work.
+        case "Page.screencastFrame": {
+          const decoded = decodeEvent(ev.method, ev.params);
+          if (!decoded.success) break;
+          void req("Page.screencastFrameAck", { sessionId: decoded.data.sessionId }, ev.sessionId ?? null);
+          recording?.onFrame(decoded.data.data);
+          break;
+        }
         default:
           break;
       }
@@ -152,6 +168,8 @@ export const createCdpSession = (
   const restartConsumer = (): void => {
     activeConsumer = activeConsumer.then(() => consumeEvents()).catch((e: unknown) => {
       console.warn("[pi-browser-harness] CDP event consumer crashed:", e);
+      // Frames stopping because the consumer died is otherwise indistinguishable from a frozen window (docs/ARCHITECTURE.md).
+      recording?.noteConsumerRestart();
     });
   };
 
@@ -370,6 +388,31 @@ export const createCdpSession = (
       const tab = currentTab();
       if (!tab) return { records: [], total: 0, bufferOverflowed: false };
       return tab.consoleBuffer.drain(filter);
+    },
+    async startRecording(sink) {
+      if (!sessionId) {
+        return err(cdpError("session_not_found", "no tab attached — cannot start recording"));
+      }
+      recording = sink;
+      const started = await startScreencastOn(session, sessionId);
+      if (!started.success) {
+        recording = null;
+        return started;
+      }
+      return ok(undefined);
+    },
+    stopRecording() {
+      const sink = recording;
+      recording = null;
+      // Fire-and-forget: stopScreencastOn already folds a session-gone failure into success, and the caller does not need to wait on it to get the sink back.
+      if (sink && sessionId) void stopScreencastOn(session, sessionId);
+      return sink;
+    },
+    activeRecording() {
+      return recording;
+    },
+    noteInput(x, y, kind) {
+      recording?.noteInput(x, y, kind);
     },
   };
   return session;
