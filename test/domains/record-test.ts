@@ -8,6 +8,9 @@ import { join } from "node:path";
 import { setImmediate as tick, setTimeout as wait } from "node:timers/promises";
 import type { HandlerContext } from "../../src/util/tool";
 import { recordStartTool, recordStopTool } from "../../src/domains/record";
+import { toCanvasPoint } from "../../src/domains/record-session";
+import { buildCursorScript } from "../../src/domains/record-encoder";
+import { cdpCall } from "../../src/domains/cdp-call";
 import { createFakeClient, type FakeClient } from "./fake-client";
 import { ok, err } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
@@ -457,5 +460,89 @@ describe("browser_record_start / browser_record_stop", () => {
     assert.ok((details["bytes"] as number) > 0);
     assert.match(details["sourceLost"] as string, /closed/, "the summary reports that the recording lost its source");
     assert.match(stopped.data.text, /lost its source/i);
+  });
+});
+
+describe("cursor track", () => {
+  test("S14: viewport coordinates are transformed into canvas space, not stored raw", () => {
+    // A 900x600 tab letterboxed into 1280x720: scale is min(1280/900, 720/600) = 1.2, so the
+    // scaled content is 1080x720 and sits 100px in from the left with no vertical padding.
+    assert.deepEqual(toCanvasPoint(0, 0, 900, 600), { x: 100, y: 0 });
+    assert.deepEqual(toCanvasPoint(450, 300, 900, 600), { x: 640, y: 360 });
+    assert.deepEqual(toCanvasPoint(900, 600, 900, 600), { x: 1180, y: 720 });
+
+    // A source that already matches the canvas aspect needs no offset at all.
+    assert.deepEqual(toCanvasPoint(640, 360, 1280, 720), { x: 640, y: 360 });
+
+    // Unknown source dimensions must not silently produce NaN or a raw passthrough.
+    assert.deepEqual(toCanvasPoint(10, 10, 0, 0), { x: 0, y: 0 });
+  });
+
+  test("S14: agent mouse input reaches the recording's track with the right kind, and is a no-op when idle", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Input.dispatchMouseEvent": ok({}), "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+
+    // With no recording active the same input must record nothing and still succeed.
+    const idle = await cdpCall(fake.client, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: 10, y: 20, button: "left", clickCount: 1,
+    });
+    assert.equal(idle.success, true, "the call still succeeds with no recording active");
+
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+    emitFrames(fake, 2);
+    await flush();
+
+    await cdpCall(fake.client, "Input.dispatchMouseEvent", {
+      type: "mousePressed", x: 100, y: 100, button: "left", clickCount: 1,
+    });
+    await cdpCall(fake.client, "Input.dispatchMouseEvent", {
+      type: "mouseMoved", x: 200, y: 150, button: "none", clickCount: 0,
+    });
+    await flush();
+
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, true);
+    if (!stopped.success) return;
+    const details = stopped.data.details as Record<string, unknown>;
+    assert.equal(details["cursorPoints"], 2, "both actions appear in the track — the idle one did not");
+    assert.equal(details["cursorClicks"], 1, "the click is marked as a click and the move is not");
+  });
+
+  test("S14: the cursor script places moves and click flashes in time order", () => {
+    const script = buildCursorScript([
+      { t: 0, x: 100, y: 100, kind: "move" },
+      { t: 1.5, x: 400, y: 300, kind: "click" },
+      { t: 2, x: 700, y: 150, kind: "move" },
+    ]);
+    const lines = script.trim().split("\n");
+
+    // Commands sharing a timestamp are comma-separated without repeating it — repeating the
+    // timestamp is a parse error that kills the whole graph (docs/ARCHITECTURE.md).
+    for (const line of lines) {
+      assert.match(line, /^\d+\.\d{3} [a-z@]/, `each entry starts with exactly one timestamp: ${line}`);
+      assert.doesNotMatch(line.slice(6), /\d+\.\d{3} overlay/, `no repeated timestamp: ${line}`);
+    }
+
+    const times = lines.map((l) => Number.parseFloat(l));
+    assert.deepEqual([...times].sort((a, b) => a - b), times, "entries are in ascending time order");
+
+    assert.match(script, /0\.000 overlay@cur x 100, overlay@cur y 100;/);
+    // A click's line carries the flash commands too, so it continues past the cursor coordinates.
+    assert.match(script, /1\.500 overlay@cur x 400, overlay@cur y 300,/);
+
+    // The click raises the flash and a later command lowers it again, so it is short-lived.
+    const raise = lines.findIndex((l) => l.includes("flash") && /aa 0\.[1-9]/.test(l));
+    const lower = lines.findIndex((l) => l.includes("flash") && /aa 0(\.0+)?[,;]/.test(l));
+    assert.ok(raise >= 0, "a click raises the flash");
+    assert.ok(lower > raise, "and a later command lowers it again");
+    assert.ok(times[lower]! - times[raise]! <= 0.5, "the flash is short-lived");
+  });
+
+  test("S14: a track with no clicks produces no flash commands at all", () => {
+    const script = buildCursorScript([{ t: 0, x: 5, y: 5, kind: "move" }]);
+    assert.doesNotMatch(script, /flash/, "no click means no flash chain is driven");
   });
 });

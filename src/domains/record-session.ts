@@ -25,6 +25,24 @@ const FPS = 15;
 const OFFSCREEN_LEFT = -4000;
 const OFFSCREEN_TOP = -4000;
 
+// Input coordinates arrive in the page's viewport space, but frames are scaled to fit a fixed canvas
+// and letterboxed. A pointer drawn at raw viewport coordinates drifts out of alignment on any tab
+// whose size differs from the canvas — so every point goes through the SAME scale and offset the
+// encoder's scale/pad chain applies to the frames themselves.
+export const toCanvasPoint = (
+  x: number,
+  y: number,
+  sourceWidth: number,
+  sourceHeight: number,
+): { readonly x: number; readonly y: number } => {
+  // Unknown source dimensions must not produce NaN coordinates that would poison the cursor script.
+  if (sourceWidth <= 0 || sourceHeight <= 0) return { x: 0, y: 0 };
+  const scale = Math.min(CANVAS_WIDTH / sourceWidth, CANVAS_HEIGHT / sourceHeight);
+  const offsetX = (CANVAS_WIDTH - sourceWidth * scale) / 2;
+  const offsetY = (CANVAS_HEIGHT - sourceHeight * scale) / 2;
+  return { x: Math.round(x * scale + offsetX), y: Math.round(y * scale + offsetY) };
+};
+
 type WindowParkResult = {
   readonly parked: boolean;
   readonly restore: () => Promise<void>;
@@ -111,6 +129,12 @@ export const createRecordingSink = async (
   let sourceWidth: number | null = null;
   let sourceHeight: number | null = null;
   let sourceLost: string | null = null;
+  // The LATEST dimensions, unlike the first-frame pair above: a tab switch changes the source size
+  // mid-recording (R13), and a pointer must be transformed against the tab it was actually on.
+  let currentSourceWidth: number | null = null;
+  let currentSourceHeight: number | null = null;
+  let cursorPoints = 0;
+  let cursorClicks = 0;
 
   // Called both when a new frame arrives and on every pump tick — a tick with no new frame since
   // the last write repeats the latest frame and counts as frozen wall time (R11, R12); a tick that
@@ -138,6 +162,10 @@ export const createRecordingSink = async (
         sourceWidth = sourceDims.width;
         sourceHeight = sourceDims.height;
       }
+      if (sourceDims) {
+        currentSourceWidth = sourceDims.width;
+        currentSourceHeight = sourceDims.height;
+      }
       latestFrame = Buffer.from(data, "base64");
       if (anchorMs === null) {
         anchorMs = Date.now();
@@ -146,8 +174,15 @@ export const createRecordingSink = async (
       }
       catchUpTo(Date.now());
     },
-    noteInput(_x, _y, _kind) {
-      // No-op stub until slice 4 wires the cursor track.
+    noteInput(x, y, kind) {
+      if (finalized) return;
+      cursorPoints += 1;
+      if (kind === "click") cursorClicks += 1;
+      // Timestamps are relative to the first frame, which is what anchors the video's own timeline —
+      // anything before that frame belongs at t=0 rather than at a negative offset.
+      const t = anchorMs === null ? 0 : Math.max(0, (Date.now() - anchorMs) / 1000);
+      const point = toCanvasPoint(x, y, currentSourceWidth ?? 0, currentSourceHeight ?? 0);
+      encoder.setCursor({ t, x: point.x, y: point.y, kind });
     },
     noteConsumerRestart() {
       // restartConsumer's own outage duration isn't observable from here, so fold in one frame
@@ -170,7 +205,7 @@ export const createRecordingSink = async (
       catchUpTo(Date.now());
       if (pumpTimer) clearInterval(pumpTimer);
       try {
-        const { bytes, durationSec } = await encoder.close();
+        const { bytes, durationSec, cursorFailed } = await encoder.close();
         return ok({
           path: outputPath,
           durationSec,
@@ -181,6 +216,9 @@ export const createRecordingSink = async (
           sourceWidth,
           sourceHeight,
           sourceLost,
+          cursorPoints,
+          cursorClicks,
+          cursorFailed,
         });
       } catch (e) {
         return err({ message: e instanceof Error ? e.message : String(e) });

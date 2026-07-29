@@ -42,6 +42,12 @@ export type RecordingSummary = {
   // failed tab-switch re-subscribe (R13) or the recorded tab closing (EC1). The recording keeps
   // running on frozen frames rather than ending silently; this is where that gets reported.
   readonly sourceLost: string | null;
+  // Agent mouse activity composited into the video (R14-R16). `cursorFailed` is non-null when the
+  // overlay pass failed: the capture itself is still intact and playable, only the pointer is
+  // missing, and losing the recording to a cosmetic pass would be the worse trade.
+  readonly cursorPoints: number;
+  readonly cursorClicks: number;
+  readonly cursorFailed: string | null;
 };
 
 // A plain message rather than ToolErr: cdp/ must not import from domains/ or the tool runtime layer, so the domain that builds a RecordingSink maps this to a ToolErr itself.

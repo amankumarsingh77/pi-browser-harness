@@ -455,6 +455,34 @@ GOP is several seconds; a process killed inside that window leaves a file with n
 hits disk immediately rather than sitting in libavformat's output buffer until a clean close) are
 both required for a killed recording to actually be playable.
 
+**The cursor is composited in a second pass, and pass 1 writes the real output path.** `sendcmd`
+parses its command script **once, when the filter graph is built**. Commands appended to the file
+while ffmpeg is running are silently ignored — measured directly, not inferred: a command appended
+one second into a run never took effect, and the overlay stayed at its initial position for the rest
+of the video. Since the cursor track only exists once the recording ends, a live overlay is not
+available, so `compositeCursor` runs a second ffmpeg pass at finalize.
+
+That forces a non-obvious ordering. Pass 1 encodes straight to the **real** output path rather than
+to a temp file, and pass 2 reads it, composites, and renames over it. Writing pass 1 to a temp file
+would be the natural shape and would silently break NF3 — a recording killed mid-flight would leave
+no file at the path the caller was given. A failed overlay pass is likewise reported
+(`RecordingSummary.cursorFailed`) rather than thrown: the cursor-less capture is still the real
+recording, and losing it to a cosmetic pass is the worse trade.
+
+Two further `sendcmd` facts, both silent: commands sharing a timestamp are comma-separated **without
+repeating the timestamp** (`0.5 overlay@cur x 100, overlay@cur y 100;`) — repeating it is a parse
+error that kills the whole graph before a frame is written — and an overlay's position is only
+re-evaluated per frame with `eval=frame`, otherwise it is fixed when the graph is constructed.
+
+**Mouse input is tapped in one place.** `cdpCall` in `src/domains/cdp-call.ts` is the single door
+every tool's CDP call already passes through, so the cursor track is collected there rather than in
+`click.ts`, `scroll.ts` and `drag.ts` separately. One tap instead of four, and a future mouse-driven
+tool is captured without being told to opt in. `noteInput` is a no-op when nothing is recording, so
+the cost on the normal path is one string comparison. Coordinates are transformed into canvas space
+at collection time (`toCanvasPoint`) using the same scale-and-pad the frames go through — a pointer
+stored in raw viewport coordinates drifts out of alignment on any tab whose size differs from the
+canvas.
+
 ---
 
 ## 9. Running the checks

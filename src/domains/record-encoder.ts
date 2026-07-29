@@ -1,13 +1,56 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { rename, rm, stat, writeFile } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
 
+export type CursorPoint = {
+  readonly t: number;
+  readonly x: number;
+  readonly y: number;
+  readonly kind: "move" | "click";
+};
+
 export type Encoder = {
   write(jpeg: Buffer): void;
-  close(): Promise<{ readonly bytes: number; readonly durationSec: number }>;
+  setCursor(point: CursorPoint): void;
+  close(): Promise<{
+    readonly bytes: number;
+    readonly durationSec: number;
+    readonly cursorFailed: string | null;
+  }>;
+};
+
+const CURSOR_SIZE = 14;
+const FLASH_SIZE = 40;
+// Long enough to read at 15fps (five frames — three was easy to miss entirely between samples),
+// short enough that two nearby clicks stay distinct.
+const FLASH_SECONDS = 0.35;
+
+// sendcmd's script: commands sharing a timestamp are comma-separated WITHOUT repeating the
+// timestamp. Repeating it is a parse error that kills the whole graph before a frame is written
+// (docs/ARCHITECTURE.md). Entries must also be in ascending time order.
+export const buildCursorScript = (track: readonly CursorPoint[]): string => {
+  const entries: { readonly t: number; readonly cmds: readonly string[] }[] = [];
+  for (const p of track) {
+    const x = Math.round(p.x);
+    const y = Math.round(p.y);
+    const cmds = [`overlay@cur x ${String(x)}`, `overlay@cur y ${String(y)}`];
+    if (p.kind === "click") {
+      const fx = x - Math.round((FLASH_SIZE - CURSOR_SIZE) / 2);
+      const fy = y - Math.round((FLASH_SIZE - CURSOR_SIZE) / 2);
+      entries.push({
+        t: p.t,
+        cmds: [...cmds, `overlay@flash x ${String(fx)}`, `overlay@flash y ${String(fy)}`, "colorchannelmixer@flash aa 0.8"],
+      });
+      entries.push({ t: p.t + FLASH_SECONDS, cmds: ["colorchannelmixer@flash aa 0"] });
+      continue;
+    }
+    entries.push({ t: p.t, cmds });
+  }
+  entries.sort((a, b) => a.t - b.t);
+  return entries.map((e) => `${e.t.toFixed(3)} ${e.cmds.join(", ")};`).join("\n");
 };
 
 export type CreateEncoderOpts = {
@@ -83,12 +126,18 @@ export const createEncoder = (opts: CreateEncoderOpts): Result<Encoder, ToolErr>
   });
 
   let framesWritten = 0;
+  const track: CursorPoint[] = [];
 
   return ok({
     write(jpeg) {
       framesWritten += 1;
       // Push and drop — never accumulate (NF2).
       child.stdin.write(jpeg);
+    },
+    setCursor(point) {
+      // Coordinates and a timestamp only — a few dozen bytes per entry, so retaining the track for
+      // the recording's life does not conflict with the no-buffering rule that governs frames (NF2).
+      track.push(point);
     },
     async close() {
       if (!child.stdin.destroyed) child.stdin.end();
@@ -98,8 +147,77 @@ export const createEncoder = (opts: CreateEncoderOpts): Result<Encoder, ToolErr>
       if (code !== 0 || failure !== null) {
         throw new Error(failure ?? `ffmpeg exited with code ${String(code)}: ${stderrTail}`);
       }
+      const cursorFailed = track.length === 0 ? null : await compositeCursor(ffmpeg.data, opts, track);
       const stats = await stat(opts.outputPath);
-      return { bytes: stats.size, durationSec: framesWritten / opts.fps };
+      return { bytes: stats.size, durationSec: framesWritten / opts.fps, cursorFailed };
     },
   });
+};
+
+// The cursor is composited in a SECOND pass, at finalize, because sendcmd parses its script once at
+// graph-construction time — commands appended to the file while ffmpeg runs are silently ignored
+// (measured, not assumed; see docs/ARCHITECTURE.md). The track only exists once the recording ends,
+// so a live overlay is not available to us.
+//
+// Pass 1 therefore writes the REAL output path, not a temp file: a recording killed mid-flight must
+// still leave a playable file (NF3), which it would not if the real path only appeared at stop. This
+// pass reads that file, composites, and renames over it.
+const compositeCursor = async (
+  ffmpeg: string,
+  opts: CreateEncoderOpts,
+  track: readonly CursorPoint[],
+): Promise<string | null> => {
+  const scriptPath = `${opts.outputPath}.cursor.txt`;
+  const compositedPath = `${opts.outputPath}.cursor.mp4`;
+  try {
+    await writeFile(scriptPath, buildCursorScript(track), "utf8");
+
+    // shortest=1 belongs on the overlay filter itself: -shortest does NOT govern a filter graph, and
+    // the sprite sources below are endless, so without it ffmpeg never reaches EOF and hangs forever.
+    // eval=frame is what makes the x/y commands take effect per frame rather than being fixed when
+    // the graph is built. Both were silent hangs / silently wrong output, never an error message.
+    const filter = [
+      `[0:v]sendcmd=f='${scriptPath}'[base]`,
+      `[1:v]format=rgba,colorchannelmixer@flash=aa=0[fl]`,
+      `[2:v]format=rgba,colorchannelmixer=aa=0.95[cur]`,
+      `[base][fl]overlay@flash=x=-${String(FLASH_SIZE)}:y=-${String(FLASH_SIZE)}:eval=frame:shortest=1[withflash]`,
+      `[withflash][cur]overlay@cur=x=-${String(CURSOR_SIZE)}:y=-${String(CURSOR_SIZE)}:eval=frame:shortest=1[out]`,
+    ].join(";");
+
+    await new Promise<void>((resolve, reject) => {
+      const pass2 = spawn(
+        ffmpeg,
+        [
+          "-hide_banner", "-loglevel", "error", "-y",
+          "-i", opts.outputPath,
+          "-f", "lavfi", "-i", `color=c=yellow:s=${String(FLASH_SIZE)}x${String(FLASH_SIZE)}:r=${String(opts.fps)}`,
+          "-f", "lavfi", "-i", `color=c=white:s=${String(CURSOR_SIZE)}x${String(CURSOR_SIZE)}:r=${String(opts.fps)}`,
+          "-filter_complex", filter,
+          "-map", "[out]",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+          compositedPath,
+        ],
+        { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      let tail = "";
+      pass2.stderr?.on("data", (c: Buffer) => {
+        tail = (tail + c.toString()).slice(-2000);
+      });
+      pass2.on("error", (e) => reject(new Error(e.message)));
+      pass2.on("close", (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`cursor pass exited with code ${String(code)}: ${tail}`));
+      });
+    });
+
+    await rename(compositedPath, opts.outputPath);
+    return null;
+  } catch (e) {
+    // A failed overlay must not cost the recording: the cursor-less file at outputPath is still the
+    // real capture, and losing it to a cosmetic pass would be the worse trade.
+    return e instanceof Error ? e.message : String(e);
+  } finally {
+    await rm(scriptPath, { force: true }).catch(() => {});
+    await rm(compositedPath, { force: true }).catch(() => {});
+  }
 };

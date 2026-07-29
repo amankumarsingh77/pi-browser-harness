@@ -9,6 +9,7 @@ import { createDaemonTransport } from "../../src/daemon/transport";
 import { createBrowserClient } from "../../src/client";
 import { recordStartTool, recordStopTool } from "../../src/domains/record";
 import { ensureDaemon } from "../../src/daemon/spawn";
+import { cdpCall, evalJs } from "../../src/domains/cdp-call";
 import type { HandlerContext } from "../../src/util/tool";
 
 const execFileP = promisify(execFile);
@@ -376,6 +377,113 @@ async function main(): Promise<void> {
       }
 
       if (tab2.success) await client.closeTab(tab2.data);
+    }
+  }
+
+  // --- S15 / S16 (phase 4): the composited pointer lands where the agent acted, and a click reads
+  // differently from a move. Both are proven by decoding real frames, not by trusting the track. ---
+  {
+    // SV1 closed the tab it switched to, so the session is pointed at a destroyed target. Come back
+    // to the fixture tab before recording, or the screencast subscribes against a dead session id.
+    if (tab.success) await client.switchTab(tab.data);
+    await sleep(300);
+
+    const cursorStart = await recordStartTool.handler({}, ctx);
+    check(cursorStart.success, `S15 setup: browser_record_start succeeded: ${cursorStart.success ? "ok" : cursorStart.error.message}`);
+
+    if (cursorStart.success) {
+      // Two well-separated clicks a couple of seconds apart, plus a move in between that must NOT flash.
+      await sleep(700);
+      await cdpCall(client, "Input.dispatchMouseEvent", { type: "mousePressed", x: 60, y: 60, button: "left", clickCount: 1 });
+      await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 60, y: 60, button: "left", clickCount: 1 });
+      await sleep(1600);
+      await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseMoved", x: 500, y: 320, button: "none", clickCount: 0 });
+      await sleep(1600);
+      await cdpCall(client, "Input.dispatchMouseEvent", { type: "mousePressed", x: 700, y: 400, button: "left", clickCount: 1 });
+      await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 700, y: 400, button: "left", clickCount: 1 });
+      await sleep(1200);
+
+      const cursorStop = await recordStopTool.handler({}, ctx);
+      check(cursorStop.success, `S15/S16: browser_record_stop succeeded: ${cursorStop.success ? "ok" : cursorStop.error.message}`);
+
+      if (cursorStop.success) {
+        const d = cursorStop.data.details as Record<string, unknown>;
+        check(d["cursorFailed"] === null, `S15: the cursor overlay pass succeeded (got ${String(d["cursorFailed"])})`);
+        check((d["cursorPoints"] as number) >= 3, `S15: every agent action reached the track (got ${String(d["cursorPoints"])})`);
+        check(d["cursorClicks"] === 2, `S16: exactly the two presses were marked as clicks (got ${String(d["cursorClicks"])})`);
+
+        const srcW = d["sourceWidth"] as number | null;
+        const srcH = d["sourceHeight"] as number | null;
+        check(srcW !== null && srcH !== null, `S15: the summary knows the source dimensions (${String(srcW)}x${String(srcH)})`);
+
+        // The page itself must be untouched — a repro video of a page we modified is one someone can
+        // argue with. Nothing was ever injected, so no overlay element can exist in the DOM.
+        const domProbe = await evalJs(client, "document.querySelectorAll('[data-pi-cursor],[id*=\"pi-cursor\"]').length");
+        check(domProbe.success && domProbe.data === 0, "S15: the page content is unmodified — no overlay element exists in the DOM");
+
+        if (srcW && srcH) {
+          const scale = Math.min(1280 / srcW, 720 / srcH);
+          const expected = (vx: number, vy: number): [number, number] => [
+            Math.round(vx * scale + (1280 - srcW * scale) / 2),
+            Math.round(vy * scale + (720 - srcH * scale) / 2),
+          ];
+          // Near-white: the sprite. Near-yellow: the click flash. The fixtures are saturated red and
+          // blue, so neither colour can come from the page itself. Count only pixels NEAR the point
+          // being asserted — a whole-frame centroid is dragged off the sprite by any white page
+          // content, which says nothing about where the pointer actually is.
+          const countNear = (
+            buf: Buffer, want: "white" | "yellow", ex: number, ey: number, radius: number,
+          ): number => {
+            let n = 0;
+            for (let y = Math.max(0, ey - radius); y < Math.min(720, ey + radius); y++) {
+              for (let x = Math.max(0, ex - radius); x < Math.min(1280, ex + radius); x++) {
+                const [r, g, b] = pixelAt(buf, 1280, x, y);
+                if (want === "white" ? r > 200 && g > 200 && b > 200 : r > 170 && g > 170 && b < 110) n++;
+              }
+            }
+            return n;
+          };
+          const countAll = (buf: Buffer, want: "white" | "yellow"): number => countNear(buf, want, 640, 360, 900);
+
+          const videoPath = cursorStop.data.details?.["path"] as string;
+          // The track's t=0 is the first captured frame, which lags browser_record_start by an
+          // unobservable amount — so scan a window around each action rather than betting on one
+          // timestamp. Scanning is what makes this robust; a fixed sample was silently off by 0.3s.
+          const scan = async (
+            from: number, to: number, fn: (buf: Buffer) => number,
+          ): Promise<{ best: number; atSec: number }> => {
+            let best = 0, atSec = -1;
+            for (let t = from; t <= to; t += 0.1) {
+              const n = fn(await readFramePixels(videoPath, 1280, 720, t));
+              if (n > best) { best = n; atSec = t; }
+            }
+            return { best, atSec };
+          };
+
+          try {
+            const [ex1, ey1] = expected(60, 60);
+            const [ex2, ey2] = expected(700, 400);
+
+            const p1 = await scan(0.8, 1.8, (b) => countNear(b, "white", ex1, ey1, 25));
+            check(p1.best > 0, `S15: a pointer marker is visible near the first click at ~(${String(ex1)},${String(ey1)}) (${String(p1.best)} px at ${p1.atSec.toFixed(1)}s)`);
+
+            const p2 = await scan(4.0, 5.0, (b) => countNear(b, "white", ex2, ey2, 25));
+            check(p2.best > 0, `S15: the pointer moved to the second click at ~(${String(ex2)},${String(ey2)}) (${String(p2.best)} px at ${p2.atSec.toFixed(1)}s)`);
+
+            const flash1 = await scan(0.7, 1.5, (b) => countAll(b, "yellow"));
+            check(flash1.best > 0, `S16: the frame at the click shows the flash (${String(flash1.best)} px at ${flash1.atSec.toFixed(1)}s)`);
+
+            // The move happens in this window and no click does, so the flash must be absent throughout.
+            const quiet = await scan(2.6, 3.4, (b) => countAll(b, "yellow"));
+            check(quiet.best === 0, `S16: the frame during the move does not (${String(quiet.best)} px)`);
+
+            const after = await scan(flash1.atSec + 0.6, flash1.atSec + 1.2, (b) => countAll(b, "yellow"));
+            check(after.best === 0, `S16: the flash is gone again shortly after the click (${String(after.best)} px)`);
+          } catch (e) {
+            check(false, `S15/S16: could not decode frames to locate the pointer: ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+      }
     }
   }
 

@@ -87,8 +87,15 @@ export const recordStopTool = defineBrowserTool({
     const sourceLostNote =
       summary.data.sourceLost !== null ? ` — lost its source and could not resume: ${summary.data.sourceLost}` : "";
 
+    // A missing pointer is worth saying out loud: the video is still the real capture, but someone
+    // watching it to see where the agent clicked would otherwise just find nothing there.
+    const cursorNote =
+      summary.data.cursorFailed !== null
+        ? ` — the video is intact but the cursor overlay could not be drawn: ${summary.data.cursorFailed}`
+        : "";
+
     return ok({
-      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}${sourceLostNote}`,
+      text: `Recording saved: ${summary.data.path} (${summary.data.durationSec.toFixed(1)}s, ${summary.data.bytes} bytes)${frozenNote}${sourceLostNote}${cursorNote}`,
       details: { ...summary.data },
     });
   },

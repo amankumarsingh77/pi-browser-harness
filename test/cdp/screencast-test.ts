@@ -45,6 +45,9 @@ const fakeSink = (): RecordingSink & { readonly frames: string[]; readonly input
         sourceWidth: null,
         sourceHeight: null,
         sourceLost: sourceLostReason,
+        cursorPoints: 0,
+        cursorClicks: 0,
+        cursorFailed: null,
       });
     },
   };
@@ -152,6 +155,9 @@ describe("CdpSession recording slot", () => {
           sourceWidth: null,
           sourceHeight: null,
           sourceLost: null,
+          cursorPoints: 0,
+          cursorClicks: 0,
+          cursorFailed: null,
         });
       },
     };
