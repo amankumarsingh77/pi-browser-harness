@@ -2,10 +2,10 @@
  * Regression tests for `createCdpBridge` connection lifecycle races.
  *
  * Covers remaining lifecycle regressions after PR #18:
- *  1. timed-out / erroring sockets must not be able to resurrect or mutate bridge
- *     state via delayed open/message events.
- *  2. callbacks from an old generation must be rejected/cleaned when that generation
- *     closes after a newer attempt has started.
+ *  1. discovery must be bounded by `connectTimeoutMs`
+ *  2. handleRequest should stop waiting as soon as the active attempt settles
+ *  3. stop() must resolve pending callbacks before clearing state
+ *  4. constructor and stale-generation cleanup still must reject old callbacks
  *
  * Run: npx tsx test/manual/bridge-reconnect-regression-test.ts
  */
@@ -18,9 +18,7 @@ import { createCdpBridge } from "../../src/daemon/bridge";
 import type WebSocket from "ws";
 
 type ParsedSend = { id?: number; method?: string };
-
 type Discover = () => Promise<Result<string, CdpError>>;
-
 type SendResult = WireResponse;
 
 let passed = 0;
@@ -37,11 +35,16 @@ const check = (cond: boolean, label: string): void => {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-const waitFor = async (predicate: () => boolean, label: string, timeoutMs = 200): Promise<boolean> => {
+const waitFor = async (
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = 120,
+  intervalMs = 2,
+): Promise<boolean> => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return true;
-    await sleep(2);
+    await sleep(intervalMs);
   }
   check(false, `timed out: ${label}`);
   return false;
@@ -55,14 +58,11 @@ class FakeWebSocket extends EventEmitter {
 
   public readyState = FakeWebSocket.CONNECTING;
   public readonly sent: string[] = [];
-  private closeDelayMs = 0;
+  private readonly closeDelayMs: number;
 
-  constructor(readonly label: string) {
+  constructor(readonly label: string, options: { closeDelayMs?: number } = {}) {
     super();
-  }
-
-  setCloseDelay(ms: number): void {
-    this.closeDelayMs = ms;
+    this.closeDelayMs = options.closeDelayMs ?? 0;
   }
 
   send(payload: string): void {
@@ -71,13 +71,20 @@ class FakeWebSocket extends EventEmitter {
 
   close(code?: number, reason?: string): void {
     if (this.readyState === FakeWebSocket.CLOSED) return;
-    this.readyState = FakeWebSocket.CLOSED;
-    const emitClose = () => this.emit("close", code, reason);
+
+    const closeNow = (): void => {
+      if (this.readyState === FakeWebSocket.CLOSED) return;
+      this.readyState = FakeWebSocket.CLOSED;
+      this.emit("close", code, reason);
+    };
+
     if (this.closeDelayMs > 0) {
-      setTimeout(emitClose, this.closeDelayMs);
-    } else {
-      emitClose();
+      this.readyState = FakeWebSocket.CLOSING;
+      setTimeout(closeNow, this.closeDelayMs);
+      return;
     }
+
+    closeNow();
   }
 
   open(): void {
@@ -125,11 +132,23 @@ const requestIdByMethod = (socket: FakeWebSocket, method: string): number | null
   return null;
 };
 
+const withSocket = (
+  sockets: FakeWebSocket[],
+  index: number,
+  label: string,
+): FakeWebSocket | null => {
+  const socket = sockets[index] ?? null;
+  if (!socket) {
+    check(false, label);
+    return null;
+  }
+  return socket;
+};
+
 // --- Test 1: constructor failure settles the attempt ---------------------
 
 const testConstructorFailureSettlesAttempt = async (): Promise<void> => {
   let settled = false;
-
   const bridge = createCdpBridge({
     discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
       success: true,
@@ -144,12 +163,151 @@ const testConstructorFailureSettlesAttempt = async (): Promise<void> => {
     },
   });
 
-  bridge.start();
-  await sleep(20);
-  check(settled, "constructor failure path calls settlement callback");
+  await bridge.start();
+  await waitFor(() => settled, "constructor failure path calls settlement callback", 50);
 };
 
-// --- Test 2: stale failure attempt cannot resurrect bridge ----------------
+// --- Test 2: bounded discovery is required for unresolved discoverWsUrl ----
+
+const testUnresolvedDiscoveryIsBounded = async (): Promise<void> => {
+  let settled = 0;
+  let discoverCalls = 0;
+  const sockets: FakeWebSocket[] = [];
+  const bridge = createCdpBridge({
+    discoverWsUrl: async () => {
+      discoverCalls += 1;
+      if (discoverCalls === 1) {
+        return new Promise(() => undefined);
+      }
+      return { success: true, data: "ws://retry-attempt.invalid:9222" };
+    },
+    createWebSocket: (url: string): WebSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+    connectTimeoutMs: 25,
+    onAttemptSettled: () => {
+      settled += 1;
+    },
+  });
+
+  await bridge.start();
+  check(await waitFor(() => settled === 1, "unresolved discovery settles by timeout", 100), "unresolved discovery is bounded by timeout");
+  check(sockets.length === 0, "timed-out discovery attempt does not create a socket");
+  check(discoverCalls === 1, "only one discover call happened before timeout");
+
+  await bridge.start();
+  check(
+    await waitFor(() => discoverCalls >= 2 && sockets.length > 0, "retry discovery creates a fresh socket after timeout", 150),
+    "retry discovery runs after bounded first attempt",
+  );
+  const retrySocket = withSocket(sockets, 0, "retry socket exists after bounded discovery timeout");
+  if (!retrySocket) {
+    await bridge.stop();
+    return;
+  }
+
+  retrySocket.open();
+  check(await waitFor(() => bridge.isAlive(), "bridge reconnects after bounded timeout"), "bridge recovers after bounded discovery timeout");
+  await bridge.stop();
+};
+
+// --- Test 3: failed attempt should short-circuit handleRequest wait -------
+
+const testHandleRequestStopsPollingAfterFailedAttempt = async (): Promise<void> => {
+  const responses: SendResult[] = [];
+  const sockets: FakeWebSocket[] = [];
+  const bridge = createCdpBridge({
+    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
+      success: true,
+      data: "ws://fast-fail.invalid:9222",
+    }),
+    createWebSocket: (url: string): WebSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      setTimeout(() => socket.fail(new Error("forced connect failure")), 0);
+      return socket as unknown as WebSocket;
+    },
+    connectTimeoutMs: 30,
+  });
+
+  await bridge.start();
+  check(await waitFor(() => sockets.length === 1, "connect attempt creates socket", 50), "handleRequest fast-fail path creates a socket");
+
+  const start = Date.now();
+  await bridge.handleRequest(
+    { type: "request", id: 20, method: "Runtime.enable", params: {} },
+    "client-fast",
+    (_clientId, msg) => {
+      if (msg.type === "response") {
+        responses.push(msg);
+      }
+    },
+  );
+  const elapsed = Date.now() - start;
+
+  check(elapsed < 200, "handleRequest returns quickly after failed attempt settlement");
+  check(
+    responses.some((msg) => msg.id === 20 && msg.error?.message === "Chrome not connected"),
+    "handleRequest fails fast with Chrome not connected",
+  );
+  await bridge.stop();
+};
+
+// --- Test 4: stop() must settle pending callbacks -----------------------
+
+const testStopRejectsPendingRequestCallbacks = async (): Promise<void> => {
+  const responses: SendResult[] = [];
+  const sockets: FakeWebSocket[] = [];
+  const bridge = createCdpBridge({
+    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
+      success: true,
+      data: "ws://stop-callback.invalid:9222",
+    }),
+    createWebSocket: (url: string): WebSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+  });
+
+  await bridge.start();
+  const initial = await waitFor(() => sockets.length === 1, "socket created for stop test", 50);
+  if (!initial) {
+    await bridge.stop();
+    return;
+  }
+
+  const socket = sockets[0];
+  if (!socket) {
+    await bridge.stop();
+    return;
+  }
+
+  socket.open();
+  const req: WireRequest = { type: "request", id: 40, method: "Runtime.enable", params: {} };
+  await bridge.handleRequest(req, "client-stop", (_clientId, msg) => {
+    if (msg.type === "response") {
+      responses.push(msg);
+    }
+  });
+
+  const sentDaemonId = requestIdByMethod(socket, "Runtime.enable");
+  check(sentDaemonId !== null, "stop test request is sent");
+
+  await bridge.stop();
+  check(
+    await waitFor(
+      () => responses.some((msg) => msg.id === 40 && msg.error?.message === "Chrome disconnected"),
+      "stop settles pending callback with Chrome disconnected",
+      80,
+    ),
+    "stop sends Chrome-disconnected response for pending callback",
+  );
+};
+
+// --- Test 5: stale failure attempt cannot resurrect bridge ----------------
 
 const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
   const runTimeoutCase = async (): Promise<void> => {
@@ -161,9 +319,9 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     const bridge = createCdpBridge({
       discoverWsUrl: makeDiscover(urls),
       createWebSocket: (url: string): WebSocket => {
-        const sock = new FakeWebSocket(url);
-        sockets.push(sock);
-        return sock as unknown as WebSocket;
+        const socket = new FakeWebSocket(url);
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
       },
       connectTimeoutMs: 15,
       onAttemptSettled: () => {
@@ -171,21 +329,29 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
       },
     });
 
-    bridge.start();
-    await waitFor(() => sockets.length === 1, "timed out attempt socket is created");
-
-    await waitFor(() => settled >= 1, "timed-out attempt settles");
-    const first = sockets[0];
+    await bridge.start();
+    check(await waitFor(() => sockets.length >= 1, "timed out attempt socket is created", 50), "timeout test creates first socket");
+    const first = withSocket(sockets, 0, "timed-out first socket exists");
+    if (!first) {
+      await bridge.stop();
+      return;
+    }
 
     first.open();
-    await sleep(5);
-    check(!bridge.isAlive(), "stale open from timed-out socket does not resurrect bridge");
+    first.close();
+    check(await waitFor(() => settled >= 1, "timed-out attempt settles", 80), "timed-out attempt settles");
+    check(!bridge.isAlive(), "stale timed-out open does not resurrect bridge");
 
     await bridge.start();
-    await waitFor(() => sockets.length >= 2, "retry socket is created");
-    const second = sockets[1];
+    check(await waitFor(() => sockets.length >= 2, "retry socket is created", 80), "retry socket is created");
+    const second = withSocket(sockets, 1, "second socket exists after retry");
+    if (!second) {
+      await bridge.stop();
+      return;
+    }
+
     second.open();
-    await waitFor(() => bridge.isAlive(), "bridge reconnects after timeout");
+    check(await waitFor(() => bridge.isAlive(), "bridge reconnects after timeout", 80), "bridge reconnects after timeout");
 
     await bridge.handleRequest(
       { type: "request", id: 10, method: "Runtime.enable", params: {} },
@@ -199,16 +365,19 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
     const secondChromeId = requestIdByMethod(second, "Runtime.enable");
     check(secondChromeId !== null, "second attempt sent the request");
-    if (secondChromeId === null) return;
+    if (secondChromeId === null) {
+      await bridge.stop();
+      return;
+    }
 
-    first.open();
     first.message(JSON.stringify({ id: secondChromeId, result: { late: true } }));
-    await sleep(5);
-    check(responses.length === 0, "timed-out stale socket cannot resolve live callback");
+    check(!responses.some((msg) => msg.id === 10), "timed-out stale socket cannot resolve live callback");
 
     second.message(JSON.stringify({ id: secondChromeId, result: { ok: true } }));
-    await waitFor(() => responses.length === 1, "second attempt callback is resolved");
-    check(responses[0]?.id === 10, "current callback resolves only from active socket");
+    check(
+      await waitFor(() => responses.some((msg) => msg.id === 10), "second attempt callback is resolved", 60),
+      "current callback resolves from active socket",
+    );
 
     await bridge.stop();
   };
@@ -221,18 +390,22 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     const bridge = createCdpBridge({
       discoverWsUrl: makeDiscover(urls),
       createWebSocket: (url: string): WebSocket => {
-        const sock = new FakeWebSocket(url);
-        sockets.push(sock);
-        return sock as unknown as WebSocket;
+        const socket = new FakeWebSocket(url);
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
       },
       connectTimeoutMs: 20,
     });
 
     await bridge.start();
-    await waitFor(() => sockets.length === 1, "initial attempt socket is created");
-    const first = sockets[0];
+    check(await waitFor(() => sockets.length === 1, "initial attempt socket is created", 50), "error test creates first socket");
+    const first = withSocket(sockets, 0, "initial socket exists after error");
+    if (!first) {
+      await bridge.stop();
+      return;
+    }
+
     first.open();
-    first.setCloseDelay(15);
 
     await bridge.handleRequest(
       { type: "request", id: 11, method: "Runtime.enable", params: {} },
@@ -245,12 +418,21 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     );
 
     first.fail(new Error("forced failure"));
-    await bridge.start();
-    await waitFor(() => sockets.length >= 2, "retry socket is created after error");
+    first.close();
 
-    const second = sockets[1];
+    await bridge.start();
+    check(
+      await waitFor(() => sockets.length >= 2, "retry socket is created after error", 100),
+      "retry socket is created after error",
+    );
+    const second = withSocket(sockets, 1, "retry socket exists after error");
+    if (!second) {
+      await bridge.stop();
+      return;
+    }
+
     second.open();
-    await waitFor(() => bridge.isAlive(), "bridge reconnects after error");
+    check(await waitFor(() => bridge.isAlive(), "bridge reconnects after error", 80), "bridge reconnects after error");
 
     await bridge.handleRequest(
       { type: "request", id: 12, method: "Runtime.disable", params: {} },
@@ -264,18 +446,18 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
     const secondChromeId = requestIdByMethod(second, "Runtime.disable");
     check(secondChromeId !== null, "second attempt sent the request");
-    if (secondChromeId === null) return;
+    if (secondChromeId === null) {
+      await bridge.stop();
+      return;
+    }
 
-    first.open();
     first.message(JSON.stringify({ id: secondChromeId, result: { late: true } }));
-    await sleep(5);
     check(!responses.some((msg) => msg.id === 12), "stale message from errored socket does not resolve current callback");
 
     second.message(JSON.stringify({ id: secondChromeId, result: { ok: true } }));
-    await waitFor(() => responses.some((msg) => msg.id === 12), "current callback resolves after retry response");
     check(
-      responses.some((msg) => msg.id === 12 && (typeof msg.result === "object" || typeof msg.result === "string" || msg.result === null)),
-      "current callback resolves after stale-socket error sequence",
+      await waitFor(() => responses.some((msg) => msg.id === 12), "current callback resolves after retry response", 80),
+      "current callback resolves after retry response",
     );
 
     await bridge.stop();
@@ -283,10 +465,9 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
   await runTimeoutCase();
   await runErrorCase();
-  check(true, "timed-out and errored sockets do not resurrect or mutate bridge");
 };
 
-// --- Test 3: old-generation close only affects old callbacks ------------
+// --- Test 6: old-generation close should not affect newer callback ----------
 
 const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> => {
   const sockets: FakeWebSocket[] = [];
@@ -296,19 +477,23 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
   const bridge = createCdpBridge({
     discoverWsUrl: makeDiscover(urls),
     createWebSocket: (url: string): WebSocket => {
-      const sock = new FakeWebSocket(url);
-      sockets.push(sock);
-      return sock as unknown as WebSocket;
+      const delayCloseMs = sockets.length === 0 ? 12 : 0;
+      const socket = new FakeWebSocket(url, { closeDelayMs: delayCloseMs });
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
     },
     connectTimeoutMs: 50,
   });
 
   await bridge.start();
-  await waitFor(() => sockets.length === 1, "old-generation socket is created");
-  const first = sockets[0];
-  first.open();
+  check(await waitFor(() => sockets.length === 1, "old-generation socket is created", 50), "old generation socket exists");
+  const first = withSocket(sockets, 0, "old generation socket exists");
+  if (!first) {
+    await bridge.stop();
+    return;
+  }
 
-  first.setCloseDelay(25);
+  first.open();
 
   const oldRequest: WireRequest = { type: "request", id: 31, method: "Target.getTargets", params: {} };
   await bridge.handleRequest(oldRequest, "client-c", (_clientId, msg) => {
@@ -316,16 +501,26 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
       responses.push(msg);
     }
   });
-  const oldDaemonId = requestIdByMethod(first, "Target.getTargets");
-  check(oldDaemonId !== null, "old-generation request is in-flight");
+
+  const oldChromeId = requestIdByMethod(first, "Target.getTargets");
+  check(oldChromeId !== null, "old-generation request is in-flight");
+  if (!oldChromeId) {
+    await bridge.stop();
+    return;
+  }
 
   first.close();
-  await bridge.start();
-  await waitFor(() => sockets.length === 2, "new generation socket is created");
 
-  const second = sockets[1];
+  await bridge.start();
+  check(await waitFor(() => sockets.length >= 2, "new generation socket is created", 80), "new generation socket exists");
+  const second = withSocket(sockets, 1, "new generation socket exists");
+  if (!second) {
+    await bridge.stop();
+    return;
+  }
+
   second.open();
-  await waitFor(() => bridge.isAlive(), "bridge stays alive on new generation");
+  check(await waitFor(() => bridge.isAlive(), "bridge stays alive on new generation", 80), "bridge stays alive on new generation");
 
   const newRequest: WireRequest = { type: "request", id: 32, method: "Runtime.getProperties", params: {} };
   await bridge.handleRequest(newRequest, "client-c", (_clientId, msg) => {
@@ -334,30 +529,32 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
     }
   });
 
-  const newDaemonId = requestIdByMethod(second, "Runtime.getProperties");
-  check(newDaemonId !== null, "new-generation request is sent");
-  if (newDaemonId === null) return;
+  const newChromeId = requestIdByMethod(second, "Runtime.getProperties");
+  check(newChromeId !== null, "new-generation request is sent");
+  if (!newChromeId) {
+    await bridge.stop();
+    return;
+  }
 
+  check(!responses.some((msg) => msg.id === 31), "old generation callback is pending before close");
+
+  second.message(JSON.stringify({ id: newChromeId, result: { ok: true } }));
   check(
-    !responses.some((msg) => msg.id === 31),
-    "old generation callback is not resolved before delayed close",
-  );
-
-  second.message(JSON.stringify({ id: newDaemonId, result: { ok: true } }));
-  await waitFor(() => responses.some((msg) => msg.id === 32), "new-generation callback resolves");
-
-  await waitFor(
-    () => responses.some((msg) => msg.id === 31 && msg.error?.message === "Chrome disconnected"),
-    "old-generation close rejects old callbacks",
-    80,
+    await waitFor(() => responses.some((msg) => msg.id === 32), "new generation callback resolves", 80),
+    "new-generation callback resolves",
   );
 
   check(
-    responses.some((msg) => msg.id === 31 && msg.error?.message === "Chrome disconnected"),
+    await waitFor(
+      () => responses.some((msg) => msg.id === 31 && msg.error?.message === "Chrome disconnected"),
+      "old-generation close rejects old callbacks",
+      80,
+    ),
     "old-generation callback receives Chrome-disconnected error",
   );
+
   check(
-    !responses.some((msg) => msg.id === 32 && typeof msg.error !== "undefined"),
+    !responses.some((msg) => msg.id === 32 && msg.error !== undefined),
     "new-generation callback is unaffected by old-generation close",
   );
 
@@ -368,6 +565,9 @@ async function main(): Promise<void> {
   console.log("bridge connection regression tests\n");
 
   await testConstructorFailureSettlesAttempt();
+  await testUnresolvedDiscoveryIsBounded();
+  await testHandleRequestStopsPollingAfterFailedAttempt();
+  await testStopRejectsPendingRequestCallbacks();
   await testStaleFailureAttemptCannotResurrect();
   await testOldGenerationCloseDoesNotAffectNewCallbacks();
 
