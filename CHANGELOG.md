@@ -4,6 +4,10 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **`browser_record_start` / `browser_record_stop`** — new tools. Record the session's active tab to a shareable H.264/MP4 via Chrome's CDP screencast stream, for bug repros and demos. The recording is session-scoped rather than tab-scoped: it re-subscribes on every tab switch, so one file spans the whole journey until `browser_record_stop`, an optional `maxSeconds` cap (default 300s, reported as truncated on hit), or the recorded tab closing. Frames are scaled to fit and letterboxed to a fixed 1280x720 canvas at 15fps and never buffered — each is acknowledged and streamed straight into an ffmpeg process. `browser_record_start` parks the harness window off-screen for the duration (Chrome stops compositing a hidden window) and restores it on stop; `browser_record_stop` returns the file path, duration, and size, plus notes for a hit duration cap or frozen stretches (>1s with no frames arriving). Every dispatched mouse move and click is composited into the video as a pointer marker and click flash, drawn during encoding rather than injected into the recorded page. Requires `ffmpeg` on `PATH` — `browser_record_start` fails with an install hint if it's missing. Output directory defaults to `~/.pi/browser-harness/recordings/`, overridable via `PI_BROWSER_RECORDINGS_DIR`.
+
 ### Fixed
 
 - **`--browser-debug-clicks` now does something.** The flag was registered and documented but never read; the only working switch was the undocumented `BH_DEBUG_CLICKS` environment variable. Both now drive the same setting.

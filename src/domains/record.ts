@@ -50,7 +50,14 @@ export const recordStartTool = defineBrowserTool({
     if (!sinkResult.success) return sinkResult;
 
     const started = await client.session().startRecording(sinkResult.data);
-    if (!started.success) return err(cdpErrToToolErr(started.error, "Page.startScreencast"));
+    if (!started.success) {
+      // startRecording already cleared the session's recording slot on this path, so the sink is
+      // unreachable from anywhere else — without this, its ffmpeg child and (if parked) its
+      // off-screen window would be orphaned. The CDP error is what the caller needs to see, so a
+      // finalize failure here is swallowed rather than replacing it.
+      await sinkResult.data.finalize("stopped");
+      return err(cdpErrToToolErr(started.error, "Page.startScreencast"));
+    }
 
     const windowNote = sinkResult.data.parked
       ? " The window has been parked off-screen for the duration and will be restored on stop."

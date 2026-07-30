@@ -170,6 +170,8 @@ Both run in isolated tabs and never disturb your current page.
 | `browser_download` | Set the download directory and suppress the save-as prompt. |
 | `browser_print_to_pdf` | Print the page to PDF via `Page.printToPDF`. |
 | `browser_viewport_resize` | Override viewport size and device pixel ratio for responsive checks. |
+| `browser_record_start` | Start recording the current tab to an MP4, following the agent across tab switches. Parks the window off-screen for the duration and restores it on stop. |
+| `browser_record_stop` | Finalize the recording and return its file path, duration, and size. |
 
 ### Escape hatches
 

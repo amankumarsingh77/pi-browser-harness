@@ -401,6 +401,38 @@ describe("browser_record_start / browser_record_stop", () => {
     assert.equal(fake.callsTo("Browser.setWindowBounds").length, 0, "no restore attempted");
   });
 
+  test("S26: a failed screencast subscribe releases the sink it already spawned", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: {
+        "Page.startScreencast": [err(cdpError("invalid_response", "screencast rejected by target")), ok({})],
+        "Browser.getWindowBounds": ok({ bounds: ORIGINAL_BOUNDS }),
+        "Browser.setWindowBounds": ok({}),
+      },
+    });
+    const r = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(r.success, false);
+    if (r.success) return;
+    assert.equal(r.error.kind, "cdp_error");
+    assert.match(r.error.message, /screencast rejected by target/);
+
+    // No sink is left reachable — a later start is not blocked by the one that failed.
+    assert.equal(fake.session.activeRecording(), null);
+
+    // The window was parked before the failure and must have been put back, not left off-screen.
+    const boundsCalls = fake.callsTo("Browser.setWindowBounds");
+    assert.equal(boundsCalls.length, 2, "park then restore");
+    const restoreBounds = boundsCalls[1]?.params["bounds"] as Record<string, unknown>;
+    assert.equal(restoreBounds["left"], ORIGINAL_BOUNDS.left);
+    assert.equal(restoreBounds["top"], ORIGINAL_BOUNDS.top);
+
+    // The ffmpeg process that createRecordingSink spawned was closed rather than orphaned — a
+    // second start (a fresh sink, fresh ffmpeg) must be free to proceed immediately.
+    const second = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(second.success, true);
+    if (second.success) await recordStopTool.handler({}, ctxFor(fake));
+  });
+
   test("S13: switching tabs continues the same recording, driven end-to-end through the tools", async () => {
     freshDir();
     const fake = await createFakeClient({
