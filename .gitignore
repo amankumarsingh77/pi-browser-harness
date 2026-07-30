@@ -11,6 +11,4 @@ scripts/*
 !scripts/boundary-allowlist.ts
 data/
 .worktrees/
-.harness/*
-!.harness/knowledge/
-!.harness/README.md
+.harness/
