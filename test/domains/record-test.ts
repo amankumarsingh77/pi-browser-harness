@@ -214,6 +214,25 @@ describe("browser_record_start / browser_record_stop", () => {
     assert.match(stopped.error.message, /ffmpeg|encoder/i);
   });
 
+  test("S27: ffmpeg exiting non-zero on its own — no stdin/process error — still surfaces at stop", async () => {
+    freshDir();
+    const fake = await createFakeClient({
+      canned: { "Page.startScreencast": ok({}), "Page.stopScreencast": ok({}) },
+    });
+    const started = await recordStartTool.handler({}, ctxFor(fake));
+    assert.equal(started.success, true);
+
+    // No frames emitted: stdin closes cleanly (no EPIPE, no `child`/`child.stdin` error event) but
+    // ffmpeg's own muxer refuses to finalize a stream-less output and exits non-zero on its own —
+    // the bare `code !== 0` half of the check, unreachable through S23's read-only-directory route.
+    await flush();
+    const stopped = await recordStopTool.handler({}, ctxFor(fake));
+    assert.equal(stopped.success, false);
+    if (stopped.success) return;
+    assert.equal(stopped.error.kind, "io_error");
+    assert.match(stopped.error.message, /ffmpeg exited with code/);
+  });
+
   test("S24: a missing recordings directory is created, not fatal", async () => {
     const base = mkdtempSync(join(tmpdir(), "pi-record-test-"));
     tmpDirs.push(base);
