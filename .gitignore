@@ -5,6 +5,7 @@ benchmark/
 .DS_Store
 *.log
 docs/
+.rpiv/
 scripts/*
 !scripts/check-boundaries.ts
 !scripts/boundary-allowlist.ts
