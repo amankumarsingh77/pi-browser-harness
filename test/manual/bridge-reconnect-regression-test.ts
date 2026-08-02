@@ -37,7 +37,7 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 const waitFor = async (
   predicate: () => boolean,
-  label: string,
+  _label: string,
   timeoutMs = 120,
   intervalMs = 2,
 ): Promise<boolean> => {
@@ -46,7 +46,6 @@ const waitFor = async (
     if (predicate()) return true;
     await sleep(intervalMs);
   }
-  check(false, `timed out: ${label}`);
   return false;
 };
 
@@ -164,7 +163,7 @@ const testConstructorFailureSettlesAttempt = async (): Promise<void> => {
   });
 
   await bridge.start();
-  await waitFor(() => settled, "constructor failure path calls settlement callback", 50);
+  check(await waitFor(() => settled, "constructor failure path calls settlement callback", 50), "constructor failure path calls settlement callback");
 };
 
 // --- Test 2: bounded discovery is required for unresolved discoverWsUrl ----
@@ -274,6 +273,7 @@ const testStopRejectsPendingRequestCallbacks = async (): Promise<void> => {
 
   await bridge.start();
   const initial = await waitFor(() => sockets.length === 1, "socket created for stop test", 50);
+  check(initial, "socket created for stop test");
   if (!initial) {
     await bridge.stop();
     return;
@@ -310,7 +310,7 @@ const testStopRejectsPendingRequestCallbacks = async (): Promise<void> => {
 // --- Test 5: stale failure attempt cannot resurrect bridge ----------------
 
 const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
-  const runTimeoutCase = async (): Promise<void> => {
+  const runStaleClosedSocketCase = async (): Promise<void> => {
     const sockets: FakeWebSocket[] = [];
     const responses: SendResult[] = [];
     const urls = ["ws://timedout-attempt.invalid:9222", "ws://retry-attempt.invalid:9222"];
@@ -330,8 +330,8 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     });
 
     await bridge.start();
-    check(await waitFor(() => sockets.length >= 1, "timed out attempt socket is created", 50), "timeout test creates first socket");
-    const first = withSocket(sockets, 0, "timed-out first socket exists");
+    check(await waitFor(() => sockets.length >= 1, "stale closed socket attempt creates first socket", 50), "stale closed socket attempt creates first socket");
+    const first = withSocket(sockets, 0, "first stale socket exists");
     if (!first) {
       await bridge.stop();
       return;
@@ -339,11 +339,11 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
     first.open();
     first.close();
-    check(await waitFor(() => settled >= 1, "timed-out attempt settles", 80), "timed-out attempt settles");
-    check(!bridge.isAlive(), "stale timed-out open does not resurrect bridge");
+    check(await waitFor(() => settled >= 1, "stale closed socket attempt settles", 80), "stale closed socket attempt settles");
+    check(!bridge.isAlive(), "stale closed socket does not resurrect bridge");
 
     await bridge.start();
-    check(await waitFor(() => sockets.length >= 2, "retry socket is created", 80), "retry socket is created");
+    check(await waitFor(() => sockets.length >= 2, "retry socket is created after stale close", 80), "retry socket is created after stale close");
     const second = withSocket(sockets, 1, "second socket exists after retry");
     if (!second) {
       await bridge.stop();
@@ -351,7 +351,7 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     }
 
     second.open();
-    check(await waitFor(() => bridge.isAlive(), "bridge reconnects after timeout", 80), "bridge reconnects after timeout");
+    check(await waitFor(() => bridge.isAlive(), "bridge reconnects after stale close", 80), "bridge reconnects after stale close");
 
     await bridge.handleRequest(
       { type: "request", id: 10, method: "Runtime.enable", params: {} },
@@ -371,7 +371,7 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     }
 
     first.message(JSON.stringify({ id: secondChromeId, result: { late: true } }));
-    check(!responses.some((msg) => msg.id === 10), "timed-out stale socket cannot resolve live callback");
+    check(!responses.some((msg) => msg.id === 10), "stale closed socket cannot resolve live callback");
 
     second.message(JSON.stringify({ id: secondChromeId, result: { ok: true } }));
     check(
@@ -463,7 +463,7 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
     await bridge.stop();
   };
 
-  await runTimeoutCase();
+  await runStaleClosedSocketCase();
   await runErrorCase();
 };
 
