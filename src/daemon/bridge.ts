@@ -446,7 +446,8 @@ export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge 
     clientId: string,
     send: SendToClient,
   ): Promise<void> => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    let activeSocket = ws;
+    if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
       // Connection attempts happen only in response to explicit browser work.
       tryConnect();
       const ready = await waitForConnection();
@@ -458,6 +459,16 @@ export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge 
         });
         return;
       }
+    }
+
+    activeSocket = ws;
+    if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+      send(clientId, {
+        type: "response",
+        id: req.id,
+        error: { code: -32000, message: "Chrome not connected" },
+      });
+      return;
     }
 
     const isDetach = req.method === "Target.detachFromTarget";
@@ -488,7 +499,7 @@ export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge 
     if (req.sessionId) payload["sessionId"] = req.sessionId;
 
     try {
-      ws.send(JSON.stringify(payload));
+      activeSocket.send(JSON.stringify(payload));
     } catch (e) {
       mux.take(daemonId);
       generations.delete(daemonId);
