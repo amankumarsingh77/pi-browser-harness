@@ -1,10 +1,11 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import { Type } from "typebox";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "typebox";
-import { daemonSocketMayExist } from "../../src/daemon/spawn";
+import { daemonSocketMayExist, daemonSpawnCommand } from "../../src/daemon/spawn";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
 import { ok } from "../../src/util/result";
@@ -29,6 +30,28 @@ describe("daemon socket presence check", () => {
   test("darwin uses the filesystem like linux", async () => {
     assert.equal(await daemonSocketMayExist("darwin", MISSING_SOCKET), false);
     assert.equal(await daemonSocketMayExist("darwin", thisFile), true);
+  });
+});
+
+describe("daemon spawn command", () => {
+  test("the daemon runs on this process's node, not a shell", () => {
+    const spec = daemonSpawnCommand();
+    assert.notEqual(spec, null);
+    assert.equal(spec?.command, process.execPath);
+  });
+
+  test("the resolved tsx CLI is a real file on disk", () => {
+    const cli = daemonSpawnCommand()?.args[0];
+    assert.equal(typeof cli, "string");
+    // A hoisted install puts tsx beside the package, so a `<pkg>/node_modules/.bin` guess would miss it.
+    assert.equal(existsSync(String(cli)), true, `tsx CLI not found at ${String(cli)}`);
+    assert.match(String(cli), /cli\.mjs$/);
+  });
+
+  test("the daemon entrypoint is passed to tsx", () => {
+    const script = daemonSpawnCommand()?.args[1];
+    assert.match(String(script), /[\\/]daemon[\\/]index\.ts$/);
+    assert.equal(existsSync(String(script)), true);
   });
 });
 

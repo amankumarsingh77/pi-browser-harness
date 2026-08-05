@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve, isAbsolute } from "node:path";
+import { isPathWithin } from "../util/paths";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { Type } from "typebox";
@@ -121,10 +122,7 @@ const allowedRoots = (): ReadonlyArray<string> => {
   return [tmpdir(), process.cwd(), ...(env !== undefined ? [env] : [])].map((d) => resolve(d));
 };
 
-const isPathAllowed = (p: string): boolean => {
-  const abs = resolve(p);
-  return allowedRoots().some((root) => abs === root || abs.startsWith(`${root}/`));
-};
+const isPathAllowed = (p: string): boolean => allowedRoots().some((root) => isPathWithin(root, p));
 
 const MAX_SOURCE_BYTES = 1_000_000;
 
