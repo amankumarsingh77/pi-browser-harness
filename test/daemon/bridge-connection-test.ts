@@ -4,12 +4,12 @@
  * Covers remaining lifecycle regressions after PR #18:
  *  1. discovery must be bounded by `connectTimeoutMs`
  *  2. handleRequest should stop waiting as soon as the active attempt settles
- *  3. stop() must resolve pending callbacks before clearing state
+ *  3. stop() and a dropped connection must resolve pending callbacks
  *  4. constructor and stale-generation cleanup still must reject old callbacks
- *
- * Run: npx tsx test/manual/bridge-reconnect-regression-test.ts
  */
 
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { WireRequest, WireResponse } from "../../src/daemon/protocol";
 import type { CdpError } from "../../src/cdp/errors";
@@ -21,16 +21,8 @@ type ParsedSend = { id?: number; method?: string };
 type Discover = () => Promise<Result<string, CdpError>>;
 type SendResult = WireResponse;
 
-let passed = 0;
-let failed = 0;
 const check = (cond: boolean, label: string): void => {
-  if (cond) {
-    passed++;
-    console.log(`  ✓ ${label}`);
-  } else {
-    failed++;
-    console.error(`  ✗ ${label}`);
-  }
+  assert.ok(cond, label);
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -307,7 +299,59 @@ const testStopRejectsPendingRequestCallbacks = async (): Promise<void> => {
   );
 };
 
-// --- Test 5: stale failure attempt cannot resurrect bridge ----------------
+// --- Test 5: an established connection dropping rejects its in-flight requests ---
+
+const testDropRejectsInFlightRequests = async (): Promise<void> => {
+  const sockets: FakeWebSocket[] = [];
+  const responses: SendResult[] = [];
+
+  const bridge = createCdpBridge({
+    connectTimeoutMs: 60,
+    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
+      success: true,
+      data: "ws://drop-inflight.invalid:9222",
+    }),
+    createWebSocket: (url: string): WebSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket as unknown as WebSocket;
+    },
+  });
+
+  await bridge.start();
+  check(await waitFor(() => sockets.length === 1, "drop test socket created", 50), "drop test socket created");
+  const socket = withSocket(sockets, 0, "drop test socket exists");
+  if (!socket) {
+    await bridge.stop();
+    return;
+  }
+
+  socket.open();
+  const req: WireRequest = { type: "request", id: 41, method: "Runtime.enable", params: {} };
+  await bridge.handleRequest(req, "client-drop", (_clientId, msg) => {
+    if (msg.type === "response") {
+      responses.push(msg);
+    }
+  });
+  check(requestIdByMethod(socket, "Runtime.enable") !== null, "drop test request is in flight");
+  check(responses.length === 0, "drop test request has no response yet");
+
+  // The attempt already settled when the socket opened, so the close path must reject
+  // its callbacks itself rather than leaving them to the 10s command timeout.
+  socket.close();
+  check(
+    await waitFor(
+      () => responses.some((msg) => msg.id === 41 && msg.error?.message === "Chrome disconnected"),
+      "in-flight request rejected on drop",
+      120,
+    ),
+    "a dropped connection rejects its in-flight requests immediately",
+  );
+
+  await bridge.stop();
+};
+
+// --- Test 6: stale failure attempt cannot resurrect bridge ----------------
 
 const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
   const runStaleClosedSocketCase = async (): Promise<void> => {
@@ -467,7 +511,7 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
   await runErrorCase();
 };
 
-// --- Test 6: old-generation close should not affect newer callback ----------
+// --- Test 7: old-generation close should not affect newer callback ----------
 
 const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> => {
   const sockets: FakeWebSocket[] = [];
@@ -561,21 +605,12 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
   await bridge.stop();
 };
 
-async function main(): Promise<void> {
-  console.log("bridge connection regression tests\n");
-
-  await testConstructorFailureSettlesAttempt();
-  await testUnresolvedDiscoveryIsBounded();
-  await testHandleRequestStopsPollingAfterFailedAttempt();
-  await testStopRejectsPendingRequestCallbacks();
-  await testStaleFailureAttemptCannotResurrect();
-  await testOldGenerationCloseDoesNotAffectNewCallbacks();
-
-  console.log(`\n${passed} passed, ${failed} failed`);
-  process.exit(failed === 0 ? 0 : 1);
-}
-
-main().catch((err) => {
-  console.error("bridge regression test failed:", err);
-  process.exit(1);
+describe("cdp bridge connection lifecycle", () => {
+  test("a WebSocket constructor failure settles the attempt", testConstructorFailureSettlesAttempt);
+  test("an unresolved discovery is bounded by the connect timeout", testUnresolvedDiscoveryIsBounded);
+  test("handleRequest stops waiting once the attempt fails", testHandleRequestStopsPollingAfterFailedAttempt);
+  test("stop() rejects pending request callbacks", testStopRejectsPendingRequestCallbacks);
+  test("a dropped connection rejects its in-flight requests", testDropRejectsInFlightRequests);
+  test("a stale failed attempt cannot resurrect the bridge", testStaleFailureAttemptCannotResurrect);
+  test("an old-generation close leaves new-generation callbacks alone", testOldGenerationCloseDoesNotAffectNewCallbacks);
 });

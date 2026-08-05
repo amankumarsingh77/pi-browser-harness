@@ -299,6 +299,9 @@ export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge 
         if (ws === sock) ws = null;
         wsUrl = null;
         connecting = false;
+        // Not via settleAttempt: a connection that opened already settled its attempt, so
+        // its requests would otherwise hang to the command timeout instead of failing now.
+        rejectAttemptCallbacks(generation);
         if (notifyClose) closeHandler?.();
         settleAttempt();
       };
