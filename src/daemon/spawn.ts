@@ -1,12 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access, unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
 import { DAEMON_SOCKET_PATH, serialize, type WireControl } from "./protocol";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
+
+const requireFromHere = createRequire(import.meta.url);
 
 const isWindows = process.platform === "win32";
 
@@ -78,26 +80,28 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
   });
 };
 
-export const spawnDaemon = (): ChildProcess | null => {
+// Node's own resolver, not a guessed `node_modules/.bin` path: pi installs every extension into
+// one flat, hoisted tree, so tsx lands beside the package rather than inside it and a fixed
+// `<pkg>/node_modules/.bin/tsx` lookup always misses. Resolving the CLI entry also means no shell,
+// so the Windows `.cmd` shim and its argument quoting are gone with it.
+export const daemonSpawnCommand = (): { readonly command: string; readonly args: ReadonlyArray<string> } | null => {
   const daemonScript = join(moduleDir, "index.ts");
+  try {
+    return { command: process.execPath, args: [requireFromHere.resolve("tsx/cli"), daemonScript] };
+  } catch {
+    return null;
+  }
+};
 
-  // Windows npm binaries are `.cmd` shims, which only launch through a shell — spawning one directly yields EINVAL.
-  const tsxBinBase = join(moduleDir, "..", "..", "node_modules", ".bin", "tsx");
-  const tsxBin = isWindows ? `${tsxBinBase}.cmd` : tsxBinBase;
-  const hasLocalTsx = existsSync(tsxBin);
+export const spawnDaemon = (): ChildProcess | null => {
+  const spec = daemonSpawnCommand();
+  if (!spec) return null;
 
-  const cmd = hasLocalTsx ? tsxBin : isWindows ? "npx.cmd" : "npx";
-  const args = hasLocalTsx ? [daemonScript] : ["tsx", daemonScript];
-
-  // With shell: true Node passes the command line verbatim, so a path containing spaces must be quoted or it splits into tokens.
-  const quote = (s: string): string => (isWindows ? `"${s}"` : s);
-
-  const child = spawn(quote(cmd), args.map(quote), {
+  const child = spawn(spec.command, [...spec.args], {
     detached: true,
     stdio: "ignore",
     env: { ...process.env },
-    shell: isWindows,
-    windowsVerbatimArguments: isWindows,
+    windowsHide: true,
   });
 
   child.unref();

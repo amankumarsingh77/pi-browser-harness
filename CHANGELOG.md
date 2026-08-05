@@ -7,6 +7,8 @@ All notable changes to pi-browser-harness will be documented in this file.
 ### Fixed
 
 - **Chrome remote-debugging consent is no longer retriggered indefinitely in the background.** A cancelled, failed, or disconnected CDP connection now remains disconnected until the next explicit browser request, which makes one on-demand connection attempt instead of running an unbounded retry loop that can repeatedly interrupt normal browsing.
+- **`browser_run_script` accepts paths on Windows again.** The allowed-directory check compared against a hardcoded `/` separator, so every backslash path — including files inside `os.tmpdir()`, which the rejection message itself listed as allowed — was refused. Containment is now decided by `path.relative`, which carries each platform's own separator and case rules.
+- **The daemon starts from a production install.** `tsx` is needed to run the daemon but was declared only as a dev dependency, so `browser_setup` reported `Could not start the browser daemon` under `npm omit=dev`. It is now a runtime dependency, and the daemon is launched via the CLI entry that Node's resolver finds — a fixed `node_modules/.bin` path does not exist in a hoisted install, which is how pi lays extensions out.
 
 ## 0.11.0 — 2026-08-02
 
