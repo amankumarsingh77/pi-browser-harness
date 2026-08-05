@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Chrome remote-debugging consent is no longer retriggered indefinitely in the background.** A cancelled, failed, or disconnected CDP connection now remains disconnected until the next explicit browser request, which makes one on-demand connection attempt instead of running an unbounded retry loop that can repeatedly interrupt normal browsing.
+
 ## 0.11.0 — 2026-08-02
 
 ### Fixed

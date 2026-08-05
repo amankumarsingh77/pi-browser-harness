@@ -5,6 +5,8 @@ import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
 import { CDP_CONNECT_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS } from "./protocol";
 import { asString, isRecord } from "../util/guards";
+import type { CdpError } from "../cdp/errors";
+import type { Result } from "../util/result";
 
 export type SendToClient = (clientId: string, msg: WireResponse | WireEvent) => void;
 
@@ -117,9 +119,22 @@ export const createEventRouter = (): EventRouter => {
   };
 };
 
-const CONNECT_WAIT_MS = 15_000;
+type CdpBridgeDependencies = {
+  discoverWsUrl?: () => Promise<Result<string, CdpError>>;
+  createWebSocket?: (url: string) => WebSocket;
+  connectTimeoutMs?: number;
+  onAttemptSettled?: () => void;
+};
 
-export const createCdpBridge = (): CdpBridge => {
+export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge => {
+  const {
+    discoverWsUrl: discoverWsUrlImpl = discoverWsUrl,
+    createWebSocket: createWebSocketImpl = (url: string): WebSocket =>
+      new WebSocket(url, { perMessageDeflate: false }),
+    connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
+    onAttemptSettled,
+  } = options;
+
   let ws: WebSocket | null = null;
   let wsUrl: string | null = null;
   const mux = createIdMultiplexer();
@@ -127,23 +142,15 @@ export const createCdpBridge = (): CdpBridge => {
   let eventHandler: EventHandler | null = null;
   let closeHandler: CloseHandler | null = null;
 
-  const connectedWaiters: Array<() => void> = [];
-  const signalConnected = (): void => {
-    for (const w of connectedWaiters.splice(0)) w();
-  };
+  // daemonId -> { generation, clientId }: lets a failed attempt reject only its own
+  // in-flight requests, and a gone client's entries be dropped without late answers.
+  const generations = new Map<number, { generation: number; clientId: string }>();
 
-  const waitForConnection = (timeoutMs: number): Promise<void> =>
-    new Promise((resolve) => {
-      let settled = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(finish, timeoutMs);
-      connectedWaiters.push(finish);
-    });
+  let stopped = false;
+  let connecting = false;
+  let attemptGeneration = 0;
+  let activeAttempt = 0;
+  let activeSocket: WebSocket | null = null;
 
   const onChromeMessage = (raw: string): void => {
     let parsed: unknown;
@@ -152,6 +159,7 @@ export const createCdpBridge = (): CdpBridge => {
     const msg: CdpRawMessage = parsed;
 
     if (msg.id !== undefined) {
+      generations.delete(msg.id);
       const cb = mux.take(msg.id);
       if (!cb) return;
       const localId = cb.localId;
@@ -195,98 +203,215 @@ export const createCdpBridge = (): CdpBridge => {
     }
   };
 
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let reconnectAttempt = 0;
-  let stopped = false;
+  const rejectCallbacksWhere = (
+    pred: (info: { generation: number; clientId: string }) => boolean,
+  ): void => {
+    for (const [daemonId, info] of generations) {
+      if (!pred(info)) continue;
+      generations.delete(daemonId);
+      const cb = mux.take(daemonId);
+      if (!cb) continue;
+      cb.send(cb.clientId, {
+        type: "response",
+        id: cb.localId,
+        error: { code: -32000, message: "Chrome disconnected" },
+      });
+    }
+  };
 
+  const rejectAttemptCallbacks = (generation: number): void => {
+    rejectCallbacksWhere((info) => info.generation === generation);
+  };
+
+  const rejectAllPendingCallbacks = (): void => {
+    rejectCallbacksWhere(() => true);
+  };
+
+  const closeSocket = (socket: WebSocket): void => {
+    try {
+      socket.close();
+    } catch {}
+  };
+
+  const isCurrentAttempt = (generation: number): boolean =>
+    generation === activeAttempt && !stopped;
+
+  const isCurrentAttemptSocket = (generation: number, socket: WebSocket): boolean =>
+    isCurrentAttempt(generation) && activeSocket === socket;
+
+  const clearActiveAttempt = (generation: number): void => {
+    if (activeAttempt === generation) {
+      activeAttempt = 0;
+      activeSocket = null;
+    }
+  };
+
+  // On-demand Chrome connection. Attempts happen only from start() and from
+  // handleRequest() while disconnected; a failed or disconnected bridge stays
+  // disconnected until the next explicit browser demand. No background retry loop.
   const tryConnect = (): void => {
-    if (stopped) return;
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+    if (stopped || connecting || (ws && ws.readyState === WebSocket.OPEN)) return;
+
+    const generation = ++attemptGeneration;
+    activeAttempt = generation;
+    connecting = true;
 
     const attempt = async (): Promise<void> => {
-      if (ws && ws.readyState === WebSocket.OPEN) return;
+      let settled = false;
+      let sock: WebSocket | null = null;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      let settleAttempt: () => void = () => {};
 
-      const cachedUrl = wsUrl;
-      let url: string;
-      if (cachedUrl === null || cachedUrl === "" || reconnectAttempt > 0) {
-        const d = await discoverWsUrl();
-        if (!d.success) { scheduleRetry(); return; }
-        url = d.data;
-        wsUrl = url;
-      } else {
-        url = cachedUrl;
-      }
-
-      const settledPromise = new Promise<void>((settle) => {
-        let settled = false;
-        const settleOnce = (): void => {
+      const settledPromise = new Promise<void>((resolve) => {
+        settleAttempt = (): void => {
           if (settled) return;
           settled = true;
-          settle();
+          if (timeout) {
+            clearTimeout(timeout);
+            timeout = null;
+          }
+          if (generation === activeAttempt && !stopped) {
+            wsUrl = null;
+            connecting = false;
+          }
+          rejectAttemptCallbacks(generation);
+          onAttemptSettled?.();
+          resolve();
         };
+      });
 
-        let sock: WebSocket;
-        try {
-          sock = new WebSocket(url, { perMessageDeflate: false });
-        } catch {
-          scheduleRetry();
+      const clearAttemptTimeout = (): void => {
+        if (timeout) {
+          clearTimeout(timeout);
+          timeout = null;
+        }
+      };
+
+      const failCurrentAttempt = (notifyClose: boolean): void => {
+        clearAttemptTimeout();
+        const isCurrent = isCurrentAttempt(generation);
+        if (!isCurrent) {
+          rejectAttemptCallbacks(generation);
           return;
         }
 
-        const timer = setTimeout(() => {
-          sock.close();
-          settleOnce();
-        }, CDP_CONNECT_TIMEOUT_MS);
+        clearActiveAttempt(generation);
+        if (ws === sock) ws = null;
+        wsUrl = null;
+        connecting = false;
+        // Not via settleAttempt: a connection that opened already settled its attempt, so
+        // its requests would otherwise hang to the command timeout instead of failing now.
+        rejectAttemptCallbacks(generation);
+        if (notifyClose) closeHandler?.();
+        settleAttempt();
+      };
 
-        sock.on("open", () => {
-          clearTimeout(timer);
-          ws = sock;
-          reconnectAttempt = 0;
-          ws.send(JSON.stringify({ id: 0, method: "Target.setDiscoverTargets", params: { discover: true } }));
-          console.log("[pi-browser-daemon] Connected to Chrome ✓");
-          signalConnected();
-          settleOnce();
-        });
+      timeout = setTimeout(() => {
+        if (!isCurrentAttempt(generation) || stopped) {
+          failCurrentAttempt(false);
+          return;
+        }
 
-        sock.on("message", (data: WebSocket.Data) => {
-          onChromeMessage(typeof data === "string" ? data : data.toString());
-        });
+        if (sock && sock.readyState !== WebSocket.CLOSED) {
+          closeSocket(sock);
+        }
+        failCurrentAttempt(true);
+      }, connectTimeoutMs);
 
-        sock.on("error", () => {
-          clearTimeout(timer);
-          settleOnce();
-        });
-
-        sock.on("close", () => {
-          clearTimeout(timer);
-          ws = null;
-          for (const cb of mux.takeAll()) {
-            cb.send(cb.clientId, {
-              type: "response",
-              id: cb.localId,
-              error: { code: -32000, message: "Chrome disconnected" },
-            });
-          }
-          closeHandler?.();
-          scheduleRetry();
-        });
-      });
-
-      await settledPromise;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        scheduleRetry();
+      let url = wsUrl;
+      if (!url) {
+        const d = await discoverWsUrlImpl();
+        if (!isCurrentAttempt(generation) || stopped) {
+          failCurrentAttempt(false);
+          return;
+        }
+        if (!d.success) {
+          failCurrentAttempt(false);
+          return;
+        }
+        url = d.data;
       }
+
+      if (!isCurrentAttempt(generation) || stopped) {
+        failCurrentAttempt(false);
+        return;
+      }
+
+      try {
+        sock = createWebSocketImpl(url);
+      } catch {
+        failCurrentAttempt(false);
+        return;
+      }
+
+      if (!isCurrentAttempt(generation) || stopped) {
+        closeSocket(sock);
+        failCurrentAttempt(false);
+        return;
+      }
+
+      wsUrl = url;
+      activeSocket = sock;
+
+      const onOpen = (): void => {
+        if (!sock || !isCurrentAttemptSocket(generation, sock)) {
+          clearAttemptTimeout();
+          if (sock && sock.readyState !== WebSocket.CLOSED) {
+            closeSocket(sock);
+          }
+          failCurrentAttempt(false);
+          return;
+        }
+
+        clearAttemptTimeout();
+        ws = sock;
+        try {
+          ws.send(JSON.stringify({ id: 0, method: "Target.setDiscoverTargets", params: { discover: true } }));
+        } catch {
+          failCurrentAttempt(true);
+          if (sock.readyState !== WebSocket.CLOSED) {
+            closeSocket(sock);
+          }
+          return;
+        }
+        console.log("[pi-browser-daemon] Connected to Chrome ✓");
+        settleAttempt();
+      };
+
+      const onMessage = (data: WebSocket.Data): void => {
+        if (!sock || !isCurrentAttemptSocket(generation, sock)) return;
+        onChromeMessage(typeof data === "string" ? data : data.toString());
+      };
+
+      const onError = (): void => {
+        clearAttemptTimeout();
+        const notifyClose = !!sock && isCurrentAttemptSocket(generation, sock);
+        failCurrentAttempt(notifyClose);
+        if (sock && sock.readyState !== WebSocket.CLOSED) {
+          closeSocket(sock);
+        }
+      };
+
+      const onClose = (): void => {
+        clearAttemptTimeout();
+        const notifyClose = !!sock && isCurrentAttemptSocket(generation, sock);
+        failCurrentAttempt(notifyClose);
+      };
+
+      sock.on("open", onOpen);
+      sock.on("message", onMessage);
+      sock.on("error", onError);
+      sock.on("close", onClose);
+
+      // The promise must always settle even on constructor errors.
+      await settledPromise;
     };
 
-    attempt().catch(() => scheduleRetry());
-  };
-
-  const scheduleRetry = (): void => {
-    if (stopped) return;
-    const delay = Math.min(1000 * Math.pow(2, Math.min(reconnectAttempt, 6)), 60_000);
-    reconnectAttempt++;
-    wsUrl = null;
-    reconnectTimer = setTimeout(tryConnect, delay);
+    attempt().catch(() => {
+      if (isCurrentAttempt(generation)) {
+        connecting = false;
+      }
+    });
   };
 
   const start = async (): Promise<void> => {
@@ -296,11 +421,27 @@ export const createCdpBridge = (): CdpBridge => {
 
   const stop = async (): Promise<void> => {
     stopped = true;
-    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-    mux.takeAll();
-    signalConnected();
-    if (ws) { try { ws.close(1000, "Shutdown"); } catch {} ws = null; }
+    attemptGeneration += 1;
+    activeAttempt = 0;
+    activeSocket = null;
+    connecting = false;
+    rejectAllPendingCallbacks();
+    if (ws) {
+      try {
+        ws.close(1000, "Shutdown");
+      } catch {}
+      ws = null;
+    }
     wsUrl = null;
+  };
+
+  const waitForConnection = async (): Promise<boolean> => {
+    const deadline = Date.now() + connectTimeoutMs;
+    while (connecting && Date.now() < deadline) {
+      if (ws && ws.readyState === WebSocket.OPEN) return true;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    return ws !== null && ws.readyState === WebSocket.OPEN;
   };
 
   const handleRequest = async (
@@ -308,10 +449,23 @@ export const createCdpBridge = (): CdpBridge => {
     clientId: string,
     send: SendToClient,
   ): Promise<void> => {
-    // Every queued request awaits the same connect signal rather than each spinning its own poll loop.
-    if (!ws || ws.readyState !== WebSocket.OPEN) await waitForConnection(CONNECT_WAIT_MS);
+    let activeSocket = ws;
+    if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
+      // Connection attempts happen only in response to explicit browser work.
+      tryConnect();
+      const ready = await waitForConnection();
+      if (!ready) {
+        send(clientId, {
+          type: "response",
+          id: req.id,
+          error: { code: -32000, message: "Chrome not connected" },
+        });
+        return;
+      }
+    }
 
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    activeSocket = ws;
+    if (!activeSocket || activeSocket.readyState !== WebSocket.OPEN) {
       send(clientId, {
         type: "response",
         id: req.id,
@@ -323,11 +477,14 @@ export const createCdpBridge = (): CdpBridge => {
     const isDetach = req.method === "Target.detachFromTarget";
     if (isDetach && req.sessionId) router.release(req.sessionId);
 
+    const isAttach = req.method === "Target.attachToTarget";
+
     const daemonId = mux.allocate(
-      { clientId, localId: req.id, send, isAttach: req.method === "Target.attachToTarget" },
+      { clientId, localId: req.id, send, isAttach },
       (id) =>
         setTimeout(() => {
           mux.take(id);
+          generations.delete(id);
           send(clientId, {
             type: "response",
             id: req.id,
@@ -335,6 +492,7 @@ export const createCdpBridge = (): CdpBridge => {
           });
         }, CDP_COMMAND_TIMEOUT_MS),
     );
+    generations.set(daemonId, { generation: attemptGeneration, clientId });
 
     const payload: Record<string, unknown> = {
       id: daemonId,
@@ -344,9 +502,10 @@ export const createCdpBridge = (): CdpBridge => {
     if (req.sessionId) payload["sessionId"] = req.sessionId;
 
     try {
-      ws.send(JSON.stringify(payload));
+      activeSocket.send(JSON.stringify(payload));
     } catch (e) {
       mux.take(daemonId);
+      generations.delete(daemonId);
       send(clientId, {
         type: "response",
         id: req.id,
@@ -361,7 +520,11 @@ export const createCdpBridge = (): CdpBridge => {
     handleRequest,
     isAlive: () => ws !== null && ws.readyState === WebSocket.OPEN,
     getSessionOwner: (sid) => router.getOwner(sid),
-    removeClient: (cid) => { mux.clearClient(cid); router.removeClient(cid); },
+    removeClient: (cid) => {
+      rejectCallbacksWhere((info) => info.clientId === cid);
+      mux.clearClient(cid);
+      router.removeClient(cid);
+    },
     onEvent: (h) => { eventHandler = h; },
     onClose: (h) => { closeHandler = h; },
   };
