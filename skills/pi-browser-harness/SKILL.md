@@ -21,6 +21,9 @@ What do you need to know?
   ├─ Network behavior on the current page?
   │     → browser_network_requests
   │
+  ├─ A page requires custom request headers?
+  │     → create/select owned tab → browser_set_headers → navigate/interact → browser_clear_headers
+  │
   ├─ Find pages on the web about a topic?
   │     → browser_web_search    (ranked SERP — links only; follow up with browser_read_page)
   │

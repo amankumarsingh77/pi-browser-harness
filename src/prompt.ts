@@ -41,6 +41,7 @@ every edit and save. Coordinates go stale; guessed selectors miss.
 | Read an article's clean text | \`browser_read_page\` (reader mode; url or owned tab) |
 | Extract specific DOM values | \`browser_execute_js\` |
 | Hit a JSON/API endpoint | \`browser_http_get\` (raw GET, outside the browser) |
+| Set or clear request headers on the current tab | \`browser_set_headers\` · \`browser_clear_headers\` |
 | Click / fill / type / select / focus / press a key | \`browser_click\` · \`browser_fill\` · \`browser_type\` · \`browser_select_option\` · \`browser_focus\` · \`browser_press_key\` |
 | Upload a file · drag · resize viewport | \`browser_upload_file\` · \`browser_drag_and_drop\` · \`browser_viewport_resize\` |
 | Go to a URL / open many / manage tabs | \`browser_navigate\` · \`browser_new_tab\` · \`browser_open_urls\` · \`browser_list_tabs\` · \`browser_switch_tab\` · \`browser_go_back\`/\`go_forward\`/\`reload\` |

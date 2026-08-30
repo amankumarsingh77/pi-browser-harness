@@ -161,6 +161,12 @@ Both run in isolated tabs and never disturb your current page.
 |---|---|
 | `browser_network_requests` | Requests captured on the current tab since attach. Filter by URL, method, status, resource type, or recency; optional response bodies. |
 | `browser_http_get` | Plain GET outside the browser. Much faster than navigate-then-read for JSON APIs — but no JS rendering. |
+| `browser_set_headers` | Set extra HTTP request headers on the current owned tab. Values are not echoed in output. |
+| `browser_clear_headers` | Clear extra HTTP request headers from the current owned tab. |
+
+Extra headers persist for subsequent document, subresource, fetch, and XHR requests until cleared or
+the tab closes. Create or select an owned tab before setting them, and clear them before switching
+tabs or navigating the tab to another origin.
 
 ### Files and viewport
 

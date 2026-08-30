@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **Per-tab extra HTTP request headers.** `browser_set_headers` applies headers to subsequent document, subresource, fetch, and XHR requests on the current owned tab through CDP, while `browser_clear_headers` removes them. Header values are not echoed in tool output, and guidance requires clearing them before switching tabs or navigating to another origin.
+
 ## 0.11.1 — 2026-08-12
 
 ### Fixed
