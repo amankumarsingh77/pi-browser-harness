@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { accessSync } from "node:fs";
 import { access, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -80,17 +81,57 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
   });
 };
 
-// Node's own resolver, not a guessed `node_modules/.bin` path: pi installs every extension into
-// one flat, hoisted tree, so tsx lands beside the package rather than inside it and a fixed
-// `<pkg>/node_modules/.bin/tsx` lookup always misses. Resolving the CLI entry also means no shell,
-// so the Windows `.cmd` shim and its argument quoting are gone with it.
+const resolveTsxCliFromFilesystem = (): string | null => {
+  let dir = moduleDir;
+
+  while (true) {
+    const candidate = join(dir, "node_modules", "tsx", "dist", "cli.mjs");
+    try {
+      accessSync(candidate);
+      return candidate;
+    } catch {
+      // Keep walking toward the filesystem root. This mirrors Node's node_modules lookup
+      // without relying on createRequire().resolve(), which is broken for external modules
+      // loaded through jiti/static inside a Bun-compiled executable such as pi.exe.
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+};
+
+const resolveTsxCli = (): string | null => {
+  try {
+    const resolved = requireFromHere.resolve("tsx/cli");
+    // A compiled runtime may theoretically return a virtual path that a separately spawned
+    // Node process cannot read. Only accept a resolver result that exists on the host FS.
+    accessSync(resolved);
+    return resolved;
+  } catch {
+    return resolveTsxCliFromFilesystem();
+  }
+};
+
+const daemonNodeExecutable = (): string => {
+  if (process.env.PI_BROWSER_NODE) return process.env.PI_BROWSER_NODE;
+
+  // Under normal Node keep the exact executable that launched pi/the extension. Under Bun,
+  // process.execPath is bun/pi.exe, not Node, so run the tsx CLI with the required Node runtime.
+  if ("bun" in process.versions) return isWindows ? "node.exe" : "node";
+
+  return process.execPath;
+};
+
 export const daemonSpawnCommand = (): { readonly command: string; readonly args: ReadonlyArray<string> } | null => {
   const daemonScript = join(moduleDir, "index.ts");
-  try {
-    return { command: process.execPath, args: [requireFromHere.resolve("tsx/cli"), daemonScript] };
-  } catch {
-    return null;
-  }
+  const tsxCli = resolveTsxCli();
+  if (!tsxCli) return null;
+
+  return {
+    command: daemonNodeExecutable(),
+    args: [tsxCli, daemonScript],
+  };
 };
 
 export const spawnDaemon = (): ChildProcess | null => {
