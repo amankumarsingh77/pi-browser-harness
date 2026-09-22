@@ -130,7 +130,7 @@ export const createCdpBridge = (options: CdpBridgeDependencies = {}): CdpBridge 
   const {
     discoverWsUrl: discoverWsUrlImpl = discoverWsUrl,
     createWebSocket: createWebSocketImpl = (url: string): WebSocket =>
-      new WebSocket(url, { perMessageDeflate: false }),
+      new WebSocket(url, { perMessageDeflate: false, origin: "http://localhost" }),
     connectTimeoutMs = CDP_CONNECT_TIMEOUT_MS,
     onAttemptSettled,
   } = options;

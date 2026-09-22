@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  parseDarwinProcessCandidate,
   parseUserDataDirFlag,
   rankBrowserCandidate,
   resolveBrowserExecutable,
@@ -14,6 +15,27 @@ import {
 describe("browser-process parsing and candidate ranking", () => {
   test("B1: bare value parsed", () => {
     assert.equal(parseUserDataDirFlag("/opt/google/chrome/chrome --user-data-dir=/tmp/x --foo"), "/tmp/x");
+  });
+
+  test("B1: macOS parser isolates the executable from flags containing another browser name", () => {
+    assert.deepEqual(
+      parseDarwinProcessCandidate(
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge --user-data-dir='/tmp/google chrome'",
+      ),
+      {
+        exePath: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        explicitUserDataDir: "/tmp/google chrome",
+      },
+    );
+  });
+
+  test("B1: macOS parser excludes child processes from arguments only", () => {
+    assert.equal(
+      parseDarwinProcessCandidate(
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --type=renderer",
+      ),
+      undefined,
+    );
   });
 
   test("B1: double-quoted value with spaces parsed", () => {

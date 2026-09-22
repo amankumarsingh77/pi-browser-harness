@@ -148,37 +148,49 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   return candidates;
 };
 
+export const parseDarwinProcessCandidate = (commandLine: string): BrowserCandidate | undefined => {
+  const lower = commandLine.toLowerCase();
+  const executableNameStart = lower.indexOf(".app/contents/macos/");
+  if (executableNameStart < 0) return undefined;
+
+  const start = executableNameStart + ".app/contents/macos/".length;
+  const matchedName = MAC_BROWSER_NAMES.find((browserName) => lower.startsWith(browserName, start));
+  if (!matchedName) return undefined;
+
+  const exePath = commandLine.slice(0, start + matchedName.length);
+  const args = commandLine.slice(exePath.length).trimStart();
+  if (isMacChildProcessName(exePath) || hasChildProcessType(args)) return undefined;
+
+  const explicit = parseUserDataDirFlag(args);
+  return {
+    exePath,
+    ...(explicit ? { explicitUserDataDir: explicit } : {}),
+  };
+};
+
 const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
-  let lines: string[];
-  try {
-    // BSD ps prints the full executable path for `comm`, unlike Linux.
-    const { stdout } = await run("ps", ["-A", "-ww", "-o", "pid=,comm="], { timeout: EXEC_TIMEOUT_MS });
-    lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
-
+  // /bin/ps is setuid on macOS, so sandboxed environments commonly reject it.
+  // pgrep is not setuid and provides the same live-process evidence we need.
   const candidates: BrowserCandidate[] = [];
-  for (const line of lines) {
-    const spaceAt = line.indexOf(" ");
-    if (spaceAt < 0) continue;
-    const pid = line.slice(0, spaceAt);
-    const comm = line.slice(spaceAt + 1).trim();
-    const lower = comm.toLowerCase();
-    if (!MAC_BROWSER_NAMES.some((name) => lower.includes(name))) continue;
-    if (isMacChildProcessName(comm)) continue;
-
-    let args = "";
+  const seenPids = new Set<string>();
+  for (const name of MAC_BROWSER_NAMES) {
+    let stdout: string;
     try {
-      const { stdout } = await run("ps", ["-ww", "-o", "args=", "-p", pid], { timeout: EXEC_TIMEOUT_MS });
-      args = stdout.trim();
-    } catch {}
-    if (args && hasChildProcessType(args)) continue;
-    const explicit = args ? parseUserDataDirFlag(args) : undefined;
-    candidates.push({
-      exePath: comm,
-      ...(explicit ? { explicitUserDataDir: explicit } : {}),
-    });
+      ({ stdout } = await run("pgrep", ["-ifl", name], { timeout: EXEC_TIMEOUT_MS }));
+    } catch {
+      continue;
+    }
+
+    for (const line of stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+      const match = /^(\d+)\s+(.+)$/.exec(line);
+      const pid = match?.[1];
+      const commandLine = match?.[2];
+      if (!pid || !commandLine || seenPids.has(pid)) continue;
+      const candidate = parseDarwinProcessCandidate(commandLine);
+      if (!candidate) continue;
+      seenPids.add(pid);
+      candidates.push(candidate);
+    }
   }
   return candidates;
 };
