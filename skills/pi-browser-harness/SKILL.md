@@ -76,6 +76,23 @@ it by opening tabs elsewhere — a different profile means different accounts.
 
 You're attached to the user's real Chrome — never launch your own. If auth is required, stop and ask the user. If `browser_page_info` returns a dialog, handle it first with `browser_handle_dialog`.
 
+## Downloads land in the user's context
+
+`browser_download` calls `Browser.setDownloadBehavior` with no `browserContextId`, which Chrome applies to its **default browser context** — the same one the user's own tabs are in. So the override redirects the user's manual downloads too, and it lives in Chrome rather than in this session: it survives the tab, the client and the daemon. Symptom the user reports: *"I download things in Chrome and nothing appears in Downloads."*
+
+Confirm it from Chrome's history rather than guessing. Substitute the profile directory the harness is pinned to (see `~/.pi/agent/browser-harness.json`; `Default` covers the common case, quote names containing spaces):
+
+```bash
+HIST="$HOME/Library/Application Support/Google/Chrome/Default/History"   # Linux: ~/.config/google-chrome/Default/History
+sqlite3 "$HIST" "select datetime(start_time/1000000-11644473600,'unixepoch','localtime') t,
+  case state when 1 then 'complete' when 0 then 'in progress' else 'other' end,
+  target_path from downloads order by start_time desc limit 15;"
+```
+
+Complete rows pointing at `/tmp/...` instead of `~/Downloads` are the override, not a macOS permission problem. It is undone at session shutdown; to undo it sooner call `browser_download({ restore: true })`, or send `Browser.setDownloadBehavior {behavior:"default"}` if the running harness predates that flag. Call `restore: true` as soon as you are done with a download path.
+
+`browser_run_script` is the same hazard: it runs in the harness process, so a script that sets download behavior and then throws partway leaves Chrome mutated. Reset it in a `finally`, not after the last line.
+
 ## Diagnosing a "nothing happened" moment
 
 When an action runs but the page didn't change, capture `browser_console`'s `nextCursor` *before* the action, take the action, then call `browser_console({ sinceSeq: <cursor> })` after — this isolates what your action caused from what was already there. Pair with `browser_network_requests({ sinceMs: 5000 })` to see if an API call fired and failed. The console buffer is page-scoped: it clears on tab switch, capacity 500.

@@ -7,6 +7,7 @@ import { readPin } from "./profile/store";
 import { type BrowserState, defaultState, persistState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
+import { restoreDownloadBehavior } from "./domains/files";
 import { createDaemonTransport } from "./daemon/transport";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
@@ -130,6 +131,11 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     if (client) {
       try {
+        // Warn but keep going: detach and tab cleanup still have to run, and a throw here would skip both.
+        const restored = await restoreDownloadBehavior(client);
+        if (!restored.success) {
+          console.warn(`[pi-browser-harness] ${restored.error.message}`);
+        }
         await client.detach();
         await client.closeOwnedTabs();
       } catch (e) {

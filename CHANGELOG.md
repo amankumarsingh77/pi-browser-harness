@@ -8,6 +8,10 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 - **Per-tab extra HTTP request headers.** `browser_set_headers` applies headers to subsequent document, subresource, fetch, and XHR requests on the current owned tab through CDP, while `browser_clear_headers` removes them. Header values are not echoed in tool output, and guidance requires clearing them before switching tabs or navigating to another origin.
 
+### Fixed
+
+- **`browser_download` no longer redirects the user's own downloads for good.** `Browser.setDownloadBehavior` was sent without a `browserContextId`, which Chrome applies to its default context — the one the user's own tabs are in — and the override outlives the CDP session it was set from. Every later download in that Chrome, the user's own included, went to the tool's temp directory, and nothing could undo it: it survived the tab, the client and the daemon until Chrome itself restarted. The tool now takes `restore: true` to reset the behavior, and session shutdown restores the default whenever an override is still in force.
+
 ## 0.11.1 — 2026-08-12
 
 ### Fixed
