@@ -24,7 +24,6 @@ export const httpGetTool = defineBrowserTool({
     "Fetch a URL outside the browser (faster than browser_navigate for APIs and static pages). Timeout covers headers AND body read.",
   promptSnippet: "HTTP GET (outside browser; for APIs/static pages)",
   promptGuidelines: [
-    "Faster than navigate+execute_js for JSON/HTML APIs.",
     "No JS rendering — for SPAs use browser_navigate.",
   ],
   parameters: HttpGetArgs,
@@ -224,8 +223,7 @@ export const networkRequestsTool = defineBrowserTool({
   promptSnippet: "Inspect recent network requests on the current page",
   promptGuidelines: [
     "Buffer is reset on tab switch — only requests on the current tab since attach are visible.",
-    'urlPattern is a substring; wrap in slashes for regex (e.g. "/\\\\.json$/").',
-    "includeResponseBodies:true costs an extra CDP call per matched request — use only when you need payloads.",
+    "Use includeResponseBodies:true only when you need payloads.",
     "If bufferOverflowed:true in the result, older events were dropped (capacity 500 records/tab).",
   ],
   parameters: NetworkRequestsArgs,

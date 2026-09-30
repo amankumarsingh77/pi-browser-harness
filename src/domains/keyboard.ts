@@ -31,7 +31,6 @@ export const typeTool = defineBrowserTool({
   description: "Type text into the currently focused element. Use browser_click first to focus an input field.",
   promptSnippet: "Type text into the focused element",
   promptGuidelines: [
-    "Use browser_type to enter text. Click on an input field with browser_click first to focus it.",
     "For special keys (Enter, Tab, Escape, arrows), use browser_press_key instead.",
   ],
   parameters: TypeArgs,
@@ -84,9 +83,7 @@ export const pressKeyTool = defineBrowserTool({
   promptSnippet: "Press a key (Enter, Tab, Escape, arrows, or any character)",
   promptGuidelines: [
     "Use browser_press_key for keyboard shortcuts and navigation keys.",
-    "Special key names: Enter, Tab, Backspace, Escape, Delete, ArrowLeft, ArrowUp, ArrowRight, ArrowDown, Home, End, PageUp, PageDown.",
-    "Use Space as ' ' (a single space character).",
-    "Modifiers: 1=Alt, 2=Ctrl, 4=Meta(Cmd), 8=Shift. Combine with bitwise OR: Ctrl+Shift = 2|8 = 10.",
+    "Combine modifier flags with bitwise OR: Ctrl+Shift = 2|8 = 10.",
   ],
   parameters: PressKeyArgs,
   concurrency: "serialized",
@@ -138,11 +135,9 @@ export const dispatchKeyTool = defineBrowserTool({
     "Dispatch a DOM KeyboardEvent on a specific element via JS injection. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`. Use for React/Vue components that listen to synthetic events more reliably than CDP input.",
   promptSnippet: "Dispatch a DOM KeyboardEvent on an element by ref (preferred) or selector",
   promptGuidelines: [
-    "PREFER `ref` from browser_snapshot over a CSS selector — survives re-renders.",
-    "Dispatches a synthetic DOM KeyboardEvent — for React/Vue synthetic event listeners. Does NOT insert text (use browser_type or browser_press_key for actual typing).",
+    "Does NOT insert text (use browser_type or browser_press_key for actual typing).",
     "Try browser_press_key first; only use browser_dispatch_key when the page ignores raw CDP key events.",
     "The event carries keyCode/which (e.g. 13 for Enter) for legacy handlers, but is untrusted (isTrusted === false) — a few libraries may still ignore it.",
-    "eventType defaults to 'keydown'.",
   ],
   parameters: DispatchKeyArgs,
   concurrency: "serialized",

@@ -19,10 +19,7 @@ export const listTabsTool = defineBrowserTool({
   description: "List browser tabs. Defaults to tabs this harness session opened (scope:'owned'). Pass scope:'all' to see the user's other tabs too.",
   promptSnippet: "List browser tabs",
   promptGuidelines: [
-    "Defaults to scope:'owned' — only tabs this session created. Pass scope:'all' to inspect the user's other tabs.",
-    "browser_switch_tab and browser_close_tab refuse non-owned tabs; use browser_new_tab to open one this session controls.",
     "Each tab shows its full 32-char hex targetId — use the exact value with browser_switch_tab.",
-    "Internal tabs (chrome://) included by default; pass includeInternal=false to exclude them.",
   ],
   parameters: ListTabsArgs,
   concurrency: "parallel",
@@ -83,7 +80,6 @@ export const switchTabTool = defineBrowserTool({
   promptGuidelines: [
     "Get a targetId via browser_list_tabs first.",
     "Accepts exact targetId or a unique prefix of at least 8 hex characters.",
-    "Refuses tabs not owned by this session — use browser_new_tab to open a controllable tab instead.",
   ],
   parameters: SwitchTabArgs,
   concurrency: "serialized",
@@ -138,10 +134,7 @@ export const newTabTool = defineBrowserTool({
   label: "Browser New Tab",
   description: "Open a new tab in the harness's dedicated Chrome window and switch to it. Optionally navigate to a URL.",
   promptSnippet: "Open a new tab",
-  promptGuidelines: [
-    "All tabs opened by this tool live in a single dedicated Chrome window separate from the user's main browsing.",
-    "Pass url to navigate immediately.",
-  ],
+  promptGuidelines: [],
   parameters: NewTabArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
@@ -166,7 +159,6 @@ export const closeTabTool = defineBrowserTool({
   description: "Close a tab the harness owns. Refuses tabs not opened by this session.",
   promptSnippet: "Close an owned tab",
   promptGuidelines: [
-    "Only closes tabs this session opened (visible in browser_list_tabs default scope).",
     "Accepts exact targetId or a unique hex prefix (>=8 chars).",
   ],
   parameters: CloseTabArgs,

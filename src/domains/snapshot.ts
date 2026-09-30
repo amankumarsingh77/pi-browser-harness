@@ -98,10 +98,7 @@ export const snapshotTool = defineBrowserTool({
     "DEFAULT tool for understanding what is on the page. Returns the structured accessibility tree (roles, names, states, hierarchy). Every interactive element gets a stable ref shown as [eN] plus click coordinates @(x,y). Pass the ref to browser_click/browser_fill/etc. — refs survive re-renders, coordinates don't. Use this BEFORE deciding whether you need a screenshot. Pair with browser_execute_js for surgical reads of specific element values.",
   promptSnippet: "Get accessibility-tree snapshot with stable element refs (default for page inspection)",
   promptGuidelines: [
-    "DEFAULT — use this whenever you need to know what's on a page, what's clickable, or how the page is structured.",
-    "Refs come for free: every interactive element shows '[eN]' in the outline. Pass eN as `ref` to browser_click/browser_fill/browser_select_option/browser_focus/browser_upload_file — refs survive re-renders, so prefer them over the '@(x,y)' coordinates (a fallback).",
-    "DO NOT call browser_screenshot just to understand the page. This tool already gives you structure, labels, states, refs, and click targets.",
-    "Re-run after a navigation or a major re-render to get fresh refs; a 'ref is stale' error from an interaction tool means you need a new snapshot.",
+    "Re-run after a navigation or a major re-render to get fresh refs.",
     "Pass includeScreenshot:true ONLY if you also need to verify visual rendering (rare).",
     "format:'json' returns the raw slim structure (with `ref` and `box` per node) for programmatic use; default 'outline' is human/LLM-readable.",
   ],
