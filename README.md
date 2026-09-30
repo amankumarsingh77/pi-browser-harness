@@ -352,6 +352,14 @@ A long-lived daemon owns the CDP connection, so it outlives individual pi sessio
 you only see Chrome's "Allow Remote Debugging" prompt once. `browser_run_script` executes in the
 harness process with direct daemon and Node access.
 
+### Prompt guidance
+
+Tool descriptions and parameter schemas own per-tool usage. Tool guidelines add only decisions
+and caveats not already covered there. The browser prompt carries cross-tool rules:
+tab isolation, concurrency, checking mutations, and stale-ref recovery. These rules are available
+before and after connection. Longer recipes remain in this README and the bundled skill
+rather than being copied into the browser prompt.
+
 ---
 
 ## Troubleshooting

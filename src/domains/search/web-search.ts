@@ -77,7 +77,6 @@ export const webSearchTool = defineBrowserTool({
     "Search the web and return ranked results (title, url, snippet, rank). Scrapes a Google results page in the real Chrome — no API key. Returns links only; use browser_read_page to read a result's content.",
   promptSnippet: "Search the web for a query",
   promptGuidelines: [
-    "Returns ranked {title, url, snippet, rank} — links only, no page content. Follow up with browser_read_page.",
     "On a CAPTCHA / bot wall the call fails with kind:'invalid_state' and details.reason:'captcha' (plus serpUrl) — surface it to the user; do not retry in a tight loop.",
     "On zero results it fails with details.reason:'no_results' — rephrase the query and try again.",
     "Runs in its own isolated tab and never disturbs the user's current tab.",

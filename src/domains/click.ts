@@ -58,11 +58,6 @@ export const clickTool = defineBrowserTool({
     "Click an element. PREFERRED: pass `ref` (e.g. 'e12') from browser_snapshot — it re-resolves the element's position at click time, so it works even after the page re-renders and moves things. Fallback: pass viewport CSS-pixel `x`/`y`. Compositor-level click works through iframes, shadow DOM, and cross-origin content. After clicking, a compact diff of page changes is appended.",
   promptSnippet: "Click an element by ref (preferred) or pixel coordinates",
   promptGuidelines: [
-    "PREFER `ref` from browser_snapshot (the outline shows '[eN]' for every interactive element) — it survives re-renders, unlike coordinates which go stale after a save/edit reflows the page.",
-    "Fallback: pass (x, y) from the snapshot's '@(x,y)' hint when there's no ref.",
-    "A 'ref is stale' error means the page changed — re-run browser_snapshot to get fresh refs.",
-    "After clicking, read the appended page-changes diff to confirm the action landed before moving on (no separate snapshot needed for a quick check).",
-    "Coordinates are viewport CSS pixels (not device pixels). Compositor-level clicks pass through iframes, shadow DOM, and cross-origin content.",
     "If a click doesn't register, run pi with --browser-debug-clicks (or set BH_DEBUG_CLICKS=1) to get annotated screenshots. For React/Vue components ignoring clicks, try browser_dispatch_key.",
   ],
   parameters: ClickArgs,

@@ -28,10 +28,7 @@ export const pageInfoTool = defineBrowserTool({
     "Get current page state: URL, title, viewport size, scroll position, page dimensions. If a JS dialog is open, returns dialog info instead.",
   promptSnippet: "Get current page URL, title, viewport, and scroll position",
   promptGuidelines: [
-    "Use browser_page_info to quickly check what page you're on and whether a JS dialog is blocking interaction.",
-    "If browser_page_info returns a dialog, use browser_handle_dialog before any other browser actions.",
-    "JS dialogs freeze the page's JS thread, so no other interaction works until the dialog is handled.",
-    "browser_page_info auto-detects alert, confirm, prompt, and beforeunload dialogs.",
+    "If browser_page_info returns a dialog, call browser_handle_dialog before any other browser actions: dialogs freeze the page's JS thread.",
   ],
   parameters: Type.Object({}),
   concurrency: "parallel",
@@ -87,7 +84,6 @@ export const waitForLoadTool = defineBrowserTool({
   promptSnippet: "Wait for the page to finish loading",
   promptGuidelines: [
     "Call after browser_navigate / browser_open_urls before extracting data.",
-    "Returns when readyState becomes 'complete' OR the timeout elapses.",
   ],
   parameters: WaitForLoadArgs,
   concurrency: "serialized",
@@ -122,8 +118,6 @@ export const waitForTool = defineBrowserTool({
   promptSnippet: "Wait for an element or text to appear (or an element to disappear)",
   promptGuidelines: [
     "Use before browser_fill / browser_click on dynamic pages so you act after the element renders.",
-    "Provide selector (default: wait until present; gone:true: wait until absent) or text.",
-    "Returns a typed timeout error if the condition isn't met within the timeout.",
   ],
   parameters: WaitForArgs,
   concurrency: "parallel",

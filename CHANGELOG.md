@@ -4,6 +4,10 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Browser guidance no longer repeats tool declarations.** The browser prompt now contains only cross-tool coordination, available before and after connection, and tool guidelines omit usage and argument details already present in descriptions and schemas. Tool names, schemas, handlers, and safety warnings are unchanged.
+
 ### Added
 
 - **Per-tab extra HTTP request headers.** `browser_set_headers` applies headers to subsequent document, subresource, fetch, and XHR requests on the current owned tab through CDP, while `browser_clear_headers` removes them. Header values are not echoed in tool output, and guidance requires clearing them before switching tabs or navigating to another origin.

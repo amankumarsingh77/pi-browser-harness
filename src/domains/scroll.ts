@@ -20,7 +20,6 @@ export const scrollTool = defineBrowserTool({
     "Scroll the page at given coordinates. deltaY follows W3C wheel-event convention: positive = scroll down, negative = scroll up. Default scrolls down (deltaY = 300).",
   promptSnippet: "Scroll the page (deltaY positive=down, negative=up)",
   promptGuidelines: [
-    "Default behavior scrolls down 300px (deltaY=300). Pass a negative deltaY to scroll up.",
     "Pass x/y to target a specific scrollable region (e.g., a div with overflow); otherwise scrolls the page at viewport center.",
   ],
   parameters: ScrollArgs,

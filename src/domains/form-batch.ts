@@ -28,7 +28,6 @@ export const fillFormTool = defineBrowserTool({
   promptSnippet: "Fill many form fields at once by ref — React-safe, self-confirming",
   promptGuidelines: [
     "Preferred for forms: snapshot once, then fill all fields in a single browser_fill_form call.",
-    "Each field: { ref, value }. value is a string for text/select/contenteditable, boolean for checkbox/radio.",
     "The result summarizes how many fields filled cleanly and flags any value mismatches or per-field errors.",
     "Re-run browser_snapshot afterwards to verify the form state if needed.",
   ],

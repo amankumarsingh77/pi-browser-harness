@@ -17,7 +17,6 @@ export const viewportResizeTool = defineBrowserTool({
   description: "Override the viewport size and device pixel ratio for responsive testing.",
   promptSnippet: "Resize the viewport (responsive testing)",
   promptGuidelines: [
-    "Width/height in CSS pixels (e.g., 375x667 for iPhone SE).",
     "Pass deviceScaleFactor=2 to simulate retina displays.",
   ],
   parameters: ViewportArgs,

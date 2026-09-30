@@ -147,13 +147,8 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (!client || !client.status().alive) {
-      return {
-        systemPrompt:
-          event.systemPrompt +
-          `\n\n## Browser Control\n\nBrowser tools (browser_*) are available but the browser is not connected. Run /browser-setup.`,
-      };
-    }
-    return { systemPrompt: event.systemPrompt + getBrowserSystemPrompt() };
+    return {
+      systemPrompt: event.systemPrompt + getBrowserSystemPrompt(client?.status().alive ?? false),
+    };
   });
 }
