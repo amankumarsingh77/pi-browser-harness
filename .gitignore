@@ -9,6 +9,7 @@ docs/
 scripts/*
 !scripts/check-boundaries.ts
 !scripts/boundary-allowlist.ts
+!scripts/check-manifest.ts
 data/
 .worktrees/
 .harness/

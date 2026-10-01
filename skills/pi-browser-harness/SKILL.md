@@ -80,6 +80,26 @@ You're attached to the user's real Chrome — never launch your own. If auth is 
 
 When an action runs but the page didn't change, capture `browser_console`'s `nextCursor` *before* the action, take the action, then call `browser_console({ sinceSeq: <cursor> })` after — this isolates what your action caused from what was already there. Pair with `browser_network_requests({ sinceMs: 5000 })` to see if an API call fired and failed. The console buffer is page-scoped: it clears on tab switch, capacity 500.
 
+## Site UI quirks (verified)
+
+- **Outlook web rule wizard** (`outlook.cloud.microsoft/mail/options/mail/rules`): the condition and action dropdowns ignore real mouse clicks and even `element.click()`. Open the combobox with a click, then drive it with `browser_press_key` (ArrowDown/ArrowUp + Enter). Values are committed as chips and the input clears, so read the panel `innerText` to confirm; re-open the saved rule (More actions > Edit rule) to verify what actually persisted.
+- The From/To condition value is a contact picker listing **address-book entries only** (typeahead filters that list, no free text). A service sender that is not in the address book cannot be selected, so identify it with a `Subject includes` condition instead.
+- The "Run rule now" folder picker is single-select and click-to-deselect. A tree row's rect covers its nested children, so a click at the row's vertical centre can select a child folder instead. Click the top third of the intended row and confirm the selection: the selected tree item carries `fw1kkzr fjw68qt` in its className, unselected ones do not. Running a rule shows a client-side progress banner ("running (N%), Processing X of Y messages") that can take 10+ minutes on a large mailbox; poll the banner, do not navigate away.
+- `browser_snapshot` truncates before the Outlook settings panel, so `browser_execute_js` against a known anchor element is the reliable way to read that pane.
+
+## Downloads
+
+`browser_download` calls `Browser.setDownloadBehavior` on the browser, not on a tab. The setting is global and survives the session, so a scratch directory set for one task keeps receiving every later download, including the user's own manual ones, until Chrome is restarted.
+
+- Set a scratch path only while you need it, then reset: `browser_download({ downloadPath: "~/Downloads" })` expanded to an absolute path.
+- To find where a download actually went, read Chrome's own record instead of guessing (set PROFILE to the active profile directory, e.g. "Profile 1", when it is not Default):
+```sh
+PROFILE="${CHROME_PROFILE_DIR:-Default}"
+cp "$HOME/Library/Application Support/Google/Chrome/$PROFILE/History" "$TMPDIR/History"
+sqlite3 "$TMPDIR/History" "select datetime(start_time/1000000-11644473600,'unixepoch','localtime'), target_path from downloads order by start_time desc limit 10;"
+```
+- `find /tmp ...` silently misses everything: `/tmp` is a symlink and `find` does not descend a symlink start point. Use `/private/tmp`.
+
 ## Temporary scripts
 
 When a workflow repeats 3+ times or needs Node.js APIs, write a script to disk and run it with `browser_run_script`. Scripts get a `daemon` binding for direct CDP access — much faster than chaining tool calls.
@@ -100,3 +120,22 @@ When a workflow repeats 3+ times or needs Node.js APIs, write a script to disk a
 **Don't:**
 - Use scripts for one-off actions — call `browser_*` tools directly.
 - Call `browser_*` tools from inside a script — sequence them as separate tool calls outside.
+
+
+## Troubleshooting: "Could not start the browser daemon"
+
+`browser_setup` spawns the daemon as `node <pkg>/node_modules/tsx/dist/cli.mjs <pkg>/src/daemon/index.ts` with `stdio: "ignore"`, so a crash before the socket binds is completely silent and all you see is `Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock.`
+
+Run it in the foreground to see the real error (it prints whether it reached Chrome):
+
+    cd <pkg> && node node_modules/tsx/dist/cli.mjs src/daemon/index.ts
+
+Known cause, seen 2026-09-29, package 0.11.1: `Error: Cannot find module 'typebox'` at `src/cdp/discovery.ts`. The package declares `typebox` in `peerDependencies` and `devDependencies`, and pi suppresses automatic peer installation for git packages, so a tree installed without dev dependencies has no physical copy. It still resolves inside the pi extension host (whose flat tree carries it via `~/.pi/agent/npm/node_modules`, e.g. through pi-fabric) but not in the spawned daemon process, which resolves modules from the package directory upward. The daemon dies, no socket appears, and every browser tool reports `not_connected`.
+
+Fix it without touching the manifest, which must keep `typebox` out of `dependencies` (pi warns on it and `npm run check` rejects it):
+
+    cd <pkg> && npm install --no-save typebox --no-audit --no-fund
+
+or restore the full tree with `npm ci`, which installs the `devDependencies` copy. Then confirm with `node -e "console.log(require.resolve('typebox'))"` inside the package directory, and start the daemon with `NODE_PATH` unset to prove no environment workaround is in play. A fresh clone or update reinstalls the tree, so the missing copy can come back; the manifest itself is correct upstream.
+
+Do not work around it with `npm install typebox --save` (that writes `typebox` into `dependencies`, tripping pi's extension warning and the manifest check), a global `NODE_PATH`, or a hand-made symlink: the spawn inherits the extension host environment, so a shell-level export may not reach it, and the underlying problem is an incomplete install, not an undeclared dependency.
