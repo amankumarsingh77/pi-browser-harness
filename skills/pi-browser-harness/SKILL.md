@@ -92,9 +92,10 @@ When an action runs but the page didn't change, capture `browser_console`'s `nex
 `browser_download` calls `Browser.setDownloadBehavior` on the browser, not on a tab. The setting is global and survives the session, so a scratch directory set for one task keeps receiving every later download, including the user's own manual ones, until Chrome is restarted.
 
 - Set a scratch path only while you need it, then reset: `browser_download({ downloadPath: "~/Downloads" })` expanded to an absolute path.
-- To find where a download actually went, read Chrome's own record instead of guessing:
+- To find where a download actually went, read Chrome's own record instead of guessing (set PROFILE to the active profile directory, e.g. "Profile 1", when it is not Default):
 ```sh
-cp "$HOME/Library/Application Support/Google/Chrome/Default/History" "$TMPDIR/History"
+PROFILE="${CHROME_PROFILE_DIR:-Default}"
+cp "$HOME/Library/Application Support/Google/Chrome/$PROFILE/History" "$TMPDIR/History"
 sqlite3 "$TMPDIR/History" "select datetime(start_time/1000000-11644473600,'unixepoch','localtime'), target_path from downloads order by start_time desc limit 10;"
 ```
 - `find /tmp ...` silently misses everything: `/tmp` is a symlink and `find` does not descend a symlink start point. Use `/private/tmp`.
@@ -129,12 +130,12 @@ Run it in the foreground to see the real error (it prints whether it reached Chr
 
     cd <pkg> && node node_modules/tsx/dist/cli.mjs src/daemon/index.ts
 
-Known cause, seen 2026-09-29, package 0.11.1: `Error: Cannot find module 'typebox'` at `src/cdp/discovery.ts`. The package declares `typebox` only as a `peerDependency`, so it resolves inside the pi extension host (whose flat tree carries it via `~/.pi/agent/npm/node_modules`, e.g. through pi-fabric) but not in the spawned child process, which resolves modules from the package directory upward. The daemon dies, no socket appears, and every browser tool reports `not_connected`.
+Known cause, seen 2026-09-29, package 0.11.1: `Error: Cannot find module 'typebox'` at `src/cdp/discovery.ts`. The package declares `typebox` in `peerDependencies` and `devDependencies`, and pi suppresses automatic peer installation for git packages, so a tree installed without dev dependencies has no physical copy. It still resolves inside the pi extension host (whose flat tree carries it via `~/.pi/agent/npm/node_modules`, e.g. through pi-fabric) but not in the spawned daemon process, which resolves modules from the package directory upward. The daemon dies, no socket appears, and every browser tool reports `not_connected`.
 
-Fix it by declaring the dependency for real, which is what the extension (not the host) needs in order to spawn the daemon:
+Fix it without touching the manifest, which must keep `typebox` out of `dependencies` (pi warns on it and `npm run check` rejects it):
 
-    cd <pkg> && npm install typebox --save --no-audit --no-fund
+    cd <pkg> && npm install --no-save typebox --no-audit --no-fund
 
-Then confirm with `node -e "console.log(require.resolve('typebox'))"` inside the package directory, and start the daemon with `NODE_PATH` unset to prove no environment workaround is in play. Reinstalling or updating the package from git restores the peer-only declaration, so this fix belongs upstream in the package's `package.json`.
+or restore the full tree with `npm ci`, which installs the `devDependencies` copy. Then confirm with `node -e "console.log(require.resolve('typebox'))"` inside the package directory, and start the daemon with `NODE_PATH` unset to prove no environment workaround is in play. A fresh clone or update reinstalls the tree, so the missing copy can come back; the manifest itself is correct upstream.
 
-Do not work around it with a global `NODE_PATH` or a hand-made symlink: the spawn inherits the extension host environment, so a shell-level export may not reach it, and the underlying bug is an undeclared dependency.
+Do not work around it with `npm install typebox --save` (that writes `typebox` into `dependencies`, tripping pi's extension warning and the manifest check), a global `NODE_PATH`, or a hand-made symlink: the spawn inherits the extension host environment, so a shell-level export may not reach it, and the underlying problem is an incomplete install, not an undeclared dependency.
