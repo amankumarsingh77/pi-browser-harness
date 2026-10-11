@@ -10,7 +10,7 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ### Fixed
 
-- **`browser_download` no longer redirects the user's own downloads for good.** `Browser.setDownloadBehavior` was sent without a `browserContextId`, which Chrome applies to its default context — the one the user's own tabs are in — and the override outlives the CDP session it was set from. Every later download in that Chrome, the user's own included, went to the tool's temp directory, and nothing could undo it: it survived the tab, the client and the daemon until Chrome itself restarted. The tool now takes `restore: true` to reset the behavior, and session shutdown restores the default whenever an override is still in force.
+- **`browser_download` no longer redirects the user's own downloads for good.** `Browser.setDownloadBehavior` was sent without a `browserContextId`, which Chrome applies to its default context — the one the user's own tabs are in — and the override lives on the browser connection, which the daemon keeps open across pi sessions. Every later download in that Chrome, the user's own included, went to the tool's temp directory, and nothing undid it when the session ended. The tool now takes `restore: true` to reset the behavior, and a clean session shutdown restores the default whenever this session's override is still in force (a killed session cannot, so call `restore: true` as soon as you are done).
 
 ## 0.11.1 — 2026-08-12
 

@@ -147,12 +147,24 @@ export const uploadFileTool = defineBrowserTool({
 
 // Chrome stores the override in its default browser context, so it outlives this client and
 // silently redirects the user's own downloads. Track it, so session teardown can undo it.
+// The flag only records what THIS process set: the daemon is shared by every pi process on the
+// machine and the CDP primitive is last-writer-wins, so another session may have reset or
+// re-pointed it since. A crashed or killed session never reaches teardown, so the override can
+// also outlive the process that set it.
 let activeDownloadOverride: string | undefined;
+
+// Shutdown must not block on a browser that is already gone: a pending restore against a
+// disconnected daemon would otherwise trigger the one-shot reconnect (and Chrome's consent
+// prompt) that 0.11.1 confined to explicit tool calls, and wait up to the connect timeout.
+const SHUTDOWN_RESTORE_TIMEOUT_MS = 2_000;
 
 export const restoreDownloadBehavior = async (client: BrowserClient): Promise<Result<void, ToolErr>> => {
   const pending = activeDownloadOverride;
   if (pending === undefined) return ok(undefined);
-  const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", { behavior: "default" });
+  if (!client.status().alive) {
+    return err({ kind: "not_connected", message: `browser not connected; downloads may keep going to ${pending} until Chrome restarts` });
+  }
+  const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", { behavior: "default" }, { timeoutMs: SHUTDOWN_RESTORE_TIMEOUT_MS });
   if (!r.success) {
     return err({ ...r.error, message: `${r.error.message} (downloads may keep going to ${pending})` });
   }
@@ -167,7 +179,7 @@ const DownloadArgs = Type.Object({
   restore: Type.Optional(
     Type.Boolean({
       description:
-        "Undo a previous browser_download: reset Chrome's download behavior back to its normal default (~/Downloads).",
+        "Undo a previous browser_download: reset Chrome's download behavior back to the user's own default.",
     }),
   ),
 });
@@ -176,11 +188,11 @@ export const downloadTool = defineBrowserTool({
   name: "browser_download",
   label: "Browser Download",
   description:
-    "Configure Chrome's download behavior: set the save directory and disable the save-as prompt, or restore the normal default. Undone when the session ends.",
+    "Configure Chrome's download behavior: set the save directory and disable the save-as prompt, or restore the user's default. Restored automatically when this session shuts down cleanly.",
   promptSnippet: "Configure download directory",
   promptGuidelines: [
     "Pass an absolute path to an existing writable directory.",
-    "The override applies to the user's own downloads too, not just yours. It is undone when the session ends; call browser_download({restore:true}) as soon as you are done.",
+    "The override applies to the user's own downloads too, not just yours, and only a clean session shutdown undoes it. Call browser_download({restore:true}) as soon as you are done.",
   ],
   parameters: DownloadArgs,
   concurrency: "serialized",
