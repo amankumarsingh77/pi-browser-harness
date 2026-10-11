@@ -100,3 +100,21 @@ When a workflow repeats 3+ times or needs Node.js APIs, write a script to disk a
 **Don't:**
 - Use scripts for one-off actions — call `browser_*` tools directly.
 - Call `browser_*` tools from inside a script — sequence them as separate tool calls outside.
+
+## Troubleshooting: "Could not start the browser daemon"
+
+`browser_setup` spawns the daemon as `node <tsx cli> <pkg>/src/daemon/index.ts` with `stdio: "ignore"` (tsx is resolved from the package directory upward, so in pi's hoisted install it sits beside the package rather than inside it). A crash before the socket binds is completely silent and all you see is `Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock.`
+
+Run it in the foreground to see the real error (it prints whether it reached Chrome):
+
+    cd <pkg> && node "$(node -p "require.resolve('tsx/cli')")" src/daemon/index.ts
+
+Known cause (package 0.11.1): `Error: Cannot find module 'typebox'` at `src/cdp/discovery.ts`. The package declares `typebox` in `peerDependencies` and `devDependencies`, and pi installs packages with dev and peer dependencies omitted, so the tree has no physical copy. It still resolves inside the pi extension host, which maps `typebox` to pi's bundled copy, but not in the spawned daemon process, which resolves modules from the package directory upward. The daemon dies, no socket appears, and every browser tool reports `not_connected`.
+
+Fix it without touching the manifest, which must keep `typebox` out of `dependencies` (pi warns on it and `npm run check` rejects it):
+
+    cd <pkg> && npm install --no-save typebox --no-audit --no-fund
+
+or restore the full tree with `npm ci`, which installs the `devDependencies` copy. Then confirm with `node -e "console.log(require.resolve('typebox'))"` inside the package directory, and start the daemon with `NODE_PATH` unset to prove no environment workaround is in play. A fresh clone or update reinstalls the tree, so the missing copy can come back; the manifest itself is correct upstream.
+
+Do not work around it with `npm install typebox --save` (that writes `typebox` into `dependencies`, tripping pi's extension warning and the manifest check), a global `NODE_PATH`, or a hand-made symlink: the spawn inherits the extension host environment, so a shell-level export may not reach it, and the underlying problem is an incomplete install, not an undeclared dependency.
