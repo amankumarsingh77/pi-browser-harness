@@ -76,6 +76,14 @@ it by opening tabs elsewhere — a different profile means different accounts.
 
 You're attached to the user's real Chrome — never launch your own. If auth is required, stop and ask the user. If `browser_page_info` returns a dialog, handle it first with `browser_handle_dialog`.
 
+## Downloads land in the user's context
+
+`browser_download` calls `Browser.setDownloadBehavior` with no `browserContextId`, which Chrome applies to its **default browser context** — the same one the user's own tabs are in. The override redirects the user's manual downloads too, and it lives on the browser connection the daemon keeps open, so it outlives the tab and the pi session. Symptom the user reports: *"I download things in Chrome and nothing appears in Downloads."*
+
+A clean session shutdown restores the default; a killed session does not. Call `browser_download({ restore: true })` as soon as you are done with a download path, and if a user reports the symptom, call it first.
+
+`browser_run_script` is the same hazard: a script that sets download behavior and then throws partway leaves Chrome mutated. Reset it in a `finally`, not after the last line.
+
 ## Diagnosing a "nothing happened" moment
 
 When an action runs but the page didn't change, capture `browser_console`'s `nextCursor` *before* the action, take the action, then call `browser_console({ sinceSeq: <cursor> })` after — this isolates what your action caused from what was already there. Pair with `browser_network_requests({ sinceMs: 5000 })` to see if an API call fired and failed. The console buffer is page-scoped: it clears on tab switch, capacity 500.

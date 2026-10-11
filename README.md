@@ -173,7 +173,7 @@ tabs or navigating the tab to another origin.
 | Tool | Purpose |
 |---|---|
 | `browser_upload_file` | Set files on a file input, with a DataTransfer fallback for stubborn pages. |
-| `browser_download` | Set the download directory and suppress the save-as prompt. |
+| `browser_download` | Set the download directory and suppress the save-as prompt, or restore the default. Applies to the user's own downloads until restored. |
 | `browser_print_to_pdf` | Print the page to PDF via `Page.printToPDF`. |
 | `browser_viewport_resize` | Override viewport size and device pixel ratio for responsive checks. |
 
