@@ -104,7 +104,7 @@ export const uploadFileTool = defineBrowserTool({
   description: "Set files on a file <input> via CDP, with a JS-DataTransfer fallback for stubborn pages. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`.",
   promptSnippet: "Upload a file to a file input by ref (preferred) or selector",
   promptGuidelines: [
-    "PREFER `ref` from browser_snapshot over a CSS selector — survives re-renders. (File inputs are often hidden; snapshot still surfaces them.)",
+    "File inputs are often hidden; browser_snapshot still surfaces them.",
     "File path must be absolute and readable.",
   ],
   parameters: UploadArgs,

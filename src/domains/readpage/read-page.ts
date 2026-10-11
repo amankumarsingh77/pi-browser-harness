@@ -157,7 +157,6 @@ export const readPageTool = defineBrowserTool({
     "Read a page as clean article text — main content with nav/ads/boilerplate stripped. Pass a url (opened in an isolated tab, read, then closed) or a targetId of an owned tab. Reader-mode counterpart to browser_web_search.",
   promptSnippet: "Read a page's main content as clean text",
   promptGuidelines: [
-    "Pass url to read an arbitrary page (opened + closed in its own tab, never disturbing your current tab), or targetId to read an already-open owned tab.",
     "Returns readable main-article text — use this over browser_snapshot/browser_execute_js when you want an article's content for reading or research.",
     "Boilerplate-heavy or structure-less pages fall back to bounded body text rather than erroring.",
   ],

@@ -158,8 +158,6 @@ export const consoleTool = defineBrowserTool({
     "Read JS errors and console messages from the active tab. Diagnostic — use when an action looks broken or silent.",
   promptSnippet: "Read JS errors / console output on the current tab",
   promptGuidelines: [
-    "Use after a click, submit, or navigate produced no visible change — errors often explain it.",
-    "Pass `sinceSeq` from the previous call's `nextCursor` to see only new messages after an action.",
     "Buffer is reset on tab switch (capacity 500 records). bufferOverflowed:true means older entries were dropped.",
     "Don't use as a default observation tool — prefer browser_snapshot for page structure.",
   ],

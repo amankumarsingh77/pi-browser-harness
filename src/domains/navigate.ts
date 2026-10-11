@@ -22,8 +22,6 @@ export const navigateTool = defineBrowserTool({
     "Navigate to a URL. Creates a new tab on first call (when no real tabs exist). Otherwise navigates the current tab in place.",
   promptSnippet: "Navigate to a URL",
   promptGuidelines: [
-    "Use browser_navigate to go to URLs.",
-    "Use browser_wait_for_load after browser_navigate to wait for the page to finish loading.",
     "For extracting data from a page you already navigated to, use browser_execute_js or browser_http_get (faster for APIs).",
     "Note: Google and some sites with strict anti-bot detection may reject CDP navigation. Use browser_http_get for search results.",
   ],
@@ -80,7 +78,6 @@ export const openUrlsTool = defineBrowserTool({
   promptGuidelines: [
     "Use after browser_web_search to open citations in parallel.",
     "After opening, use browser_list_tabs / browser_switch_tab to navigate, then browser_snapshot to inspect each tab.",
-    "Use browser_wait_for_load on a tab before extracting data from SPAs.",
   ],
   parameters: OpenUrlsArgs,
   concurrency: "serialized",
