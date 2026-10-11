@@ -2,23 +2,27 @@ import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { connect as netConnect } from "node:net";
 import { request as httpRequest } from "node:http";
-import { Type } from "typebox";
-import { Compile } from "typebox/compile";
-import { parseJson } from "../schemas/parse";
 import { type Result, err, ok } from "../util/result";
 import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
-import { errnoCode } from "../util/guards";
+import { asString, errnoCode, isRecord } from "../util/guards";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
 
-const VersionResponse = Type.Object(
-  { webSocketDebuggerUrl: Type.Optional(Type.String()) },
-  { additionalProperties: true },
-);
-
-const versionValidator = Compile(VersionResponse);
+// Hand-rolled on purpose: this file runs inside the daemon, a separate Node process that pi does not
+// supply host-provided packages (typebox) to. Everything the daemon imports must be a runtime
+// dependency or a builtin; test/daemon/entry-imports-test.ts enforces that.
+export const parseVersionResponse = (raw: string): string | null => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed)) return null;
+  return asString(parsed["webSocketDebuggerUrl"]) ?? null;
+};
 
 export type CdpEndpoint = {
   readonly wsUrl: string;
@@ -72,8 +76,7 @@ const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null>
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
         res.on("end", () => {
-          const parsed = parseJson(Buffer.concat(chunks).toString("utf8"), versionValidator);
-          resolve(parsed.success ? parsed.data.webSocketDebuggerUrl ?? null : null);
+          resolve(parseVersionResponse(Buffer.concat(chunks).toString("utf8")));
         });
       },
     );
