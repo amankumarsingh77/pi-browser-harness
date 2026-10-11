@@ -87,7 +87,7 @@ Use the normal browser workflow when testing: screenshot → act → screenshot 
 - No unchecked casts. `npm run boundaries` fails the build on `as any`, `as {`, `as unknown as`, `@ts-ignore`, and non-null assertions in `src/`. A green `tsc` is not evidence of type safety.
 - Prefer no comments. Explain a non-obvious convention in the commit message or PR description, not inline.
 - Prefer small, focused changes over broad rewrites.
-- Keep tool descriptions, parameter descriptions, and prompt guidelines clear and user-facing.
+- Keep tool descriptions and parameter schemas clear and user-facing. Use prompt guidelines only for decisions and caveats not already covered there. Keep `src/prompt.ts` limited to cross-tool coordination; leave recipes in the README and skill.
 - Preserve the existing error-handling style: return useful, actionable messages to the agent instead of leaking low-level details when possible.
 - Avoid adding dependencies unless they are necessary for the browser-control experience.
 - Keep README and CHANGELOG updates in the same PR when behavior changes.

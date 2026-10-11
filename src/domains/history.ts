@@ -18,7 +18,7 @@ export const goBackTool = defineBrowserTool({
   label: "Browser Go Back",
   description: "Navigate back one page in history.",
   promptSnippet: "Go back one page",
-  promptGuidelines: ["Use to return to the previous page after navigating."],
+  promptGuidelines: [],
   parameters: Type.Object({}),
   concurrency: "serialized",
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
@@ -38,7 +38,7 @@ export const goForwardTool = defineBrowserTool({
   label: "Browser Go Forward",
   description: "Navigate forward one page in history.",
   promptSnippet: "Go forward one page",
-  promptGuidelines: ["Use to undo a browser_go_back."],
+  promptGuidelines: [],
   parameters: Type.Object({}),
   concurrency: "serialized",
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
@@ -58,7 +58,7 @@ export const reloadTool = defineBrowserTool({
   label: "Browser Reload",
   description: "Reload the current page.",
   promptSnippet: "Reload the page",
-  promptGuidelines: ["Use to refresh the page, e.g. after server-side changes."],
+  promptGuidelines: [],
   parameters: Type.Object({}),
   concurrency: "serialized",
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
