@@ -322,6 +322,7 @@ re-runnable.
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
+| `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
 
 ---
 
