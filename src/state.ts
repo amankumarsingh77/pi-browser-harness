@@ -13,8 +13,38 @@ export const defaultState = (namespace = "default"): BrowserState => ({
   ownedTargetIds: [],
 });
 
-export const persistState = (pi: ExtensionAPI, state: BrowserState): void => {
-  pi.appendEntry<BrowserState>("browser-harness-state", state);
+// Pi session JSONL is append-only and every custom entry shows up in the branch navigator, so a
+// snapshot is only worth appending when it differs from the one the branch already holds (#26).
+// Tab order is not a difference: ownership is a set.
+const stateKey = (state: BrowserState): string =>
+  JSON.stringify({
+    namespace: state.namespace,
+    ownedTargetIds: [...(state.ownedTargetIds ?? [])].sort(),
+    harnessWindowTargetId: state.harnessWindowTargetId ?? null,
+    harnessWindowId: state.harnessWindowId ?? null,
+  });
+
+export type StatePersister = {
+  // Appends the snapshot unless it equals the last one persisted or restored. Returns whether it wrote.
+  readonly persist: (state: BrowserState) => boolean;
+  // Records a snapshot that already lives in the session (restored from the branch) without writing it.
+  readonly markPersisted: (state: BrowserState) => void;
+};
+
+export const createStatePersister = (pi: ExtensionAPI): StatePersister => {
+  let last: string | undefined;
+  return {
+    persist: (state) => {
+      const key = stateKey(state);
+      if (key === last) return false;
+      pi.appendEntry<BrowserState>("browser-harness-state", state);
+      last = key;
+      return true;
+    },
+    markPersisted: (state) => {
+      last = stateKey(state);
+    },
+  };
 };
 
 const asPersistedState = (v: unknown): Partial<BrowserState> | undefined => {
