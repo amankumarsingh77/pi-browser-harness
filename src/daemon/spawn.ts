@@ -81,8 +81,10 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
   });
 };
 
-const resolveTsxCliFromFilesystem = (): string | null => {
-  let dir = moduleDir;
+// Walks upward like Node's own node_modules lookup. Exported with an injectable start so the
+// hoisted layout pi uses can be exercised against a fixture instead of this checkout.
+export const resolveTsxCliFromFilesystem = (startDir: string = moduleDir): string | null => {
+  let dir = startDir;
 
   while (true) {
     const candidate = join(dir, "node_modules", "tsx", "dist", "cli.mjs");
@@ -113,14 +115,20 @@ const resolveTsxCli = (): string | null => {
   }
 };
 
-const daemonNodeExecutable = (): string => {
-  if (process.env.PI_BROWSER_NODE) return process.env.PI_BROWSER_NODE;
+export const daemonNodeExecutable = (
+  env: NodeJS.ProcessEnv = process.env,
+  versions: Readonly<Record<string, string | undefined>> = process.versions,
+  platform: NodeJS.Platform = process.platform,
+  execPath: string = process.execPath,
+): string => {
+  const override = env["PI_BROWSER_NODE"];
+  if (override) return override;
 
   // Under normal Node keep the exact executable that launched pi/the extension. Under Bun,
   // process.execPath is bun/pi.exe, not Node, so run the tsx CLI with the required Node runtime.
-  if ("bun" in process.versions) return isWindows ? "node.exe" : "node";
+  if ("bun" in versions) return platform === "win32" ? "node.exe" : "node";
 
-  return process.execPath;
+  return execPath;
 };
 
 export const daemonSpawnCommand = (): { readonly command: string; readonly args: ReadonlyArray<string> } | null => {
@@ -144,6 +152,11 @@ export const spawnDaemon = (): ChildProcess | null => {
     env: { ...process.env },
     windowsHide: true,
   });
+
+  // `spawn` reports a missing executable (a bare `node` that is not on PATH under a Bun host)
+  // asynchronously via `error`; without a listener that is an uncaught exception in pi.
+  // ensureDaemon's poll loop reports the failure as a timeout, which is what the user sees.
+  child.on("error", () => {});
 
   child.unref();
   return child;
