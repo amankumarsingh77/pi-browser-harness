@@ -42,6 +42,11 @@ describe("cdp command table", () => {
     const r = decodeResult("Nope.method" as "Page.enable", {});
     assert.equal(r.success, false);
   });
+
+  test("accepts an empty Network.setExtraHTTPHeaders response", () => {
+    const r = decodeResult("Network.setExtraHTTPHeaders", {});
+    assert.equal(r.success, true);
+  });
 });
 
 describe("Accessibility.getFullAXTree schema", () => {

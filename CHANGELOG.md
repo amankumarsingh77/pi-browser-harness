@@ -4,6 +4,10 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **Per-tab extra HTTP request headers.** `browser_set_headers` applies headers to subsequent document, subresource, fetch, and XHR requests on the current owned tab through CDP, while `browser_clear_headers` removes them. Header values are not echoed in tool output, and guidance requires clearing them before switching tabs or navigating to another origin.
+
 ### Fixed
 
 - **The daemon starts from a Bun-compiled pi binary.** Inside `pi.exe` (and any other `bun build --compile` host), `createRequire().resolve("tsx/cli")` is rooted at the binary's embedded virtual filesystem and cannot see the extension's real `node_modules`, so `browser_setup` failed instantly with `Could not start the browser daemon`. The resolver result is now checked on disk and, when it fails, the tsx CLI is found by walking up the `node_modules` chain the way Node does. Under Bun the daemon is launched with `node` from `PATH` instead of `process.execPath` (which is the pi binary itself); `PI_BROWSER_NODE` overrides the executable. (#27)

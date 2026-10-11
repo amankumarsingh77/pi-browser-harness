@@ -34,6 +34,8 @@ const SERIALIZED = new Set([
   "browser_print_to_pdf",
   "browser_viewport_resize",
   "browser_drag_and_drop",
+  "browser_set_headers",
+  "browser_clear_headers",
   "browser_web_search",
 ]);
 

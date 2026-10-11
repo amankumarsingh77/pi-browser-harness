@@ -228,6 +228,10 @@ export const COMMANDS = {
     Type.Object({ requestId: Type.String() }),
     Type.Object({ body: Type.String(), base64Encoded: Type.Optional(Type.Boolean()) }),
   ),
+  "Network.setExtraHTTPHeaders": cmd(
+    Type.Object({ headers: Type.Record(Type.String(), Type.String()) }),
+    Empty,
+  ),
   "Emulation.setDeviceMetricsOverride": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Accessibility.getFullAXTree": cmd(
     Type.Object({ depth: Type.Optional(Type.Number()) }, { additionalProperties: true }),
