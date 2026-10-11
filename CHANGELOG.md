@@ -11,6 +11,7 @@ All notable changes to pi-browser-harness will be documented in this file.
 ### Fixed
 
 - **`browser_download` no longer redirects the user's own downloads for good.** `Browser.setDownloadBehavior` was sent without a `browserContextId`, which Chrome applies to its default context — the one the user's own tabs are in — and the override lives on the browser connection, which the daemon keeps open across pi sessions. Every later download in that Chrome, the user's own included, went to the tool's temp directory, and nothing undid it when the session ended. The tool now takes `restore: true` to reset the behavior, and a clean session shutdown restores the default whenever this session's override is still in force (a killed session cannot, so call `restore: true` as soon as you are done).
+- **The daemon starts from a Bun-compiled pi binary.** Inside `pi.exe` (and any other `bun build --compile` host), `createRequire().resolve("tsx/cli")` is rooted at the binary's embedded virtual filesystem and cannot see the extension's real `node_modules`, so `browser_setup` failed instantly with `Could not start the browser daemon`. The resolver result is now checked on disk and, when it fails, the tsx CLI is found by walking up the `node_modules` chain the way Node does. Under Bun the daemon is launched with `node` from `PATH` instead of `process.execPath` (which is the pi binary itself); `PI_BROWSER_NODE` overrides the executable. (#27)
 
 ## 0.11.1 — 2026-08-12
 
