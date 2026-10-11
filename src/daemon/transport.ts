@@ -13,7 +13,7 @@ import {
   serialize,
 } from "./protocol";
 
-export const createDaemonTransport = (clientId: string): CdpTransport => {
+export const createDaemonTransport = (clientId: string, socketPath: string = DAEMON_SOCKET_PATH): CdpTransport => {
   let socket: Socket | null = null;
   let rl: ReturnType<typeof createInterface> | null = null;
   let queue = makeEventQueue();
@@ -51,12 +51,17 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
 
       let sock: Socket;
       try {
-        sock = createConnection(DAEMON_SOCKET_PATH);
+        sock = createConnection(socketPath);
       } catch (e) {
         settle(err(cdpError("transport_closed", e instanceof Error ? e.message : String(e))));
         return;
       }
       socket = sock;
+      // The client is kept connected across sessions on purpose (index.ts session_shutdown), so this
+      // socket must not be what keeps the process alive: in `pi -p` it was the last handle standing
+      // and pi never exited (#39). In-flight requests hold their own ref'd timers, so nothing a
+      // caller is awaiting can be dropped by this.
+      sock.unref();
 
       const connectTimer = setTimeout(() => {
         cleanup("Connection timeout");
