@@ -27,6 +27,7 @@ export const createFakeCursor = (
   status: CursorStatus = { enabled: true, diagnostics: { status: "shown" } },
   onCall?: (call: string) => void,
 ): FakeCursor => {
+  let currentStatus = status;
   const appliedSettings: boolean[] = [];
   const forgotten: string[] = [];
   const prunedWith: Array<ReadonlyArray<string>> = [];
@@ -48,8 +49,8 @@ export const createFakeCursor = (
     ) => {
       const result = await callback(visual);
       return result.success
-        ? { success: true, data: result.data, diagnostics: status.diagnostics }
-        : { success: false, error: result.error, diagnostics: status.diagnostics };
+        ? { success: true, data: result.data, diagnostics: currentStatus.diagnostics }
+        : { success: false, error: result.error, diagnostics: currentStatus.diagnostics };
     },
     withCaptureVisibility: async <T>(
       _includeCursor: boolean,
@@ -61,10 +62,11 @@ export const createFakeCursor = (
         : { success: false, error: result.error, visibility: {} };
     },
     applySessionSettings: async (enabled) => {
+      currentStatus = { ...currentStatus, enabled };
       appliedSettings.push(enabled);
       record(`apply:${enabled}`);
     },
-    status: () => status,
+    status: () => currentStatus,
     forget: async (targetId) => {
       forgotten.push(targetId);
       record(`forget:${targetId}`);
