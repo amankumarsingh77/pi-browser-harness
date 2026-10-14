@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { createFakeClient, type FakeClient } from "./fake-client";
 import { fillTool, focusTool, selectOptionTool } from "../../src/domains/form";
 import type { HandlerContext } from "../../src/util/tool";
-import type { VirtualCursorController } from "../../src/cursor/types";
 import { ok } from "../../src/util/result";
+import { createFakeCursor } from "../util/fake-cursor";
 
 const RESOLVED_NODE = ok({ object: { type: "object", objectId: "obj-1" } });
 
@@ -14,7 +14,7 @@ const THREW = ok({
 });
 
 const returned = (value: unknown) => ok({ result: { type: "object", value } });
-const cursor = {} as VirtualCursorController;
+const cursor = createFakeCursor();
 
 const ctxFor = (fake: FakeClient): HandlerContext => ({
   client: fake.client,

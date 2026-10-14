@@ -7,13 +7,13 @@ import type { TSchema } from "typebox";
 import { daemonSocketMayExist } from "../../src/daemon/spawn";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
-import type { VirtualCursorController } from "../../src/cursor/types";
 import { ok } from "../../src/util/result";
+import { createFakeCursor } from "./fake-cursor";
 
 const WINDOWS_PIPE = "\\\\.\\pipe\\pi-browser-daemon";
 const MISSING_SOCKET = "/pi-browser-harness/definitely/not/here.sock";
 const thisFile = fileURLToPath(import.meta.url);
-const fakeCursor = {} as VirtualCursorController;
+const fakeCursor = createFakeCursor();
 
 describe("daemon socket presence check", () => {
   test("a Windows named pipe is never judged absent from the filesystem", async () => {
