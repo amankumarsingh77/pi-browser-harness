@@ -4,6 +4,8 @@ import { type CdpError, cdpError } from "../../src/cdp/errors";
 import type { CdpTransport } from "../../src/cdp/types";
 import type { CdpEvent } from "../../src/cdp/types";
 import type { BrowserClient } from "../../src/client";
+import type { TabInfo } from "../../src/cdp/types";
+import type { CursorTarget, VirtualCursorController } from "../../src/cursor/types";
 import { createMutex } from "../../src/util/mutex";
 import { type Result, err, ok } from "../../src/util/result";
 
@@ -91,6 +93,8 @@ export const createStubTransport = (canned: Canned = {}): StubTransport => {
 export type FakeClientOptions = {
   readonly canned?: Canned;
   readonly evaluate?: (expression: string, sessionId?: string) => Result<unknown, CdpError>;
+  readonly evaluateQueue?: ReadonlyArray<Result<unknown, CdpError>>;
+  readonly listTabs?: ReadonlyArray<TabInfo>;
   readonly refs?: ReadonlyArray<{ readonly ref: string; readonly backendId: number; readonly sig?: string }>;
   readonly ownedTargetIds?: ReadonlyArray<string>;
 };
@@ -103,6 +107,8 @@ export type FakeClient = {
   readonly emit: (event: CdpEvent) => void;
   readonly callsTo: (method: string) => ReadonlyArray<RecordedCall>;
   readonly evaluated: string[];
+  readonly mutexAcquires: ReadonlyArray<string>;
+  readonly cursorMutex: ReturnType<typeof createMutex>;
 };
 
 const notConfigured = <T>(what: string): Result<T, CdpError> =>
@@ -112,8 +118,23 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
   const stub = createStubTransport({ ...DEFAULT_ATTACH, ...(opts.canned ?? {}) });
   const ownership = createOwnershipRegistry({ ownedTargetIds: opts.ownedTargetIds ?? ["t1"] });
   const session = createCdpSession(stub.transport, ownership);
-  const mutex = createMutex();
+  const mutexAcquires: string[] = [];
+  const baseMutationMutex = createMutex();
+  const baseCursorMutex = createMutex();
+  const mutex = {
+    acquire: async () => {
+      mutexAcquires.push("mutation");
+      return baseMutationMutex.acquire();
+    },
+  };
+  const cursorMutex = {
+    acquire: async () => {
+      mutexAcquires.push("cursor");
+      return baseCursorMutex.acquire();
+    },
+  };
   const evaluated: string[] = [];
+  const evaluateQueue = opts.evaluateQueue === undefined ? [] : [...opts.evaluateQueue];
 
   const attached = await session.attachFirstPage();
   if (!attached.success) throw new Error(`fake client could not attach: ${attached.error.message}`);
@@ -139,13 +160,17 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     closeOwnedTabs: () => Promise.resolve(),
     evaluateJs: (expression, sessionId) => {
       evaluated.push(expression);
+      const queued = evaluateQueue.shift();
+      if (queued !== undefined) return Promise.resolve(queued);
       const run = opts.evaluate;
       if (run === undefined) return Promise.resolve(notConfigured<unknown>("evaluateJs"));
       return Promise.resolve(sessionId === undefined ? run(expression) : run(expression, sessionId));
     },
     pageInfo: () => Promise.resolve(notConfigured("pageInfo")),
     takeDialog: () => session.takeDialog(),
-    listTabs: () => Promise.resolve(notConfigured("listTabs")),
+    listTabs: () => opts.listTabs === undefined
+      ? Promise.resolve(notConfigured("listTabs"))
+      : Promise.resolve(ok(opts.listTabs)),
     switchTab: () => Promise.resolve(notConfigured("switchTab")),
     newTab: () => Promise.resolve(notConfigured("newTab")),
     closeTab: () => Promise.resolve(ok(undefined)),
@@ -171,6 +196,30 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     emit: stub.emit,
     callsTo: (method) => stub.calls.filter((c) => c.method === method),
     evaluated,
+    mutexAcquires,
+    cursorMutex,
+  };
+};
+
+export type CursorToolContext = {
+  readonly client: BrowserClient;
+  readonly cursor: VirtualCursorController;
+  readonly signal: AbortSignal | undefined;
+  readonly target: CursorTarget;
+};
+
+export const toolContext = (
+  client: BrowserClient,
+  cursor: VirtualCursorController,
+  signal?: AbortSignal,
+): CursorToolContext => {
+  const current = client.current();
+  if (!current) throw new Error("fake client has no current target");
+  return {
+    client,
+    cursor,
+    signal,
+    target: current,
   };
 };
 
