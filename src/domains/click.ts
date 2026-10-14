@@ -1,14 +1,15 @@
 import { Type } from "typebox";
 import { Text } from "@mariozechner/pi-tui";
 import type { BrowserClient } from "../client";
+import type { CursorButton, CursorVisualSession } from "../cursor/types";
 import { Coords, MouseButton } from "../schemas/common";
-import { type Result, ok } from "../util/result";
+import { type Result, err, ok } from "../util/result";
 import { debugClicksEnabled } from "../util/debug";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
 import { cdpCall } from "./cdp-call";
 import { captureWithCrosshair } from "./screenshot-capture";
 import { interactiveDiff } from "./ref-resolve";
-import { resolveTarget } from "./target";
+import { refreshResolvedTarget, resolveTarget, type ResolvedTarget } from "./target";
 
 const ClickArgs = Type.Object({
   ref: Type.Optional(
@@ -30,25 +31,66 @@ const ClickArgs = Type.Object({
   ),
 });
 
+type ClickDispatchArgs = {
+  readonly target: ResolvedTarget;
+  readonly button: CursorButton;
+  readonly count: number;
+  readonly signal?: AbortSignal;
+  readonly visual: CursorVisualSession;
+};
+
+const cancelled = (): Result<never, ToolErr> =>
+  err({ kind: "invalid_state", message: "Click cancelled" });
+
 const dispatchClick = async (
   client: BrowserClient,
-  x: number,
-  y: number,
-  button: "left" | "right" | "middle",
-  count: number,
-): Promise<Result<void, ToolErr>> => {
+  args: ClickDispatchArgs,
+): Promise<Result<ResolvedTarget, ToolErr>> => {
+  if (args.signal?.aborted) return cancelled();
+  await args.visual.moveTo(args.target);
+  if (args.signal?.aborted) return cancelled();
+
+  const refreshed = await refreshResolvedTarget(client, args.target);
+  if (!refreshed.success) return refreshed;
+  const target = refreshed.data;
+  if (args.signal?.aborted) return cancelled();
+  if (target.x !== args.target.x || target.y !== args.target.y) {
+    await args.visual.moveTo(target);
+  }
+
   // Some focus/hover handlers and React synthetic events only fire when a mousemove precedes the press, so without it a click lands without focusing.
-  const moved = await cdpCall(client, "Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+  const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: target.x,
+    y: target.y,
+  });
   if (!moved.success) return moved;
+  if (args.signal?.aborted) return cancelled();
+
+  await args.visual.press(args.button);
   const pressed = await cdpCall(client, "Input.dispatchMouseEvent", {
-    type: "mousePressed", x, y, button, clickCount: count,
+    type: "mousePressed",
+    x: target.x,
+    y: target.y,
+    button: args.button,
+    clickCount: args.count,
   });
-  if (!pressed.success) return pressed;
+  if (!pressed.success) {
+    await args.visual.release(args.button, args.count);
+    return pressed;
+  }
+
   const released = await cdpCall(client, "Input.dispatchMouseEvent", {
-    type: "mouseReleased", x, y, button, clickCount: count,
+    type: "mouseReleased",
+    x: target.x,
+    y: target.y,
+    button: args.button,
+    clickCount: args.count,
   });
+  await args.visual.release(args.button, args.count);
   if (!released.success) return released;
-  return ok(undefined);
+  if (args.signal?.aborted) return cancelled();
+  return ok(target);
 };
 
 export const clickTool = defineBrowserTool({
@@ -68,30 +110,51 @@ export const clickTool = defineBrowserTool({
   parameters: ClickArgs,
   concurrency: "serialized",
   renderCall: (a) => new Text(`🖱️ Click ${a.ref ? `[${a.ref}]` : `(${a.x}, ${a.y})`}`, 0, 0),
-  async handler(args, { client }) {
+  async handler(args, { client, cursor, signal }) {
     const button = args.button ?? "left";
     const count = args.count ?? 1;
 
     const resolved = await resolveTarget(client, args);
     if (!resolved.success) return resolved;
-    const { x, y, label: target } = resolved.data;
-
-    const clicked = await dispatchClick(client, x, y, button, count);
-    if (!clicked.success) return clicked;
+    const current = client.current();
+    if (!current) {
+      return err({ kind: "not_connected", message: "No browser page is attached" });
+    }
+    const clicked = await cursor.runPointerAction(current, signal, async (visual) =>
+      dispatchClick(client, {
+        target: resolved.data,
+        button,
+        count,
+        visual,
+        ...(signal === undefined ? {} : { signal }),
+      }));
+    if (!clicked.success) return err(clicked.error);
+    const target = clicked.data;
+    const cursorDetails = {
+      cursorVisual: clicked.diagnostics.status,
+      ...(clicked.diagnostics.reason === undefined ? {} : { cursorReason: clicked.diagnostics.reason }),
+    };
 
     const diff = await interactiveDiff(client);
     if (debugClicksEnabled()) {
-      const debug = await captureWithCrosshair(client, { x, y });
+      const debug = await cursor.withCaptureVisibility(false, () =>
+        captureWithCrosshair(client, { x: target.x, y: target.y }));
       if (debug.success) {
         return ok({
-          text: `Clicked at ${target}\n[DEBUG] Overlay screenshot: ${debug.data.path}${diff}`,
-          details: { debugScreenshotPath: debug.data.path, x, y, ref: args.ref },
+          text: `Clicked at ${target.label}\n[DEBUG] Overlay screenshot: ${debug.data.path}${diff}`,
+          details: {
+            debugScreenshotPath: debug.data.path,
+            x: target.x,
+            y: target.y,
+            ref: args.ref,
+            ...cursorDetails,
+          },
         });
       }
     }
     return ok({
-      text: `Clicked at ${target}${diff}`,
-      details: { x, y, ref: args.ref },
+      text: `Clicked at ${target.label}${diff}`,
+      details: { x: target.x, y: target.y, ref: args.ref, ...cursorDetails },
     });
   },
 });
