@@ -170,6 +170,43 @@ const screenshotPath = (result: { readonly details?: Record<string, unknown> | u
   return typeof path === "string" && existsSync(path) && statSync(path).size > 0 ? path : undefined;
 };
 
+const jpegCursorPixels = async (
+  client: any,
+  path: string,
+  point: { readonly x: number; readonly y: number },
+  viewport: { readonly width: number; readonly height: number },
+): Promise<number> => {
+  const base64 = readFileSync(path).toString("base64");
+  const pixels = await evaluate(client, `(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(base64)}), (character) => character.charCodeAt(0));
+    const image = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("could not create JPEG inspection canvas");
+    context.drawImage(image, 0, 0);
+    const imageData = context.getImageData(0, 0, image.width, image.height).data;
+    const scaleX = image.width / ${viewport.width};
+    const scaleY = image.height / ${viewport.height};
+    let cursorPixelCount = 0;
+    for (let y = Math.max(0, Math.floor((${point.y} - 12) * scaleY)); y < Math.min(image.height, Math.ceil((${point.y} + 32) * scaleY)); y++) {
+      for (let x = Math.max(0, Math.floor((${point.x} - 4) * scaleX)); x < Math.min(image.width, Math.ceil((${point.x} + 32) * scaleX)); x++) {
+        const offset = (y * image.width + x) * 4;
+        const delta = Math.max(
+          Math.abs(imageData[offset] - 1),
+          Math.abs(imageData[offset + 1] - 2),
+          Math.abs(imageData[offset + 2] - 3),
+        );
+        if (delta > 40) cursorPixelCount++;
+      }
+    }
+    return cursorPixelCount;
+  })()`);
+  if (typeof pixels !== "number") throw new Error("JPEG inspection did not return a pixel count");
+  return pixels;
+};
+
 async function main(): Promise<void> {
   const transport = createDaemonTransport("pi-virtual-cursor-e2e-test");
   const client = createBrowserClient({ namespace: "pi-virtual-cursor-e2e-test", transport });
@@ -293,19 +330,30 @@ async function main(): Promise<void> {
     );
     const defaultSnapshot = await snapshotTool.handler({ includeScreenshot: true }, context);
     const defaultSnapshotPath = defaultSnapshot.success ? screenshotPath(defaultSnapshot.data) : undefined;
+    const defaultSnapshotCursorPixels = defaultSnapshotPath === undefined
+      ? undefined
+      : await jpegCursorPixels(client, defaultSnapshotPath, capturePosition, viewport);
+    console.log(`  snapshot pixels: default=${defaultSnapshotCursorPixels ?? "missing"}`);
     check(
       defaultSnapshot.success
         && defaultSnapshotPath !== undefined
-        && defaultSnapshot.data.details?.["screenshotPath"] === defaultSnapshotPath,
-      "default snapshot writes a nonempty screenshot attachment",
+        && defaultSnapshot.data.details?.["screenshotPath"] === defaultSnapshotPath
+        && defaultSnapshotCursorPixels === 0,
+      "default snapshot attachment suppresses rendered cursor pixels",
     );
     const cursorIncludedSnapshot = await snapshotTool.handler({ includeScreenshot: true, includeCursor: true }, context);
     const cursorIncludedSnapshotPath = cursorIncludedSnapshot.success ? screenshotPath(cursorIncludedSnapshot.data) : undefined;
+    const includedSnapshotCursorPixels = cursorIncludedSnapshotPath === undefined
+      ? undefined
+      : await jpegCursorPixels(client, cursorIncludedSnapshotPath, capturePosition, viewport);
+    console.log(`  snapshot pixels: included=${includedSnapshotCursorPixels ?? "missing"}`);
     check(
       cursorIncludedSnapshot.success
         && cursorIncludedSnapshotPath !== undefined
-        && cursorIncludedSnapshot.data.details?.["screenshotPath"] === cursorIncludedSnapshotPath,
-      "explicit snapshot cursor include writes a nonempty screenshot attachment",
+        && cursorIncludedSnapshot.data.details?.["screenshotPath"] === cursorIncludedSnapshotPath
+        && includedSnapshotCursorPixels !== undefined
+        && includedSnapshotCursorPixels > 0,
+      "explicit snapshot cursor include renders cursor pixels strictly",
     );
 
     const root = await client.session().call("DOM.getDocument", {});
