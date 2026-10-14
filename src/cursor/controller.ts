@@ -240,7 +240,7 @@ export const createVirtualCursorController = (
       return { success: false, error: failed("no browser target is attached"), visibility };
     }
     const currentState = state ?? stateFor(current);
-    if ((await command(currentState, "hide")) === undefined) {
+    if ((await command(currentState, "hide", { immediate: true })) === undefined) {
       const reason = currentState.diagnostics.reason;
       visibility = {
         cursorSuppression: "degraded",

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 import { createBrowserClient } from "../../src/client";
 import { createVirtualCursorController } from "../../src/cursor/controller";
 import { createDaemonTransport } from "../../src/daemon/transport";
@@ -32,6 +34,7 @@ const FIXTURE = `
   #source { left:40px } #target { left:300px }
   #scroll { position:absolute; left:40px; top:340px; width:320px; height:180px; overflow:auto; border:1px solid }
   #scroll-content { height:700px; width:100% }
+  #capture-surface { position:absolute; left:500px; top:600px; width:80px; height:80px; background:rgb(1,2,3) }
   dialog { position:fixed; left:120px; top:340px; width:220px; height:120px; margin:0 }
 </style>
 <button id="move">moves after frame</button>
@@ -40,6 +43,7 @@ const FIXTURE = `
 <div id="source" draggable="true">drag source</div>
 <div id="target">drop target</div>
 <div id="scroll"><div id="scroll-content">nested scroll</div></div>
+<div id="capture-surface"></div>
 <dialog id="cover">Top Layer cover</dialog>
 <script>
   window.counts = { click: 0, double: 0, context: 0, drop: 0, wheel: 0 };
@@ -92,6 +96,80 @@ const publishRef = async (client: any, name: string): Promise<string | undefined
 const cursorSnapshot = (client: any): Promise<Record<string, unknown> | undefined> =>
   evaluate(client, "globalThis[Symbol.for('pi-browser-harness.cursor.v1')].snapshot()") as Promise<Record<string, unknown> | undefined>;
 
+const cursorPixels = (
+  path: string,
+  point: { readonly x: number; readonly y: number },
+  viewport: { readonly width: number; readonly height: number },
+): number => {
+  const png = readFileSync(path);
+  const chunks: Buffer[] = [];
+  let width = 0;
+  let height = 0;
+  let channels = 0;
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    const type = png.subarray(offset + 4, offset + 8).toString("ascii");
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    offset += length + 12;
+    if (type === "IHDR") {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      channels = data[9] === 2 ? 3 : data[9] === 6 ? 4 : 0;
+      if (data[8] !== 8 || channels === 0) throw new Error("expected an 8-bit RGB or RGBA PNG screenshot");
+    } else if (type === "IDAT") {
+      chunks.push(data);
+    }
+  }
+  const encoded = inflateSync(Buffer.concat(chunks));
+  const stride = width * channels;
+  const rawPixels = Buffer.alloc(stride * height);
+  for (let y = 0, source = 0; y < height; y++) {
+    const filter = encoded[source++]!;
+    const row = rawPixels.subarray(y * stride, (y + 1) * stride);
+    const prior = y === 0 ? undefined : rawPixels.subarray((y - 1) * stride, y * stride);
+    for (let x = 0; x < stride; x++, source++) {
+      const left = x >= channels ? row[x - channels]! : 0;
+      const up = prior?.[x] ?? 0;
+      const upperLeft = x >= channels ? prior?.[x - channels] ?? 0 : 0;
+      const value = encoded[source]!;
+      if (filter === 0) row[x] = value;
+      else if (filter === 1) row[x] = (value + left) & 0xff;
+      else if (filter === 2) row[x] = (value + up) & 0xff;
+      else if (filter === 3) row[x] = (value + Math.floor((left + up) / 2)) & 0xff;
+      else if (filter === 4) {
+        const prediction = left + up - upperLeft;
+        const leftDistance = Math.abs(prediction - left);
+        const upDistance = Math.abs(prediction - up);
+        const upperLeftDistance = Math.abs(prediction - upperLeft);
+        const closest = leftDistance <= upDistance && leftDistance <= upperLeftDistance
+          ? left
+          : upDistance <= upperLeftDistance ? up : upperLeft;
+        row[x] = (value + closest) & 0xff;
+      } else throw new Error(`unsupported PNG filter ${filter}`);
+    }
+  }
+  let cursorPixelCount = 0;
+  const scaleX = width / viewport.width;
+  const scaleY = height / viewport.height;
+  for (let y = Math.floor((point.y - 12) * scaleY); y < Math.ceil((point.y + 32) * scaleY); y++) {
+    for (let x = Math.floor((point.x - 4) * scaleX); x < Math.ceil((point.x + 32) * scaleX); x++) {
+      const offset = (y * width + x) * channels;
+      const delta = Math.max(
+        Math.abs(rawPixels[offset]! - 1),
+        Math.abs(rawPixels[offset + 1]! - 2),
+        Math.abs(rawPixels[offset + 2]! - 3),
+      );
+      if (delta > 40) cursorPixelCount++;
+    }
+  }
+  return cursorPixelCount;
+};
+
+const screenshotPath = (result: { readonly details?: Record<string, unknown> | undefined }): string | undefined => {
+  const path = result.details?.["path"] ?? result.details?.["screenshotPath"];
+  return typeof path === "string" && existsSync(path) && statSync(path).size > 0 ? path : undefined;
+};
+
 async function main(): Promise<void> {
   const transport = createDaemonTransport("pi-virtual-cursor-e2e-test");
   const client = createBrowserClient({ namespace: "pi-virtual-cursor-e2e-test", transport });
@@ -109,7 +187,10 @@ async function main(): Promise<void> {
 
     const tab = await client.newTab(fixtureUrl);
     check(tab.success, `opened owned fixture tab${tab.success ? "" : `: ${tab.error.message}`}`);
-    if (!tab.success) return;
+    if (!tab.success) {
+      process.exitCode = 1;
+      return;
+    }
     tabId = tab.data;
 
     await wait(40);
@@ -176,25 +257,55 @@ async function main(): Promise<void> {
       "elementFromPoint resolves the page target instead of the overlay",
     );
 
+    const capturePosition = { x: 520, y: 620 };
+    const captureClick = await clickTool.handler(capturePosition, context);
+    check(captureClick.success, "real click positions the cursor on the capture surface");
+    await wait(250);
+    const viewport = await evaluate(client, "({ width: innerWidth, height: innerHeight })") as {
+      readonly width: number;
+      readonly height: number;
+    };
+
     const defaultScreenshot = await screenshotTool.handler({}, context);
+    const defaultScreenshotPath = defaultScreenshot.success ? screenshotPath(defaultScreenshot.data) : undefined;
+    const defaultCursorPixels = defaultScreenshotPath === undefined
+      ? undefined
+      : cursorPixels(defaultScreenshotPath, capturePosition, viewport);
+    console.log(`  capture pixels: default=${defaultCursorPixels ?? "missing"} viewport=${viewport.width}x${viewport.height}`);
     check(
-      defaultScreenshot.success && defaultScreenshot.data.details?.["cursorSuppression"] === "ok",
-      "default screenshot suppresses the cursor",
+      defaultScreenshot.success
+        && defaultScreenshotPath !== undefined
+        && defaultCursorPixels === 0,
+      "default screenshot suppresses rendered cursor pixels",
     );
     const cursorScreenshot = await screenshotTool.handler({ includeCursor: true }, context);
+    const cursorScreenshotPath = cursorScreenshot.success ? screenshotPath(cursorScreenshot.data) : undefined;
+    const includedCursorPixels = cursorScreenshotPath === undefined
+      ? undefined
+      : cursorPixels(cursorScreenshotPath, capturePosition, viewport);
+    console.log(`  capture pixels: included=${includedCursorPixels ?? "missing"}`);
     check(
-      cursorScreenshot.success && cursorScreenshot.data.details?.["cursorSuppression"] === "ok",
-      "explicit screenshot cursor include succeeds strictly",
+      cursorScreenshot.success
+        && cursorScreenshotPath !== undefined
+        && includedCursorPixels !== undefined
+        && includedCursorPixels > 0,
+      "explicit screenshot cursor include renders cursor pixels strictly",
     );
     const defaultSnapshot = await snapshotTool.handler({ includeScreenshot: true }, context);
+    const defaultSnapshotPath = defaultSnapshot.success ? screenshotPath(defaultSnapshot.data) : undefined;
     check(
-      defaultSnapshot.success && defaultSnapshot.data.details?.["cursorSuppression"] === "ok",
-      "default snapshot screenshot suppresses the cursor",
+      defaultSnapshot.success
+        && defaultSnapshotPath !== undefined
+        && defaultSnapshot.data.details?.["screenshotPath"] === defaultSnapshotPath,
+      "default snapshot writes a nonempty screenshot attachment",
     );
     const cursorIncludedSnapshot = await snapshotTool.handler({ includeScreenshot: true, includeCursor: true }, context);
+    const cursorIncludedSnapshotPath = cursorIncludedSnapshot.success ? screenshotPath(cursorIncludedSnapshot.data) : undefined;
     check(
-      cursorIncludedSnapshot.success && cursorIncludedSnapshot.data.details?.["cursorSuppression"] === "ok",
-      "explicit snapshot cursor include succeeds strictly",
+      cursorIncludedSnapshot.success
+        && cursorIncludedSnapshotPath !== undefined
+        && cursorIncludedSnapshot.data.details?.["screenshotPath"] === cursorIncludedSnapshotPath,
+      "explicit snapshot cursor include writes a nonempty screenshot attachment",
     );
 
     const root = await client.session().call("DOM.getDocument", {});

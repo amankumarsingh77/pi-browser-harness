@@ -61,7 +61,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(
     ".cursor{position:fixed;left:0;top:0;width:0;height:0;transform:translate3d(var(--x,0px),var(--y,0px),0);transition:transform var(--duration,0ms) linear,opacity 120ms linear;opacity:1}" +
-    ".cursor.idle{opacity:0}.arrow{width:0;height:0;border-top:8px solid transparent;border-bottom:8px solid transparent;border-left:13px solid #fff;filter:drop-shadow(0 0 2px #000)}" +
+    ".cursor.idle{opacity:0}.cursor.capture-hidden{transition:none;opacity:0}.arrow{width:0;height:0;border-top:8px solid transparent;border-bottom:8px solid transparent;border-left:13px solid #fff;filter:drop-shadow(0 0 2px #000)}" +
     ".cursor.pressed .arrow{transform:scale(.85)}.ring{position:absolute;width:24px;height:24px;margin:-12px;border:2px solid #4da3ff;border-radius:50%;opacity:0}" +
     ".cursor.pulse .ring{animation:pulse 220ms linear}.scroll{position:absolute;margin:12px;color:#fff;text-shadow:0 0 2px #000;opacity:0}.cursor.scrolling .scroll{opacity:1}" +
     "@keyframes pulse{from{opacity:1;transform:scale(.3)}to{opacity:0;transform:scale(1)}}"
@@ -109,6 +109,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
         cursor.style.setProperty("--x", request.x + "px");
         cursor.style.setProperty("--y", request.y + "px");
         cursor.style.setProperty("--duration", request.duration + "ms");
+        cursor.classList.remove("capture-hidden");
         cursor.classList.remove("idle");
         api.visible = true;
       } else if (request.command === "press") {
@@ -125,6 +126,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
         cursor.classList.add("scrolling");
         setTimeout(() => cursor.classList.remove("scrolling"), 220);
       } else if (request.command === "hide") {
+        cursor.classList.toggle("capture-hidden", request.immediate === true);
         cursor.classList.add("idle");
         api.visible = false;
       } else if (request.command === "show") {
@@ -134,6 +136,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
         if (request.strict && top && top.contains(document.elementFromPoint(api.x, api.y))) {
           return { ok: false, reason: "cursor point is covered by the Top Layer", topLayerOverlap: true };
         }
+        cursor.classList.remove("capture-hidden");
         cursor.classList.remove("idle");
         api.visible = true;
       } else if (request.command === "destroy") {
