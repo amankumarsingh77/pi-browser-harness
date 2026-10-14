@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { resolveTarget } from "../../src/domains/target";
+import { refreshResolvedTarget, resolveTarget } from "../../src/domains/target";
 import type { BrowserClient } from "../../src/client";
 
 const noClient = {} as unknown as BrowserClient;
@@ -55,6 +55,35 @@ describe("resolveTarget", () => {
       assert.equal(r.data.x, 120);
       assert.equal(r.data.y, 230);
       assert.equal(r.data.label, "[e7] (120, 230)");
+    }
+  });
+
+  test("a ref target preserves the backend node id used for its first box", async () => {
+    const client = clientWithRef(
+      { e7: 42 },
+      { 42: { content: [100, 200, 140, 200, 140, 260, 100, 260], width: 40, height: 60 } },
+    );
+    const first = await resolveTarget(client, { ref: "e7" });
+    assert.equal(first.success, true);
+    if (first.success) assert.equal(first.data.backendNodeId, 42);
+  });
+
+  test("refreshResolvedTarget uses the captured backend id instead of the current ref map", async () => {
+    const client = clientWithRef(
+      { e7: 99 },
+      {
+        42: { content: [200, 300, 240, 300, 240, 340, 200, 340], width: 40, height: 40 },
+        99: { content: [1, 1, 11, 1, 11, 11, 1, 11], width: 10, height: 10 },
+      },
+    );
+    const refreshed = await refreshResolvedTarget(client, {
+      x: 120, y: 230, label: "[e7] (120, 230)", backendNodeId: 42, ref: "e7",
+    });
+    assert.equal(refreshed.success, true);
+    if (refreshed.success) {
+      assert.equal(refreshed.data.x, 220);
+      assert.equal(refreshed.data.y, 320);
+      assert.equal(refreshed.data.backendNodeId, 42);
     }
   });
 

@@ -25,6 +25,7 @@ const dialogType = (raw: string): DialogInfo["type"] =>
 export type CdpSession = {
   attachFirstPage(): Promise<Result<{ readonly targetId: string; readonly sessionId: string }, CdpError>>;
   attach(targetId: string): Promise<Result<string, CdpError>>;
+  detach(sessionId: string): Promise<Result<void, CdpError>>;
   windowId(targetId: string): Promise<Result<number, CdpError>>;
   switchTo(targetId: string): Promise<Result<void, CdpError>>;
   current(): { readonly sessionId: string; readonly targetId: string } | null;
@@ -188,6 +189,9 @@ export const createCdpSession = (
   const attach = async (tid: string): Promise<Result<string, CdpError>> =>
     map(await req("Target.attachToTarget", { targetId: tid, flatten: true }, null), (d) => d.sessionId);
 
+  const detach = async (sid: string): Promise<Result<void, CdpError>> =>
+    map(await req("Target.detachFromTarget", { sessionId: sid }, null), () => undefined);
+
   const windowId = async (tid: string): Promise<Result<number, CdpError>> =>
     map(await req("Browser.getWindowForTarget", { targetId: tid }, null), (d) => d.windowId);
 
@@ -316,6 +320,7 @@ export const createCdpSession = (
       return ok(undefined);
     },
     attach,
+    detach,
     windowId,
     current() {
       return sessionId && targetId ? { sessionId, targetId } : null;

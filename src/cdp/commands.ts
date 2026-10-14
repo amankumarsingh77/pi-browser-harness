@@ -222,6 +222,7 @@ export const COMMANDS = {
   "Input.dispatchMouseEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchKeyEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchDragEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
+  "Input.cancelDragging": cmd(Type.Object({}), Empty),
   "Input.insertText": cmd(Type.Object({ text: Type.String() }), Empty),
 
   "Network.getResponseBody": cmd(

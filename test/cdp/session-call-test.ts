@@ -42,9 +42,27 @@ describe("typed call decoding", () => {
     });
     assert.equal(r.success, true);
   });
+
+  test("Input.cancelDragging decodes an empty result", () => {
+    const cancelled = decodeResult("Input.cancelDragging", {});
+    assert.equal(cancelled.success, true);
+  });
 });
 
 describe("CdpSession.call / callOnTarget / callBrowser", () => {
+  test("detach routes Target.detachFromTarget through the browser session", async () => {
+    const { transport, calls } = makeStubTransport({
+      "Target.detachFromTarget": ok({}),
+    });
+    const session = createCdpSession(transport);
+    const detached = await session.detach("temporary-session");
+    assert.equal(detached.success, true);
+    const call = calls.at(-1);
+    assert.equal(call?.method, "Target.detachFromTarget");
+    assert.deepEqual(call?.params, { sessionId: "temporary-session" });
+    assert.equal(call?.opts?.sessionId, null);
+  });
+
   test("(a) a valid stub payload decodes to typed data", async () => {
     const { transport } = makeStubTransport({
       "Target.getTargetInfo": ok({ targetInfo: { targetId: "t1", type: "page", title: "T", url: "u" } }),
