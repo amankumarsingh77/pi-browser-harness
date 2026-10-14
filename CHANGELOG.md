@@ -2,6 +2,19 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **Virtual cursor controls and capture options.** The page-only cursor is default-on and never
+  moves the system pointer. Use `--no-browser-cursor` or `/browser-cursor on|off|status` to control
+  it. Screenshots and PDFs stay clean by default; `browser_screenshot({ includeCursor: true })`
+  and `browser_snapshot({ includeScreenshot: true, includeCursor: true })` request strict cursor
+  inclusion. HTML Top Layer content can cover the cursor, but visual degradation never blocks input.
+- **Real-Chrome cursor verification and benchmark commands.** The manual fixture checks click,
+  drag, scroll, reinjection, capture suppression, pointer interception, focus, and accessibility;
+  the deterministic benchmark gates the incremental P95 visual latency at 220ms.
+
 ## 0.11.0 — 2026-08-02
 
 ### Fixed

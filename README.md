@@ -185,6 +185,32 @@ regardless of render state.
 
 ---
 
+## Virtual cursor
+
+Pointer actions show a page-only virtual cursor by default. It never moves the macOS or other
+system pointer. Visual degradation does not block click, drag, or scroll input: CDP input remains
+authoritative.
+
+Use `--no-browser-cursor` to start with the cursor disabled, or control it in a session with:
+
+```text
+/browser-cursor on|off|status
+```
+
+Screenshots and PDFs are clean by default. Request the cursor explicitly only when visual feedback
+is needed:
+
+```text
+browser_screenshot({ includeCursor: true })
+browser_snapshot({ includeScreenshot: true, includeCursor: true })
+```
+
+Explicit inclusion is strict: it fails rather than producing a misleading image when the cursor
+cannot be shown. In particular, the HTML Top Layer (modal dialogs, fullscreen content, and open
+popovers) can cover the cursor position.
+
+---
+
 ## Recipes
 
 ### Fill a form on an SPA
@@ -306,11 +332,13 @@ re-runnable.
 | `/browser-setup` | Connect pi to your browser. Run once; idempotent. |
 | `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
 | `/browser-status` | Connection state, selected profile, and current page. |
+| `/browser-cursor on\|off\|status` | Enable, disable, or report the page-only virtual cursor. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
 
 | Flag / variable | Effect |
 |---|---|
 | `--browser-namespace <name>` | Override the session namespace (default: auto-generated). |
+| `--no-browser-cursor` | Start with the page-only virtual cursor disabled. |
 | `--browser-debug-clicks` | Save annotated click screenshots for debugging. Equivalent to `BH_DEBUG_CLICKS=1`. |
 | `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. The daemon reads this when it starts, so stop a running daemon first. |
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |

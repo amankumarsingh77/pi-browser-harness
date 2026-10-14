@@ -1,5 +1,6 @@
 import type { BrowserClient } from "../client";
 import { evalJs } from "../domains/cdp-call";
+import { asBoolean, asRecord, asString } from "../util/guards";
 import type { ToolErr } from "../util/tool";
 import { err, ok, type Result } from "../util/result";
 
@@ -84,7 +85,18 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
     reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
     x: 0,
     y: 0,
+    pressed: false,
     reset,
+    snapshot() {
+      return {
+        connected: host.isConnected,
+        hostCount: document.querySelectorAll("[aria-hidden='true'][tabindex='-1']").length,
+        x: api.x,
+        y: api.y,
+        pressed: api.pressed,
+        pointerEvents: getComputedStyle(host).pointerEvents,
+      };
+    },
     command(request) {
       reset();
       const computed = getComputedStyle(host);
@@ -101,8 +113,10 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
         api.visible = true;
       } else if (request.command === "press") {
         cursor.classList.add("pressed");
+        api.pressed = true;
       } else if (request.command === "release") {
         cursor.classList.remove("pressed");
+        api.pressed = false;
         cursor.classList.remove("pulse");
         void cursor.offsetWidth;
         cursor.classList.add("pulse");
@@ -160,6 +174,14 @@ export const cursorCommandExpression = (
 const malformedState = (): Result<OverlayState, ToolErr> =>
   err({ kind: "invalid_state", message: "cursor overlay returned an invalid state" });
 
+const overlayFailure = (value: unknown): Result<OverlayState, ToolErr> | undefined => {
+  const record = asRecord(value);
+  const rejected = record === undefined ? undefined : asBoolean(record["ok"]);
+  const reason = record === undefined ? undefined : asString(record["reason"]);
+  if (rejected !== false || reason === undefined) return undefined;
+  return err({ kind: "invalid_state", message: reason });
+};
+
 export const ensureOverlay = async (
   client: BrowserClient,
   sessionId: string,
@@ -181,6 +203,8 @@ export const runOverlayCommand = async (
 ): Promise<Result<OverlayState, ToolErr>> => {
   const result = await evalJs(client, cursorCommandExpression(command, payload), sessionId);
   if (!result.success) return result;
+  const failure = overlayFailure(result.data);
+  if (failure !== undefined) return failure;
   if (!validOverlayState(result.data)) return malformedState();
   return ok(result.data);
 };

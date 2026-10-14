@@ -129,7 +129,12 @@ export const createVirtualCursorController = (
     payload?: Readonly<Record<string, unknown>>,
   ): Promise<OverlayState | undefined> => {
     if (!(await ready(state))) return undefined;
-    const result = await runOverlayCommand(client, state.sessionId, name, payload);
+    let result = await runOverlayCommand(client, state.sessionId, name, payload);
+    if (!result.success && result.error.message === "cursor overlay is not installed") {
+      state.ready = false;
+      if (!(await ready(state))) return undefined;
+      result = await runOverlayCommand(client, state.sessionId, name, payload);
+    }
     if (!result.success) {
       degrade(state, result.error.message);
       return undefined;

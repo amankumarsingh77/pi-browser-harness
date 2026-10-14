@@ -196,6 +196,12 @@ export const COMMANDS = {
     Type.Object({ nodeId: Type.Number(), selector: Type.String() }),
     Type.Object({ nodeId: Type.Number() }),
   ),
+  "DOM.describeNode": cmd(
+    Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
+    Type.Object({
+      node: Type.Object({ backendNodeId: Type.Optional(Type.Number()) }, { additionalProperties: true }),
+    }),
+  ),
   "DOM.getBoxModel": cmd(
     Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
     Type.Object({
