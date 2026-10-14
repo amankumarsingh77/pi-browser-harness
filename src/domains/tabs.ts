@@ -26,9 +26,10 @@ export const listTabsTool = defineBrowserTool({
   ],
   parameters: ListTabsArgs,
   concurrency: "parallel",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
     const r = await client.listTabs(args.includeInternal ?? true);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    await cursor.prune(new Set(r.data.filter((tab) => tab.owned).map((tab) => tab.targetId)));
     const scope = args.scope ?? "owned";
     const filtered = scope === "owned" ? r.data.filter((t) => t.owned) : r.data;
     const lines = filtered.map((t, i) => {
@@ -171,7 +172,7 @@ export const closeTabTool = defineBrowserTool({
   ],
   parameters: CloseTabArgs,
   concurrency: "serialized",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
     let resolved = args.targetId;
     if (!client.owns(resolved)) {
       const isHexPrefix = /^[0-9A-Fa-f]{8,}$/.test(args.targetId);
@@ -197,6 +198,7 @@ export const closeTabTool = defineBrowserTool({
     }
     const r = await client.closeTab(resolved);
     if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    await cursor.forget(resolved);
     return ok({ text: `Closed tab ${resolved}`, details: { targetId: resolved } });
   },
 });

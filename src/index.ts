@@ -10,6 +10,8 @@ import { cleanupTempDirs } from "./util/truncate";
 import { createDaemonTransport } from "./daemon/transport";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
+import { createVirtualCursorController } from "./cursor/controller";
+import type { VirtualCursorController } from "./cursor/types";
 
 export default function browserHarnessExtension(pi: ExtensionAPI): void {
   const flagNs = asString(pi.getFlag("browser-namespace"));
@@ -17,6 +19,7 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   let state: BrowserState = defaultState(namespace);
   let client: BrowserClient | null = null;
+  let cursor: VirtualCursorController | null = null;
   let toolsRegistered = false;
 
   pi.registerFlag("browser-namespace", {
@@ -27,6 +30,53 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     description: "Enable debug click overlay (saves annotated screenshots to /tmp)",
     type: "boolean",
     default: false,
+  });
+  pi.registerFlag("no-browser-cursor", {
+    description: "Disable the in-page virtual cursor for this process",
+    type: "boolean",
+    default: false,
+  });
+
+  pi.registerCommand("browser-cursor", {
+    description: "Control the in-page virtual cursor: on, off, or status",
+    handler: async (args, ctx) => {
+      if (!cursor) {
+        ctx.ui.notify("Browser client not started. Run /browser-setup first.", "warning");
+        return;
+      }
+      const mode = args.trim().toLowerCase();
+      const forcedOff = asBoolean(pi.getFlag("no-browser-cursor")) ?? false;
+      if (mode === "on") {
+        if (forcedOff) {
+          ctx.ui.notify("Virtual cursor: forced off by --no-browser-cursor", "warning");
+          return;
+        }
+        await cursor.applySessionSettings(true);
+        state = { ...state, cursorEnabled: true };
+        persistState(pi, state);
+        ctx.ui.notify("Virtual cursor: on", "info");
+        return;
+      }
+      if (mode === "off") {
+        await cursor.applySessionSettings(false);
+        state = { ...state, cursorEnabled: false };
+        persistState(pi, state);
+        ctx.ui.notify("Virtual cursor: off", "info");
+        return;
+      }
+      if (mode === "status") {
+        const status = cursor.status();
+        if (forcedOff) {
+          ctx.ui.notify("Virtual cursor: forced off by --no-browser-cursor", "info");
+        } else if (status.diagnostics.status === "degraded") {
+          ctx.ui.notify(`Virtual cursor: degraded (${status.diagnostics.reason ?? "unknown reason"})`, "warning");
+        } else {
+          ctx.ui.notify(`Virtual cursor: ${status.enabled ? "on" : "off"}`, "info");
+        }
+        return;
+      }
+      ctx.ui.notify("Usage: /browser-cursor on|off|status", "warning");
+    },
   });
 
   pi.registerCommand("browser-status", {
@@ -115,12 +165,20 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
           try { persistState(pi, state); } catch {}
         },
       });
+      cursor = createVirtualCursorController(client, {
+        enabled: !(asBoolean(pi.getFlag("no-browser-cursor")) ?? false),
+      });
     } else {
       client.setProfilePin(profilePin);
     }
 
+    if (!cursor) throw new Error("virtual cursor was not initialized");
+    await cursor.applySessionSettings(
+      (asBoolean(pi.getFlag("no-browser-cursor")) ?? false) ? false : state.cursorEnabled ?? true,
+    );
+
     if (!toolsRegistered) {
-      registerAllTools(pi, client);
+      registerAllTools(pi, client, cursor);
       toolsRegistered = true;
     }
     registerSetupCommand(pi, client);
@@ -134,6 +192,8 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
         await client.closeOwnedTabs();
       } catch (e) {
         console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
+      } finally {
+        await cursor?.clear();
       }
       // Do NOT stop the client or null it out: the surviving daemon connection is what eliminates the per-session "Allow Remote Debugging" prompt.
     }
@@ -143,6 +203,9 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
 
   pi.on("session_tree", async (_event, ctx) => {
     state = restoreState(ctx, client?.namespace);
+    await cursor?.applySessionSettings(
+      (asBoolean(pi.getFlag("no-browser-cursor")) ?? false) ? false : state.cursorEnabled ?? true,
+    );
     persistState(pi, state);
   });
 

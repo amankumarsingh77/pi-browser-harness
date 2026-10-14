@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "./client";
+import type { VirtualCursorController } from "./cursor/types";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "./util/tool";
 import { clickTool } from "./domains/click";
 import { typeTool, pressKeyTool, dispatchKeyTool } from "./domains/keyboard";
@@ -66,6 +67,10 @@ export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   readPageTool,
 ];
 
-export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
-  for (const t of ALL_TOOLS) registerBrowserTool(pi, client, t);
+export const registerAllTools = (
+  pi: ExtensionAPI,
+  client: BrowserClient,
+  cursor: VirtualCursorController,
+): void => {
+  for (const t of ALL_TOOLS) registerBrowserTool(pi, client, cursor, t);
 };
