@@ -15,6 +15,7 @@ import type {
   CursorVisualSession,
   VirtualCursorController,
 } from "../../src/cursor/types";
+import { createVirtualCursorController } from "../../src/cursor/controller";
 import { cdpError } from "../../src/cdp/errors";
 import { type Result, err, ok } from "../../src/util/result";
 import type { ToolErr } from "../../src/util/tool";
@@ -39,6 +40,7 @@ type RecordingCursor = VirtualCursorController & {
 
 const createRecordingCursor = (order: string[]): RecordingCursor => {
   const visual: CursorVisualSession = {
+    isHealthy: () => true,
     moveTo: async ({ x, y }, immediate = false) => {
       order.push(`visual:${immediate ? "move-now" : "move"}:${x},${y}`);
     },
@@ -338,6 +340,46 @@ describe("browser_drag_and_drop cursor transaction", () => {
     assert.equal(result.success, false);
     if (!result.success) assert.equal(result.error.message, "Drag cancelled");
   });
+
+  test("stops visual interpolation waits after a real controller degrades while delivering every dragOver", async (t) => {
+    let moveCommands = 0;
+    const fake = await createFakeClient({
+      evaluate: (expression) => {
+        if (expression.includes('"command":"move"') && ++moveCommands === 2) {
+          return err(cdpError("remote_error", "overlay unavailable"));
+        }
+        return ok({ version: 1, connected: true, visible: true, reducedMotion: false });
+      },
+    });
+    const cursor = createVirtualCursorController(fake.client, { cursorMutex: fake.cursorMutex });
+    let interpolationWaits = 0;
+    t.mock.method(globalThis, "setTimeout", (
+      callback: TimerHandler,
+      delay?: number,
+      ...args: unknown[]
+    ): ReturnType<typeof setTimeout> => {
+      if (delay === 16) interpolationWaits += 1;
+      const handle = setInterval(() => {}, 1);
+      clearInterval(handle);
+      queueMicrotask(() => {
+        if (typeof callback === "function") callback(...args);
+      });
+      return handle;
+    });
+
+    try {
+      const result = await drag(fake, cursor);
+
+      assert.equal(result.success, true);
+      assert.equal(interpolationWaits, 0);
+      assert.equal(
+        fake.callsTo("Input.dispatchDragEvent").filter((call) => call.params["type"] === "dragOver").length,
+        5,
+      );
+    } finally {
+      await cursor.clear();
+    }
+  });
 });
 
 describe("browser_scroll cursor orchestration", () => {
@@ -416,6 +458,7 @@ describe("browser_scroll cursor orchestration", () => {
       callback: (visual: CursorVisualSession) => Promise<Result<T, ToolErr>>,
     ) => {
       const result = await (async () => callback({
+        isHealthy: () => false,
         moveTo: async () => {
           throw new Error("overlay unavailable");
         },

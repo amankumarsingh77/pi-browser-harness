@@ -94,7 +94,6 @@ const dispatchDrag = async (
   let primary = cancelledError();
   let hasPrimary = false;
   let outcome: Result<ToolOk, ToolErr> = cancelled();
-  let visualsDegraded = false;
   const record = (result: Result<unknown, ToolErr>): boolean => {
     if (result.success) return true;
     primary = result.error;
@@ -103,12 +102,10 @@ const dispatchDrag = async (
   };
   const visual = async (operation: () => Promise<void>, wait = false): Promise<boolean> => {
     if (await runVisual(operation)) {
-      if (wait && !visualsDegraded) await waitForDragVisual();
+      if (wait && args.visual.isHealthy()) await waitForDragVisual();
       return true;
-    } else {
-      visualsDegraded = true;
-      return false;
     }
+    return false;
   };
 
   try {

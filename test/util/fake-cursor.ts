@@ -16,6 +16,7 @@ export type FakeCursor = VirtualCursorController & {
 };
 
 const visual: CursorVisualSession = {
+  isHealthy: () => true,
   moveTo: async () => {},
   moveDrag: async () => {},
   press: async () => {},

@@ -152,6 +152,7 @@ export const createVirtualCursorController = (
       recentTargetId = target.targetId;
     };
     return {
+      isHealthy: () => state.diagnostics.status === "shown",
       moveTo: move,
       moveDrag: move,
       press: async (button: CursorButton): Promise<void> => {
@@ -172,6 +173,7 @@ export const createVirtualCursorController = (
     callback: (visual: CursorVisualSession) => Promise<Result<T, ToolErr>>,
   ): Promise<CursorActionResult<T>> => withCursorLock(async () => {
     const visual = enabled ? visualSession(target) : {
+      isHealthy: () => false,
       moveTo: async () => {},
       moveDrag: async () => {},
       press: async () => {},

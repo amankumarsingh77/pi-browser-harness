@@ -19,6 +19,7 @@ export type CaptureVisibility = {
 };
 
 export type CursorVisualSession = {
+  isHealthy(): boolean;
   moveTo(point: CursorPoint, immediate?: boolean): Promise<void>;
   moveDrag(point: CursorPoint): Promise<void>;
   press(button: CursorButton): Promise<void>;

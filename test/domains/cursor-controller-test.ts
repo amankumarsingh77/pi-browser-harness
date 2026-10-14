@@ -22,14 +22,17 @@ describe("VirtualCursorController", () => {
     });
     const cursor = createVirtualCursorController(fake.client, { cursorMutex: fake.cursorMutex });
     let dispatched = false;
+    let visualHealthy = true;
 
     const result = await cursor.runPointerAction(target, undefined, async (visual) => {
       await visual.moveTo({ x: 10, y: 20 });
+      visualHealthy = visual.isHealthy();
       dispatched = true;
       return ok("input-result");
     });
 
     assert.equal(dispatched, true);
+    assert.equal(visualHealthy, false);
     assert.equal(result.success, true);
     assert.equal(result.diagnostics.status, "degraded");
   });

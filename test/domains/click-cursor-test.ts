@@ -61,6 +61,7 @@ const createRecordingCursor = (
 ): RecordingCursor => {
   let moveCount = 0;
   const visual: CursorVisualSession = {
+    isHealthy: () => true,
     moveTo: async ({ x, y }, immediate = false) => {
       moveCount += 1;
       order.push(`visual:${immediate ? "move-now" : "move"}:${x},${y}`);
