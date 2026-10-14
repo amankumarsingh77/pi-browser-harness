@@ -50,6 +50,20 @@ describe("VirtualCursorController", () => {
     assert.match(moveExpressions[2] ?? "", /"duration":180/);
   });
 
+  test("uses zero duration for an immediate corrective move", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(overlayState) });
+    const cursor = createVirtualCursorController(fake.client, {});
+
+    await cursor.runPointerAction(target, undefined, async (visual) => {
+      await visual.moveTo({ x: 1, y: 1 });
+      await visual.moveTo({ x: 300, y: 400 }, true);
+      return ok(undefined);
+    });
+
+    const moveExpressions = fake.evaluated.filter((expression) => expression.includes('"command":"move"'));
+    assert.match(moveExpressions[1] ?? "", /"duration":0/);
+  });
+
   test("schedules an idle fade 1.2 seconds after a visual action", async () => {
     const fake = await createFakeClient({ evaluate: () => ok(overlayState) });
     const cursor = createVirtualCursorController(fake.client, {});

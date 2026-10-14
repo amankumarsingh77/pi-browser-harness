@@ -51,24 +51,33 @@ const createRecordingCursor = (
   order: string[],
   options: {
     readonly diagnostics?: CursorDiagnostics;
-    readonly afterMove?: () => void;
+    readonly afterMove?: (moveCount: number) => void;
     readonly afterPress?: () => void;
     readonly failMove?: boolean;
+    readonly failCorrectiveMove?: boolean;
+    readonly failPress?: boolean;
+    readonly failRelease?: boolean;
   } = {},
 ): RecordingCursor => {
+  let moveCount = 0;
   const visual: CursorVisualSession = {
-    moveTo: async ({ x, y }) => {
-      order.push(`visual:move:${x},${y}`);
-      options.afterMove?.();
-      if (options.failMove) throw new Error("overlay unavailable");
+    moveTo: async ({ x, y }, immediate = false) => {
+      moveCount += 1;
+      order.push(`visual:${immediate ? "move-now" : "move"}:${x},${y}`);
+      options.afterMove?.(moveCount);
+      if (options.failMove || (options.failCorrectiveMove && moveCount === 2)) {
+        throw new Error("overlay unavailable");
+      }
     },
     moveDrag: async () => {},
     press: async (button) => {
       order.push(`visual:press:${button}`);
       options.afterPress?.();
+      if (options.failPress) throw new Error("overlay press unavailable");
     },
     release: async (button, count) => {
       order.push(`visual:release:${button}:${count}`);
+      if (options.failRelease) throw new Error("overlay release unavailable");
     },
     showScroll: async () => {},
   };
@@ -160,7 +169,7 @@ describe("browser_click cursor orchestration", () => {
     assert.deepEqual(order, [
       "visual:move:120,230",
       "box:backend:42",
-      "visual:move:220,320",
+      "visual:move-now:220,320",
       "cdp:mouseMoved:220,320",
       "visual:press:left",
       "cdp:mousePressed:220,320",
@@ -267,6 +276,25 @@ describe("browser_click cursor orchestration", () => {
     );
   });
 
+  test("stops before CDP movement when cancelled during the corrective visual snap", async () => {
+    const controller = new AbortController();
+    const fake = await createFakeClient({
+      canned: { "DOM.getBoxModel": [box(100, 200), box(200, 290)] },
+      refs: [{ ref: "e1", backendId: 42 }],
+    });
+    const cursor = createRecordingCursor([], {
+      failCorrectiveMove: true,
+      afterMove: (moveCount) => {
+        if (moveCount === 2) controller.abort();
+      },
+    });
+
+    const result = await click(fake.client, cursor, { ref: "e1" }, controller.signal);
+
+    assert.equal(result.success, false);
+    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 0);
+  });
+
   test("releases after a cancellation following a successful press", async () => {
     const controller = new AbortController();
     const fake = await createFakeClient();
@@ -308,6 +336,106 @@ describe("browser_click cursor orchestration", () => {
       assert.equal(result.data.details?.["cursorVisual"], "degraded");
       assert.equal(result.data.details?.["cursorReason"], "overlay unavailable");
     }
+  });
+
+  test("rejected visual operations never block the CDP click sequence", async (t) => {
+    const cases = [
+      {
+        name: "initial move",
+        options: { failMove: true },
+        client: async () => createFakeClient(),
+        args: { x: 12, y: 34 } satisfies ClickArgs,
+      },
+      {
+        name: "corrective move",
+        options: { failCorrectiveMove: true },
+        client: async () => createFakeClient({
+          canned: { "DOM.getBoxModel": [box(100, 200), box(200, 290)] },
+          refs: [{ ref: "e1", backendId: 42 }],
+        }),
+        args: { ref: "e1" } satisfies ClickArgs,
+      },
+      {
+        name: "press",
+        options: { failPress: true },
+        client: async () => createFakeClient(),
+        args: { x: 12, y: 34 } satisfies ClickArgs,
+      },
+      {
+        name: "release",
+        options: { failRelease: true },
+        client: async () => createFakeClient(),
+        args: { x: 12, y: 34 } satisfies ClickArgs,
+      },
+    ] as const;
+
+    for (const scenario of cases) {
+      await t.test(scenario.name, async () => {
+        const fake = await scenario.client();
+        const result = await click(
+          fake.client,
+          createRecordingCursor([], scenario.options),
+          scenario.args,
+        );
+
+        assert.equal(result.success, true);
+        assert.deepEqual(
+          fake.callsTo("Input.dispatchMouseEvent").map((call) => call.params["type"]),
+          ["mouseMoved", "mousePressed", "mouseReleased"],
+        );
+      });
+    }
+  });
+
+  test("a visual release rejection does not replace the CDP release error", async () => {
+    const fake = await createFakeClient({
+      canned: {
+        "Input.dispatchMouseEvent": [
+          { success: true, data: {} },
+          { success: true, data: {} },
+          err(cdpError("remote_error", "CDP release failed")),
+        ],
+      },
+    });
+
+    const result = await click(
+      fake.client,
+      createRecordingCursor([], { failRelease: true }),
+      { x: 12, y: 34 },
+    );
+
+    assert.equal(result.success, false);
+    if (!result.success) {
+      assert.equal(result.error.kind, "cdp_error");
+      assert.equal(result.error.message, "CDP release failed");
+    }
+  });
+
+  test("a visual press rejection does not replace the CDP press error", async () => {
+    const fake = await createFakeClient({
+      canned: {
+        "Input.dispatchMouseEvent": [
+          { success: true, data: {} },
+          err(cdpError("remote_error", "CDP press failed")),
+        ],
+      },
+    });
+
+    const result = await click(
+      fake.client,
+      createRecordingCursor([], { failPress: true, failRelease: true }),
+      { x: 12, y: 34 },
+    );
+
+    assert.equal(result.success, false);
+    if (!result.success) {
+      assert.equal(result.error.kind, "cdp_error");
+      assert.equal(result.error.message, "CDP press failed");
+    }
+    assert.deepEqual(
+      fake.callsTo("Input.dispatchMouseEvent").map((call) => call.params["type"]),
+      ["mouseMoved", "mousePressed"],
+    );
   });
 
   test("captures debug output after the pointer action with corrected coordinates", async () => {

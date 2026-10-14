@@ -42,12 +42,20 @@ type ClickDispatchArgs = {
 const cancelled = (): Result<never, ToolErr> =>
   err({ kind: "invalid_state", message: "Click cancelled" });
 
+const runVisual = async (operation: () => Promise<void>): Promise<void> => {
+  try {
+    await operation();
+  } catch {
+    // Visual feedback is best-effort; CDP input remains authoritative.
+  }
+};
+
 const dispatchClick = async (
   client: BrowserClient,
   args: ClickDispatchArgs,
 ): Promise<Result<ResolvedTarget, ToolErr>> => {
   if (args.signal?.aborted) return cancelled();
-  await args.visual.moveTo(args.target);
+  await runVisual(() => args.visual.moveTo(args.target));
   if (args.signal?.aborted) return cancelled();
 
   const refreshed = await refreshResolvedTarget(client, args.target);
@@ -55,8 +63,9 @@ const dispatchClick = async (
   const target = refreshed.data;
   if (args.signal?.aborted) return cancelled();
   if (target.x !== args.target.x || target.y !== args.target.y) {
-    await args.visual.moveTo(target);
+    await runVisual(() => args.visual.moveTo(target, true));
   }
+  if (args.signal?.aborted) return cancelled();
 
   // Some focus/hover handlers and React synthetic events only fire when a mousemove precedes the press, so without it a click lands without focusing.
   const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
@@ -67,7 +76,7 @@ const dispatchClick = async (
   if (!moved.success) return moved;
   if (args.signal?.aborted) return cancelled();
 
-  await args.visual.press(args.button);
+  await runVisual(() => args.visual.press(args.button));
   const pressed = await cdpCall(client, "Input.dispatchMouseEvent", {
     type: "mousePressed",
     x: target.x,
@@ -76,7 +85,7 @@ const dispatchClick = async (
     clickCount: args.count,
   });
   if (!pressed.success) {
-    await args.visual.release(args.button, args.count);
+    await runVisual(() => args.visual.release(args.button, args.count));
     return pressed;
   }
 
@@ -87,7 +96,7 @@ const dispatchClick = async (
     button: args.button,
     clickCount: args.count,
   });
-  await args.visual.release(args.button, args.count);
+  await runVisual(() => args.visual.release(args.button, args.count));
   if (!released.success) return released;
   if (args.signal?.aborted) return cancelled();
   return ok(target);

@@ -141,8 +141,8 @@ export const createVirtualCursorController = (
 
   const visualSession = (target: CursorTarget): CursorVisualSession => {
     const state = stateFor(target);
-    const move = async (point: CursorPoint): Promise<void> => {
-      const duration = state.point === undefined || state.reducedMotion
+    const move = async (point: CursorPoint, immediate = false): Promise<void> => {
+      const duration = immediate || state.point === undefined || state.reducedMotion
         ? 0
         : distanceDuration(state.point, point);
       const moved = await command(state, "move", { x: point.x, y: point.y, duration });
