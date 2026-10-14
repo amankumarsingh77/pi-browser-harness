@@ -87,6 +87,7 @@ export const createVirtualCursorController = (
   const clearIdleFade = (state: TargetState): void => {
     if (state.idleTimer !== undefined) clearTimeout(state.idleTimer);
     state.idleTimer = undefined;
+    delete state.idleFadeUntil;
   };
 
   const scheduleIdleFade = (state: TargetState): void => {

@@ -217,6 +217,25 @@ describe("VirtualCursorController", () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  test("clear invalidates an expired idle fade queued behind the cursor mutex", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(overlayState) });
+    const cursor = createVirtualCursorController(fake.client, { cursorMutex: fake.cursorMutex });
+    await cursor.runPointerAction(target, undefined, async (visual) => {
+      await visual.moveTo({ x: 10, y: 20 });
+      return ok(undefined);
+    });
+
+    const release = await fake.cursorMutex.acquire();
+    const clearing = cursor.clear();
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_250));
+    release();
+    await clearing;
+    const releaseBarrier = await fake.cursorMutex.acquire();
+    releaseBarrier();
+
+    assert.equal(fake.evaluated.filter((expression) => expression.includes('"command":"hide"')).length, 0);
+  });
+
   test("applySessionSettings acquires mutation mutex before the cursor mutex", async () => {
     const fake = await createFakeClient();
     const cursor = createVirtualCursorController(fake.client, { cursorMutex: fake.cursorMutex });
