@@ -35,6 +35,10 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
     existing.reset();
     return stateOf(existing);
   }
+  if (existing && existing.host && existing.host.isConnected) {
+    existing.host.remove();
+  }
+  delete globalThis[key];
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true");
   host.setAttribute("tabindex", "-1");

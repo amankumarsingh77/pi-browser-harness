@@ -33,6 +33,14 @@ describe("page cursor overlay", () => {
     assert.equal(fake.evaluated.length, 1);
   });
 
+  test("removes a connected host from an incompatible overlay version before replacing it", () => {
+    assert.match(
+      CURSOR_BOOTSTRAP_SOURCE,
+      /if \(existing && existing\.host && existing\.host\.isConnected\) \{\s*existing\.host\.remove\(\);\s*\}/,
+    );
+    assert.match(CURSOR_BOOTSTRAP_SOURCE, /delete globalThis\[key\];/);
+  });
+
   test("builds expressions for every page-side command", () => {
     const commands = [
       cursorCommandExpression("move", { x: 10, y: 20, duration: 60 }),

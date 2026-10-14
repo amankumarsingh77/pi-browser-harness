@@ -28,6 +28,7 @@ type TargetState = {
   diagnostics: CursorDiagnostics;
   degradedUntil: number;
   idleFadeUntil?: number;
+  idleTimer?: ReturnType<typeof setTimeout> | undefined;
 };
 
 const disabled: CursorDiagnostics = { status: "disabled" };
@@ -83,6 +84,24 @@ export const createVirtualCursorController = (
     recentDiagnostics = state.diagnostics;
   };
 
+  const clearIdleFade = (state: TargetState): void => {
+    if (state.idleTimer !== undefined) clearTimeout(state.idleTimer);
+    state.idleTimer = undefined;
+  };
+
+  const scheduleIdleFade = (state: TargetState): void => {
+    clearIdleFade(state);
+    const deadline = Date.now() + IDLE_FADE_MS;
+    state.idleFadeUntil = deadline;
+    state.idleTimer = setTimeout(() => {
+      void withCursorLock(async () => {
+        if (state.idleFadeUntil !== deadline) return;
+        state.idleTimer = undefined;
+        await command(state, "hide");
+      });
+    }, IDLE_FADE_MS);
+  };
+
   const ready = async (state: TargetState): Promise<boolean> => {
     if (Date.now() < state.degradedUntil) return false;
     if (state.ready) return true;
@@ -128,7 +147,7 @@ export const createVirtualCursorController = (
       const moved = await command(state, "move", { x: point.x, y: point.y, duration });
       if (moved === undefined) return;
       state.point = point;
-      state.idleFadeUntil = Date.now() + IDLE_FADE_MS;
+      scheduleIdleFade(state);
       recentTargetId = target.targetId;
     };
     return {
@@ -225,20 +244,18 @@ export const createVirtualCursorController = (
         recentDiagnostics = disabled;
         const tabs = await client.listTabs();
         if (!tabs.success) return;
-        for (const tab of tabs.data) {
-          if (!tab.owned || !states.has(tab.targetId)) continue;
-          const attached = await client.session().attach(tab.targetId);
+        const liveTargetIds = new Set(tabs.data.map((tab) => tab.targetId));
+        for (const [targetId, state] of states) {
+          clearIdleFade(state);
+          if (!liveTargetIds.has(targetId)) continue;
+          const attached = await client.session().attach(targetId);
           if (!attached.success) {
-            const state = states.get(tab.targetId);
-            if (state) degrade(state, attached.error.message);
+            degrade(state, attached.error.message);
             continue;
           }
           try {
-            const state = states.get(tab.targetId);
-            if (state) {
-              state.sessionId = attached.data;
-              await command(state, "destroy");
-            }
+            state.sessionId = attached.data;
+            await command(state, "destroy");
           } finally {
             await client.session().detach(attached.data);
           }
@@ -262,11 +279,13 @@ export const createVirtualCursorController = (
         enabled,
         ...(recentTargetId === undefined ? {} : { targetId: recentTargetId }),
         diagnostics: state?.diagnostics ?? recentDiagnostics,
-        ...(idleFadeMs === undefined ? {} : { idleFadeMs: IDLE_FADE_MS }),
+        ...(idleFadeMs === undefined ? {} : { idleFadeMs }),
       };
     },
     forget: async (targetId: string): Promise<void> => {
       await withCursorLock(async () => {
+        const state = states.get(targetId);
+        if (state) clearIdleFade(state);
         states.delete(targetId);
         if (recentTargetId === targetId) recentTargetId = undefined;
       });
@@ -274,13 +293,18 @@ export const createVirtualCursorController = (
     prune: async (liveTargetIds: ReadonlySet<string>): Promise<void> => {
       await withCursorLock(async () => {
         for (const targetId of states.keys()) {
-          if (!liveTargetIds.has(targetId)) states.delete(targetId);
+          if (!liveTargetIds.has(targetId)) {
+            const state = states.get(targetId);
+            if (state) clearIdleFade(state);
+            states.delete(targetId);
+          }
         }
         if (recentTargetId && !liveTargetIds.has(recentTargetId)) recentTargetId = undefined;
       });
     },
     clear: async (): Promise<void> => {
       await withCursorLock(async () => {
+        for (const state of states.values()) clearIdleFade(state);
         states.clear();
         recentTargetId = undefined;
       });

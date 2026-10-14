@@ -50,7 +50,7 @@ describe("VirtualCursorController", () => {
     assert.match(moveExpressions[2] ?? "", /"duration":180/);
   });
 
-  test("records a 1.2 second idle fade deadline after a visual action", async () => {
+  test("schedules an idle fade 1.2 seconds after a visual action", async () => {
     const fake = await createFakeClient({ evaluate: () => ok(overlayState) });
     const cursor = createVirtualCursorController(fake.client, {});
 
@@ -59,10 +59,38 @@ describe("VirtualCursorController", () => {
       return ok(undefined);
     });
 
+    await new Promise<void>((resolve) => setTimeout(resolve, 1_250));
+
+    assert.equal(fake.evaluated.filter((expression) => expression.includes('"command":"hide"')).length, 1);
+  });
+
+  test("reports remaining idle fade time and restores the deadline after another move", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(overlayState) });
+    const cursor = createVirtualCursorController(fake.client, {});
+    const originalNow = Date.now;
+    let now = 10_000;
+    Date.now = () => now;
+    try {
+      await cursor.runPointerAction(target, undefined, async (visual) => {
+        await visual.moveTo({ x: 10, y: 20 });
+        return ok(undefined);
+      });
+
+      now += 300;
+      assert.equal(cursor.status().idleFadeMs, 900);
+
+      await cursor.runPointerAction(target, undefined, async (visual) => {
+        await visual.moveTo({ x: 20, y: 30 });
+        return ok(undefined);
+      });
+      assert.equal(cursor.status().idleFadeMs, 1200);
+    } finally {
+      Date.now = originalNow;
+      await cursor.clear();
+    }
+
     const status = cursor.status();
-    assert.equal(status.targetId, "t1");
-    assert.equal(status.diagnostics.status, "shown");
-    assert.equal(status.idleFadeMs, 1200);
+    assert.equal(status.targetId, undefined);
   });
 
   test("does not retry degraded visual state during its five-second cooldown", async () => {
@@ -144,12 +172,12 @@ describe("VirtualCursorController", () => {
     if (result.success) assert.equal(result.visibility.cursorSuppression, "degraded");
   });
 
-  test("disabling attaches, destroys, and detaches each live target in finally", async () => {
+  test("disabling attaches, destroys, and detaches tracked live targets even when ownership is no longer reported", async () => {
     const fake = await createFakeClient({
       ownedTargetIds: ["t1", "t2"],
       listTabs: [
         { targetId: "t1", title: "one", url: "https://one.test", owned: true },
-        { targetId: "t2", title: "two", url: "https://two.test", owned: true },
+        { targetId: "t2", title: "two", url: "https://two.test", owned: false },
       ],
       canned: {
         "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s2" }), ok({ sessionId: "cleanup-1" }), ok({ sessionId: "cleanup-2" })],
