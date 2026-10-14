@@ -44,6 +44,7 @@ const createRecordingCursor = (order: string[]): RecordingCursor => {
     moveTo: async ({ x, y }, immediate = false) => {
       order.push(`visual:${immediate ? "move-now" : "move"}:${x},${y}`);
     },
+    waitForMove: async () => {},
     moveDrag: async ({ x, y }) => {
       order.push(`visual:drag:${x},${y}`);
     },
@@ -462,6 +463,7 @@ describe("browser_scroll cursor orchestration", () => {
         moveTo: async () => {
           throw new Error("overlay unavailable");
         },
+        waitForMove: async () => {},
         moveDrag: async () => {},
         press: async () => {},
         release: async () => {},

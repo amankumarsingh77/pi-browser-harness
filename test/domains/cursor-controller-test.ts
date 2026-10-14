@@ -189,6 +189,106 @@ describe("VirtualCursorController", () => {
     if (result.success) assert.equal(result.visibility.cursorSuppression, "degraded");
   });
 
+  test("disabled suppression captures directly without bootstrapping an overlay", async () => {
+    const fake = await createFakeClient();
+    const cursor = createVirtualCursorController(fake.client, { enabled: false });
+
+    const result = await cursor.withCaptureVisibility(false, async () => ok("capture"));
+
+    assert.equal(result.success, true);
+    if (result.success) assert.equal(result.visibility.cursorSuppression, "ok");
+    assert.equal(fake.evaluated.length, 0);
+  });
+
+  test("capture visibility refreshes the target session before overlay commands", async () => {
+    let hideSessionId: string | undefined;
+    const fake = await createFakeClient({
+      evaluate: (expression, sessionId) => {
+        if (expression.includes('"command":"hide"')) hideSessionId = sessionId;
+        return ok(overlayState);
+      },
+    });
+    const cursor = createVirtualCursorController(fake.client, {});
+    const current = fake.client.current();
+    assert.ok(current);
+    await cursor.runPointerAction(current, undefined, async (visual) => {
+      await visual.moveTo({ x: 10, y: 20 });
+      return ok(undefined);
+    });
+
+    Object.defineProperty(fake.client, "current", {
+      value: () => ({ targetId: "t1", sessionId: "s2" }),
+    });
+    let capturedSessionId: string | undefined;
+    const result = await cursor.withCaptureVisibility(false, async (target) => {
+      capturedSessionId = target.sessionId;
+      return ok("capture");
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(hideSessionId, "s2");
+    assert.equal(capturedSessionId, "s2");
+  });
+
+  test("reinjects once when an overlay command reports a detached host", async () => {
+    let evaluationCount = 0;
+    const fake = await createFakeClient({
+      evaluate: () => {
+        evaluationCount += 1;
+        if (evaluationCount === 2) return ok({ ...overlayState, connected: false });
+        return ok(overlayState);
+      },
+    });
+    const cursor = createVirtualCursorController(fake.client, {});
+    const current = fake.client.current();
+    assert.ok(current);
+
+    const result = await cursor.runPointerAction(current, undefined, async (visual) => {
+      await visual.moveTo({ x: 10, y: 20 });
+      return ok(undefined);
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.diagnostics.status, "shown");
+    assert.equal(evaluationCount, 4);
+  });
+
+  test("recovers from hidden bootstrap state after the degraded cooldown", async () => {
+    const originalNow = Date.now;
+    let now = 10_000;
+    Date.now = () => now;
+    try {
+      let moveAttempts = 0;
+      const fake = await createFakeClient({
+        evaluate: (expression) => {
+          if (expression.includes('"command":"move"')) {
+            moveAttempts += 1;
+            return moveAttempts === 1
+              ? err(cdpError("remote_error", "hidden overlay command failed"))
+              : ok(overlayState);
+          }
+          return ok({ ...overlayState, visible: false });
+        },
+      });
+      const cursor = createVirtualCursorController(fake.client, {});
+      const first = await cursor.runPointerAction(target, undefined, async (visual) => {
+        await visual.moveTo({ x: 10, y: 20 });
+        return ok(undefined);
+      });
+      assert.equal(first.diagnostics.status, "degraded");
+
+      now += 5_001;
+      const recovered = await cursor.runPointerAction(target, undefined, async (visual) => {
+        await visual.moveTo({ x: 20, y: 30 });
+        return ok(undefined);
+      });
+      assert.equal(recovered.success, true);
+      assert.equal(recovered.diagnostics.status, "shown");
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   test("disabling attaches, destroys, and detaches tracked live targets even when ownership is no longer reported", async () => {
     const fake = await createFakeClient({
       ownedTargetIds: ["t1", "t2"],

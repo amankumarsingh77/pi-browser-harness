@@ -42,8 +42,8 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
   delete globalThis[key];
   const host = document.createElement("div");
   host.setAttribute("aria-hidden", "true");
-  host.setAttribute("tabindex", "-1");
-  const reset = () => {
+  host.setAttribute("data-pi-browser-harness-cursor-host", "true");
+  const resetHost = () => {
     const critical = {
       display: "block",
       visibility: "visible",
@@ -56,7 +56,6 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
     };
     for (const [name, value] of Object.entries(critical)) host.style.setProperty(name, value, "important");
   };
-  reset();
   const shadow = host.attachShadow({ mode: "closed" });
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(
@@ -78,6 +77,12 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
   cursor.append(arrow, ring, scroll);
   shadow.append(cursor);
   (document.documentElement || document.body).append(host);
+  const reset = () => {
+    resetHost();
+    cursor.classList.remove("idle", "capture-hidden", "pressed", "scrolling", "pulse");
+    api.visible = true;
+    api.pressed = false;
+  };
   const api = {
     version,
     host,
@@ -90,7 +95,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
     snapshot() {
       return {
         connected: host.isConnected,
-        hostCount: document.querySelectorAll("[aria-hidden='true'][tabindex='-1']").length,
+        hostCount: document.querySelectorAll("[data-pi-browser-harness-cursor-host='true']").length,
         x: api.x,
         y: api.y,
         pressed: api.pressed,
@@ -145,6 +150,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
       return { ok: true, ...stateOf(api), x: api.x, y: api.y };
     },
   };
+  reset();
   Object.defineProperty(globalThis, key, { value: api, configurable: true, enumerable: false });
   return stateOf(api);
 })()`;
@@ -192,8 +198,8 @@ export const ensureOverlay = async (
   const result = await evalJs(client, CURSOR_BOOTSTRAP_SOURCE, sessionId);
   if (!result.success) return result;
   if (!validOverlayState(result.data)) return malformedState();
-  if (result.data.version !== 1 || !result.data.connected || !result.data.visible) {
-    return err({ kind: "invalid_state", message: "cursor overlay is not connected and visible" });
+  if (result.data.version !== 1 || !result.data.connected) {
+    return err({ kind: "invalid_state", message: "cursor overlay is not connected" });
   }
   return ok(result.data);
 };

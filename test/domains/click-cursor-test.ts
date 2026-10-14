@@ -8,6 +8,7 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { clickTool } from "../../src/domains/click";
+import { createVirtualCursorController } from "../../src/cursor/controller";
 import type { BrowserClient } from "../../src/client";
 import type {
   CursorDiagnostics,
@@ -18,7 +19,7 @@ import type {
 import type { Result } from "../../src/util/result";
 import type { ToolErr } from "../../src/util/tool";
 import { cdpError } from "../../src/cdp/errors";
-import { err } from "../../src/util/result";
+import { err, ok } from "../../src/util/result";
 import { setDebugClicks } from "../../src/util/debug";
 import { createFakeClient, type Canned } from "./fake-client";
 
@@ -57,6 +58,7 @@ const createRecordingCursor = (
     readonly failCorrectiveMove?: boolean;
     readonly failPress?: boolean;
     readonly failRelease?: boolean;
+    readonly waitForMove?: () => Promise<void>;
   } = {},
 ): RecordingCursor => {
   let moveCount = 0;
@@ -69,6 +71,9 @@ const createRecordingCursor = (
       if (options.failMove || (options.failCorrectiveMove && moveCount === 2)) {
         throw new Error("overlay unavailable");
       }
+    },
+    waitForMove: async () => {
+      await options.waitForMove?.();
     },
     moveDrag: async () => {},
     press: async (button) => {
@@ -138,6 +143,72 @@ const click = async (
 });
 
 describe("browser_click cursor orchestration", () => {
+  test("waits for visual movement completion before dispatching CDP input", async () => {
+    const fake = await createFakeClient({
+      evaluate: () => ok({
+        version: 1,
+        connected: true,
+        visible: true,
+        reducedMotion: false,
+      }),
+    });
+    const order: string[] = [];
+    const waits: number[] = [];
+    const cursor = createVirtualCursorController(fake.client, {
+      waitForMovement: async (durationMs) => {
+        waits.push(durationMs);
+        order.push(`visual:complete:${durationMs}`);
+      },
+    });
+    const current = fake.client.current();
+    assert.ok(current);
+    await cursor.runPointerAction(current, undefined, async (visual) => {
+      await visual.moveTo({ x: 0, y: 0 }, true);
+      return { success: true, data: undefined };
+    });
+    const originalCall = fake.session.call.bind(fake.session);
+    fake.session.call = async (method, params, opts) => {
+      if (method === "Input.dispatchMouseEvent" && params !== undefined && "type" in params) {
+        order.push(`cdp:${String(params["type"])}`);
+      }
+      return originalCall(method, params, opts);
+    };
+
+    const result = await click(fake.client, cursor, { x: 100, y: 0 });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(waits, [60]);
+    assert.ok(order.indexOf("visual:complete:60") < order.indexOf("cdp:mouseMoved"));
+  });
+
+  test("cancellation during visual movement prevents the boundary mouse input", async () => {
+    const fake = await createFakeClient({
+      evaluate: () => ok({
+        version: 1,
+        connected: true,
+        visible: true,
+        reducedMotion: false,
+      }),
+    });
+    const cursor = createVirtualCursorController(fake.client, {
+      waitForMovement: async () => {
+        controller.abort();
+      },
+    });
+    const current = fake.client.current();
+    assert.ok(current);
+    await cursor.runPointerAction(current, undefined, async (visual) => {
+      await visual.moveTo({ x: 0, y: 0 }, true);
+      return { success: true, data: undefined };
+    });
+    const controller = new AbortController();
+
+    const result = await click(fake.client, cursor, { x: 100, y: 0 }, controller.signal);
+
+    assert.equal(result.success, false);
+    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 0);
+  });
+
   test("revalidates the fixed backend node after visual movement before dispatching CDP input", async () => {
     const order: string[] = [];
     let boxCalls = 0;

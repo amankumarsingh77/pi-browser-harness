@@ -21,6 +21,7 @@ export type CaptureVisibility = {
 export type CursorVisualSession = {
   isHealthy(): boolean;
   moveTo(point: CursorPoint, immediate?: boolean): Promise<void>;
+  waitForMove(): Promise<void>;
   moveDrag(point: CursorPoint): Promise<void>;
   press(button: CursorButton): Promise<void>;
   release(button: CursorButton, count: number): Promise<void>;
@@ -62,4 +63,5 @@ export type VirtualCursorController = {
 export type VirtualCursorOptions = {
   readonly enabled?: boolean;
   readonly cursorMutex?: Mutex;
+  readonly waitForMovement?: (durationMs: number) => Promise<void>;
 };

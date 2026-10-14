@@ -53,6 +53,7 @@ const createRecordingCursor = (
   const visual: CursorVisualSession = {
     isHealthy: () => true,
     moveTo: async () => {},
+    waitForMove: async () => {},
     moveDrag: async () => {},
     press: async () => {},
     release: async () => {},

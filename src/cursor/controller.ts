@@ -29,6 +29,7 @@ type TargetState = {
   degradedUntil: number;
   idleFadeUntil?: number;
   idleTimer?: ReturnType<typeof setTimeout> | undefined;
+  pendingMoveDuration: number;
 };
 
 const disabled: CursorDiagnostics = { status: "disabled" };
@@ -50,6 +51,8 @@ export const createVirtualCursorController = (
   let enabled = options.enabled ?? true;
   let recentDiagnostics: CursorDiagnostics = enabled ? shown : disabled;
   let recentTargetId: string | undefined;
+  const waitForMovement = options.waitForMovement
+    ?? ((durationMs: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, durationMs)));
 
   const withCursorLock = async <T>(fn: () => Promise<T>): Promise<T> => {
     const release = await cursorMutex.acquire();
@@ -72,6 +75,7 @@ export const createVirtualCursorController = (
       reducedMotion: false,
       diagnostics: shown,
       degradedUntil: 0,
+      pendingMoveDuration: 0,
     };
     states.set(target.targetId, state);
     return state;
@@ -130,10 +134,17 @@ export const createVirtualCursorController = (
   ): Promise<OverlayState | undefined> => {
     if (!(await ready(state))) return undefined;
     let result = await runOverlayCommand(client, state.sessionId, name, payload);
-    if (!result.success && result.error.message === "cursor overlay is not installed") {
+    const needsRepair = result.success
+      ? result.data.connected !== true
+      : result.error.message === "cursor overlay is not installed";
+    if (needsRepair) {
       state.ready = false;
       if (!(await ready(state))) return undefined;
       result = await runOverlayCommand(client, state.sessionId, name, payload);
+      if (result.success && result.data.connected !== true) {
+        degrade(state, "cursor overlay is detached");
+        return undefined;
+      }
     }
     if (!result.success) {
       degrade(state, result.error.message);
@@ -156,14 +167,24 @@ export const createVirtualCursorController = (
         ? 0
         : distanceDuration(state.point, point);
       const moved = await command(state, "move", { x: point.x, y: point.y, duration });
-      if (moved === undefined) return;
+      if (moved === undefined) {
+        state.pendingMoveDuration = 0;
+        return;
+      }
+      state.pendingMoveDuration = duration;
       state.point = point;
       scheduleIdleFade(state);
       recentTargetId = target.targetId;
     };
+    const waitForMove = async (): Promise<void> => {
+      const duration = state.pendingMoveDuration ?? 0;
+      state.pendingMoveDuration = 0;
+      if (duration > 0) await waitForMovement(duration);
+    };
     return {
       isHealthy: () => state.diagnostics.status === "shown",
       moveTo: move,
+      waitForMove,
       moveDrag: move,
       press: async (button: CursorButton): Promise<void> => {
         await command(state, "press", { button });
@@ -185,6 +206,7 @@ export const createVirtualCursorController = (
     const visual = enabled ? visualSession(target) : {
       isHealthy: () => false,
       moveTo: async () => {},
+      waitForMove: async () => {},
       moveDrag: async () => {},
       press: async () => {},
       release: async () => {},
@@ -204,24 +226,24 @@ export const createVirtualCursorController = (
     capture: (target: CursorTarget) => Promise<Result<T, ToolErr>>,
   ): Promise<CursorCaptureResult<T>> => withCursorLock(async () => {
     const current = client.current();
-    const state = current ? states.get(current.targetId) : undefined;
+    const currentState = current ? stateFor(current) : undefined;
     const emptyVisibility: CaptureVisibility = {};
     if (includeCursor) {
       if (!enabled) return { success: false, error: failed("virtual cursor is disabled"), visibility: emptyVisibility };
-      if (!current || !state?.point) {
+      if (!current || !currentState?.point) {
         return { success: false, error: failed("virtual cursor has no saved position"), visibility: emptyVisibility };
       }
-      if (Date.now() < state.degradedUntil) {
-        return { success: false, error: failed(state.diagnostics.reason ?? "virtual cursor is degraded"), visibility: emptyVisibility };
+      if (Date.now() < currentState.degradedUntil) {
+        return { success: false, error: failed(currentState.diagnostics.reason ?? "virtual cursor is degraded"), visibility: emptyVisibility };
       }
-      const priorIdleFadeUntil = state.idleFadeUntil;
-      clearIdleFade(state);
-      const visible = await command(state, "show", { strict: true });
+      const priorIdleFadeUntil = currentState.idleFadeUntil;
+      clearIdleFade(currentState);
+      const visible = await command(currentState, "show", { strict: true });
       if (visible === undefined) {
         if (priorIdleFadeUntil !== undefined) {
-          scheduleIdleFadeAt(state, priorIdleFadeUntil);
+          scheduleIdleFadeAt(currentState, priorIdleFadeUntil);
         }
-        return { success: false, error: failed(state.diagnostics.reason ?? "virtual cursor could not be shown"), visibility: emptyVisibility };
+        return { success: false, error: failed(currentState.diagnostics.reason ?? "virtual cursor could not be shown"), visibility: emptyVisibility };
       }
       try {
         const result = await capture(current);
@@ -230,18 +252,24 @@ export const createVirtualCursorController = (
           : { success: false, error: result.error, visibility: { cursorSuppression: "ok" } };
       } finally {
         if (priorIdleFadeUntil !== undefined) {
-          scheduleIdleFadeAt(state, priorIdleFadeUntil);
+          scheduleIdleFadeAt(currentState, priorIdleFadeUntil);
         }
       }
     }
 
     let visibility: CaptureVisibility = { cursorSuppression: "ok" };
-    if (!current) {
+    if (!current || !currentState) {
       return { success: false, error: failed("no browser target is attached"), visibility };
     }
-    const currentState = state ?? stateFor(current);
-    if ((await command(currentState, "hide", { immediate: true })) === undefined) {
-      const reason = currentState.diagnostics.reason;
+    const targetState = currentState;
+    if (!enabled) {
+      const result = await capture(current);
+      return result.success
+        ? { success: true, data: result.data, visibility }
+        : { success: false, error: result.error, visibility };
+    }
+    if ((await command(targetState, "hide", { immediate: true })) === undefined) {
+      const reason = targetState.diagnostics.reason;
       visibility = {
         cursorSuppression: "degraded",
         ...(reason === undefined ? {} : { cursorReason: reason }),
@@ -253,7 +281,7 @@ export const createVirtualCursorController = (
         ? { success: true, data: result.data, visibility }
         : { success: false, error: result.error, visibility };
     } finally {
-      if (state?.point) await command(state, "show");
+      if (targetState.point) await command(targetState, "show");
     }
   });
 

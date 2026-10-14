@@ -33,6 +33,26 @@ describe("page cursor overlay", () => {
     assert.equal(fake.evaluated.length, 1);
   });
 
+  test("structural bootstrap health does not require transient visibility", async () => {
+    const fake = await createFakeClient({
+      evaluate: () => ok({
+        version: 1,
+        connected: true,
+        visible: false,
+        reducedMotion: false,
+      }),
+    });
+
+    const result = await ensureOverlay(fake.client, "s1");
+
+    assert.equal(result.success, true);
+  });
+
+  test("the host is aria-hidden without programmatic focusability", () => {
+    assert.doesNotMatch(CURSOR_BOOTSTRAP_SOURCE, /setAttribute\("tabindex"/);
+    assert.match(CURSOR_BOOTSTRAP_SOURCE, /classList\.remove\("capture-hidden"\)/);
+  });
+
   test("removes a connected host from an incompatible overlay version before replacing it", () => {
     assert.match(
       CURSOR_BOOTSTRAP_SOURCE,

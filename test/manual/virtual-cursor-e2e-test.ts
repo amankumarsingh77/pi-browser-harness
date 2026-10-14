@@ -360,7 +360,7 @@ async function main(): Promise<void> {
     const host = root.success
       ? await client.session().call("DOM.querySelector", {
         nodeId: root.data.root.nodeId,
-        selector: "[aria-hidden='true'][tabindex='-1']",
+        selector: "[data-pi-browser-harness-cursor-host='true']",
       })
       : undefined;
     const description = host?.success && host.data.nodeId !== 0

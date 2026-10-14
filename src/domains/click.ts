@@ -56,6 +56,7 @@ const dispatchClick = async (
 ): Promise<Result<ResolvedTarget, ToolErr>> => {
   if (args.signal?.aborted) return cancelled();
   await runVisual(() => args.visual.moveTo(args.target));
+  await runVisual(() => args.visual.waitForMove());
   if (args.signal?.aborted) return cancelled();
 
   const refreshed = await refreshResolvedTarget(client, args.target);
