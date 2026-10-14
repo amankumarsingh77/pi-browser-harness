@@ -71,9 +71,9 @@ const createRecordingCursor = (order: string[]): RecordingCursor => {
     },
     withCaptureVisibility: async <T,>(
       _includeCursor: boolean,
-      capture: () => Promise<Result<T, ToolErr>>,
+      capture: (_target: CursorTarget) => Promise<Result<T, ToolErr>>,
     ) => {
-      const result = await capture();
+      const result = await capture({ targetId: "t1", sessionId: "s1" });
       return result.success
         ? { success: true, data: result.data, visibility: {} }
         : { success: false, error: result.error, visibility: {} };

@@ -146,8 +146,8 @@ export const clickTool = defineBrowserTool({
 
     const diff = await interactiveDiff(client);
     if (debugClicksEnabled()) {
-      const debug = await cursor.withCaptureVisibility(false, () =>
-        captureWithCrosshair(client, { x: target.x, y: target.y }));
+      const debug = await cursor.withCaptureVisibility(false, (captureTarget) =>
+        captureWithCrosshair(client, { x: target.x, y: target.y }, captureTarget.sessionId));
       if (debug.success) {
         return ok({
           text: `Clicked at ${target.label}\n[DEBUG] Overlay screenshot: ${debug.data.path}${diff}`,

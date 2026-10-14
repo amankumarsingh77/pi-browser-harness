@@ -50,7 +50,7 @@ export type VirtualCursorController = {
   ): Promise<CursorActionResult<T>>;
   withCaptureVisibility<T>(
     includeCursor: boolean,
-    capture: () => Promise<Result<T, ToolErr>>,
+    capture: (target: CursorTarget) => Promise<Result<T, ToolErr>>,
   ): Promise<CursorCaptureResult<T>>;
   applySessionSettings(cursorEnabled: boolean): Promise<void>;
   status(): CursorStatus;

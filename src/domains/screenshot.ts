@@ -6,11 +6,15 @@ import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { asRecord, asString } from "../util/guards";
 import { captureBase, resizeIfNeeded } from "./screenshot-capture";
 
-const ScreenshotArgs = Type.Object({
+export const ScreenshotArgs = Type.Object({
   fullPage: Type.Optional(Type.Boolean({ default: false, description: "Capture beyond viewport" })),
   format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")], { default: "png" })),
   quality: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 80, description: "JPEG quality 1-100" })),
   maxDim: Type.Optional(Type.Integer({ minimum: 100, maximum: 8000, description: "If max(w,h) exceeds this, resize via sharp." })),
+  includeCursor: Type.Optional(Type.Boolean({
+    default: false,
+    description: "Include the virtual cursor. Requires an active cursor position.",
+  })),
 });
 
 export const screenshotTool = defineBrowserTool({
@@ -28,18 +32,34 @@ export const screenshotTool = defineBrowserTool({
   ],
   parameters: ScreenshotArgs,
   concurrency: "parallel",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const cap = await captureBase(client, args);
-    if (!cap.success) return cap;
-    let note = "";
-    if (args.maxDim !== undefined) {
-      const resized = await resizeIfNeeded(cap.data.path, args.maxDim);
-      note = resized.note;
+  async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
+    const releaseMutation = await client.mutationMutex().acquire();
+    try {
+      const visible = await cursor.withCaptureVisibility(args.includeCursor ?? false, async (target) =>
+        captureBase(client, args, target.sessionId));
+      if (!visible.success) return visible;
+      let note = "";
+      if (args.maxDim !== undefined) {
+        const resized = await resizeIfNeeded(visible.data.path, args.maxDim);
+        note = resized.note;
+      }
+      return ok({
+        text: `Screenshot saved: ${visible.data.path}${note}`,
+        details: {
+          path: visible.data.path,
+          format: visible.data.format,
+          attached: false,
+          ...(visible.visibility.cursorSuppression === undefined
+            ? {}
+            : { cursorSuppression: visible.visibility.cursorSuppression }),
+          ...(visible.visibility.cursorReason === undefined
+            ? {}
+            : { cursorReason: visible.visibility.cursorReason }),
+        },
+      });
+    } finally {
+      releaseMutation();
     }
-    return ok({
-      text: `Screenshot saved: ${cap.data.path}${note}`,
-      details: { path: cap.data.path, format: cap.data.format, attached: false },
-    });
   },
 
   renderResult(result, _expanded, theme) {

@@ -98,9 +98,9 @@ const createRecordingCursor = (
     },
     withCaptureVisibility: async <T,>(
       _includeCursor: boolean,
-      capture: () => Promise<Result<T, ToolErr>>,
+      capture: (_target: CursorTarget) => Promise<Result<T, ToolErr>>,
     ) => {
-      const result = await capture();
+      const result = await capture({ targetId: "t1", sessionId: "s1" });
       return result.success
         ? { success: true, data: result.data, visibility: {} }
         : { success: false, error: result.error, visibility: {} };
@@ -461,9 +461,14 @@ describe("browser_click cursor orchestration", () => {
       return withCaptureVisibility(includeCursor, capture);
     };
     const originalCall = fake.session.call.bind(fake.session);
+    const originalCallOnTarget = fake.session.callOnTarget.bind(fake.session);
     fake.session.call = async (method, params, opts) => {
       if (method === "Page.captureScreenshot") order.push("cdp:capture");
       return originalCall(method, params, opts);
+    };
+    fake.session.callOnTarget = async (method, params, sessionId, opts) => {
+      if (method === "Page.captureScreenshot") order.push("cdp:capture");
+      return originalCallOnTarget(method, params, sessionId, opts);
     };
 
     setDebugClicks(true);

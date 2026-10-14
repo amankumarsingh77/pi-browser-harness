@@ -6,7 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { safeJs } from "../util/js-template";
 import { pdfPath } from "../util/paths";
-import { cdpCall, cdpCallBrowser, evalJs } from "./cdp-call";
+import { cdpCall, cdpCallBrowser, cdpCallOnTarget, evalJs } from "./cdp-call";
 import { resolveRefToBackendId } from "./ref-resolve";
 
 const UploadArgs = Type.Object({
@@ -194,7 +194,7 @@ export const downloadTool = defineBrowserTool({
   },
 });
 
-const PrintPdfArgs = Type.Object({
+export const PrintPdfArgs = Type.Object({
   outputPath: Type.Optional(Type.String({ description: "Where to save the PDF. Default: tmpdir + uuid." })),
 });
 
@@ -206,14 +206,29 @@ export const printToPdfTool = defineBrowserTool({
   promptGuidelines: ["Default output path is in tmpdir; pass outputPath to control."],
   parameters: PrintPdfArgs,
   concurrency: "serialized",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await cdpCall(client, "Page.printToPDF", {
-      printBackground: true,
-      preferCSSPageSize: true,
+  async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
+    const visible = await cursor.withCaptureVisibility(false, async (target) => {
+      const r = await cdpCallOnTarget(client, "Page.printToPDF", {
+        printBackground: true,
+        preferCSSPageSize: true,
+      }, target.sessionId);
+      if (!r.success) return r;
+      const path = args.outputPath ?? pdfPath(client.namespace);
+      await writeFile(path, Buffer.from(r.data.data, "base64"));
+      return ok({ path });
     });
-    if (!r.success) return r;
-    const path = args.outputPath ?? pdfPath(client.namespace);
-    await writeFile(path, Buffer.from(r.data.data, "base64"));
-    return ok({ text: `PDF saved: ${path}`, details: { path } });
+    if (!visible.success) return visible;
+    return ok({
+      text: `PDF saved: ${visible.data.path}`,
+      details: {
+        path: visible.data.path,
+        ...(visible.visibility.cursorSuppression === undefined
+          ? {}
+          : { cursorSuppression: visible.visibility.cursorSuppression }),
+        ...(visible.visibility.cursorReason === undefined
+          ? {}
+          : { cursorReason: visible.visibility.cursorReason }),
+      },
+    });
   },
 });

@@ -1,7 +1,7 @@
 import type { AxNodeResult } from "../cdp/commands";
 import type { BrowserClient } from "../client";
 import type { Box } from "./box";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, cdpCallOnTarget } from "./cdp-call";
 
 export type RawAxNode = AxNodeResult;
 type AxValue = NonNullable<RawAxNode["role"]>;
@@ -158,8 +158,14 @@ export const collectInteractiveTargets = (
   return out;
 };
 
-export const liveValue = async (client: BrowserClient, backendId: number): Promise<string | undefined> => {
-  const resolved = await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId });
+export const liveValue = async (
+  client: BrowserClient,
+  backendId: number,
+  sessionId?: string,
+): Promise<string | undefined> => {
+  const resolved = sessionId === undefined
+    ? await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId })
+    : await cdpCallOnTarget(client, "DOM.resolveNode", { backendNodeId: backendId }, sessionId);
   if (!resolved.success) return undefined;
   const objectId = resolved.data.object.objectId;
   if (!objectId) return undefined;
@@ -168,11 +174,14 @@ export const liveValue = async (client: BrowserClient, backendId: number): Promi
     if (typeof this.value === "string") return this.value;
     return null;
   }`;
-  const r = await cdpCall(client, "Runtime.callFunctionOn", {
+  const params = {
     objectId,
     functionDeclaration: fn,
     returnByValue: true,
-  });
+  };
+  const r = sessionId === undefined
+    ? await cdpCall(client, "Runtime.callFunctionOn", params)
+    : await cdpCallOnTarget(client, "Runtime.callFunctionOn", params, sessionId);
   if (!r.success) return undefined;
   const value = r.data.result.value;
   return typeof value === "string" ? value : undefined;

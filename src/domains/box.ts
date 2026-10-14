@@ -1,7 +1,7 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, cdpCallOnTarget } from "./cdp-call";
 
 export type Box = {
   readonly x: number;
@@ -34,8 +34,11 @@ export const centreOf = (model: BoxModel): Box => {
 export const boxOf = async (
   client: BrowserClient,
   backendNodeId: number,
+  sessionId?: string,
 ): Promise<Result<Box, ToolErr>> => {
-  const r = await cdpCall(client, "DOM.getBoxModel", { backendNodeId });
+  const r = sessionId === undefined
+    ? await cdpCall(client, "DOM.getBoxModel", { backendNodeId })
+    : await cdpCallOnTarget(client, "DOM.getBoxModel", { backendNodeId }, sessionId);
   if (!r.success) return r;
   const model = r.data.model;
   if (model.content.length < 8) {

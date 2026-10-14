@@ -5,7 +5,7 @@ import type { ToolErr } from "../util/tool";
 import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
 import { safeJs } from "../util/js-template";
-import { cdpCall, evalJs } from "./cdp-call";
+import { cdpCall, cdpCallOnTarget, evalJs } from "./cdp-call";
 
 export type CaptureArgs = {
   readonly fullPage?: boolean;
@@ -16,15 +16,19 @@ export type CaptureArgs = {
 export const captureBase = async (
   client: BrowserClient,
   args: CaptureArgs,
+  sessionId?: string,
 ): Promise<Result<{ readonly path: string; readonly format: "png" | "jpeg" }, ToolErr>> => {
   const format = args.format ?? "png";
   const quality = args.quality ?? 80;
   const path = screenshotPath(client.namespace, format);
-  const r = await cdpCall(client, "Page.captureScreenshot", {
+  const params = {
     format,
     captureBeyondViewport: args.fullPage ?? false,
     ...(format === "jpeg" ? { quality } : {}),
-  });
+  };
+  const r = sessionId === undefined
+    ? await cdpCall(client, "Page.captureScreenshot", params)
+    : await cdpCallOnTarget(client, "Page.captureScreenshot", params, sessionId);
   if (!r.success) return r;
   await writeFile(path, Buffer.from(r.data.data, "base64"));
   return ok({ path, format });
@@ -54,13 +58,14 @@ export const resizeIfNeeded = async (
 export const captureWithCrosshair = async (
   client: BrowserClient,
   args: { readonly x: number; readonly y: number; readonly format?: "png" | "jpeg"; readonly quality?: number },
+  sessionId?: string,
 ): Promise<Result<{ readonly path: string }, ToolErr>> => {
-  const cap = await captureBase(client, args);
+  const cap = await captureBase(client, args, sessionId);
   if (!cap.success) return cap;
   const load = await loadSharp();
   if (load.kind !== "ok") return ok({ path: cap.data.path });
   try {
-    const dprR = await evalJs(client, safeJs`window.devicePixelRatio`);
+    const dprR = await evalJs(client, safeJs`window.devicePixelRatio`, sessionId);
     const dpr = dprR.success && typeof dprR.data === "number" ? dprR.data : 1;
     const meta = await load.sharp(cap.data.path).metadata();
     const w = meta.width ?? 0;

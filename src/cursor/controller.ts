@@ -93,6 +93,11 @@ export const createVirtualCursorController = (
   const scheduleIdleFade = (state: TargetState): void => {
     clearIdleFade(state);
     const deadline = Date.now() + IDLE_FADE_MS;
+    scheduleIdleFadeAt(state, deadline);
+  };
+
+  const scheduleIdleFadeAt = (state: TargetState, deadline: number): void => {
+    clearIdleFade(state);
     state.idleFadeUntil = deadline;
     state.idleTimer = setTimeout(() => {
       void withCursorLock(async () => {
@@ -100,7 +105,7 @@ export const createVirtualCursorController = (
         state.idleTimer = undefined;
         await command(state, "hide");
       });
-    }, IDLE_FADE_MS);
+    }, Math.max(0, deadline - Date.now()));
   };
 
   const ready = async (state: TargetState): Promise<boolean> => {
@@ -191,7 +196,7 @@ export const createVirtualCursorController = (
 
   const withCaptureVisibility = async <T>(
     includeCursor: boolean,
-    capture: () => Promise<Result<T, ToolErr>>,
+    capture: (target: CursorTarget) => Promise<Result<T, ToolErr>>,
   ): Promise<CursorCaptureResult<T>> => withCursorLock(async () => {
     const current = client.current();
     const state = current ? states.get(current.targetId) : undefined;
@@ -204,34 +209,46 @@ export const createVirtualCursorController = (
       if (Date.now() < state.degradedUntil) {
         return { success: false, error: failed(state.diagnostics.reason ?? "virtual cursor is degraded"), visibility: emptyVisibility };
       }
+      const priorIdleFadeUntil = state.idleFadeUntil;
+      clearIdleFade(state);
       const visible = await command(state, "show", { strict: true });
       if (visible === undefined) {
+        if (priorIdleFadeUntil !== undefined) {
+          scheduleIdleFadeAt(state, priorIdleFadeUntil);
+        }
         return { success: false, error: failed(state.diagnostics.reason ?? "virtual cursor could not be shown"), visibility: emptyVisibility };
       }
-      const result = await capture();
-      return result.success
-        ? { success: true, data: result.data, visibility: { cursorSuppression: "ok" } }
-        : { success: false, error: result.error, visibility: { cursorSuppression: "ok" } };
+      try {
+        const result = await capture(current);
+        return result.success
+          ? { success: true, data: result.data, visibility: { cursorSuppression: "ok" } }
+          : { success: false, error: result.error, visibility: { cursorSuppression: "ok" } };
+      } finally {
+        if (priorIdleFadeUntil !== undefined) {
+          scheduleIdleFadeAt(state, priorIdleFadeUntil);
+        }
+      }
     }
 
     let visibility: CaptureVisibility = { cursorSuppression: "ok" };
-    if (current) {
-      const currentState = state ?? stateFor(current);
-      if ((await command(currentState, "hide")) === undefined) {
-        const reason = currentState.diagnostics.reason;
-        visibility = {
-          cursorSuppression: "degraded",
-          ...(reason === undefined ? {} : { cursorReason: reason }),
-        };
-      }
+    if (!current) {
+      return { success: false, error: failed("no browser target is attached"), visibility };
+    }
+    const currentState = state ?? stateFor(current);
+    if ((await command(currentState, "hide")) === undefined) {
+      const reason = currentState.diagnostics.reason;
+      visibility = {
+        cursorSuppression: "degraded",
+        ...(reason === undefined ? {} : { cursorReason: reason }),
+      };
     }
     try {
-      const result = await capture();
+      const result = await capture(current);
       return result.success
         ? { success: true, data: result.data, visibility }
         : { success: false, error: result.error, visibility };
     } finally {
-      if (current && state?.point) await command(state, "show");
+      if (state?.point) await command(state, "show");
     }
   });
 

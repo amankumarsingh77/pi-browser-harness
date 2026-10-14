@@ -1,9 +1,9 @@
-import { readFileSync, writeFileSync } from "node:fs";
-import { Type } from "typebox";
+import { readFileSync } from "node:fs";
+import { Type, type Static } from "typebox";
 import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { boxOf } from "./box";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, cdpCallOnTarget, evalJs } from "./cdp-call";
 import {
   buildTree,
   collectInteractiveTargets,
@@ -17,12 +17,16 @@ import {
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
-import { screenshotPath } from "../util/paths";
 import { asBoolean, asNumber, asRecord, asString } from "../util/guards";
+import { captureBase } from "./screenshot-capture";
+import { safeJs } from "../util/js-template";
 
-const SnapshotArgs = Type.Object({
+export const SnapshotArgs = Type.Object({
   includeScreenshot: Type.Optional(
     Type.Boolean({ default: false, description: "Also capture a JPEG screenshot of the current viewport." }),
+  ),
+  includeCursor: Type.Optional(
+    Type.Boolean({ default: false, description: "Include the virtual cursor in an attached screenshot." }),
   ),
   interestingOnly: Type.Optional(
     Type.Boolean({ default: true, description: "Drop nodes the AX engine marked uninteresting (generic containers, inline text, etc.)." }),
@@ -91,6 +95,105 @@ type SnapshotDetails = {
   title: string;
 };
 
+const readPageDetails = async (
+  client: Parameters<typeof cdpCall>[0],
+  sessionId?: string,
+): Promise<Result<{ readonly url: string; readonly title: string }, ToolErr>> => {
+  if (sessionId === undefined) {
+    const page = await client.pageInfo();
+    if (!page.success) return err({ kind: "cdp_error", message: page.error.message });
+    return ok({
+      url: "dialog" in page.data ? "" : page.data.url,
+      title: "dialog" in page.data ? "" : page.data.title,
+    });
+  }
+  const page = await evalJs(client, safeJs`({ url: location.href, title: document.title })`, sessionId);
+  if (!page.success) return page;
+  const record = asRecord(page.data);
+  const url = record === undefined ? undefined : asString(record["url"]);
+  const title = record === undefined ? undefined : asString(record["title"]);
+  if (url === undefined || title === undefined) {
+    return err({ kind: "invalid_state", message: "target page info returned an invalid value" });
+  }
+  return ok({ url, title });
+};
+
+const captureSnapshot = async (
+  args: Static<typeof SnapshotArgs>,
+  client: Parameters<typeof cdpCall>[0],
+  sessionId?: string,
+): Promise<Result<ToolOk, ToolErr>> => {
+  const session = client.session();
+  const axRes = sessionId === undefined
+    ? await cdpCall(client, "Accessibility.getFullAXTree", {})
+    : await cdpCallOnTarget(client, "Accessibility.getFullAXTree", {}, sessionId);
+  if (!axRes.success) return axRes;
+  const rawNodes = axRes.data.nodes;
+
+  const page = await readPageDetails(client, sessionId);
+  if (!page.success) return page;
+
+  const slim = buildTree(rawNodes, {
+    interestingOnly: args.interestingOnly ?? true,
+    maxNodes: args.maxNodes ?? 1000,
+  });
+
+  const targets = collectInteractiveTargets(slim);
+
+  const refMap = new Map<string, number>();
+  targets.forEach(({ node, backendId }, i) => {
+    const ref = `e${i + 1}`;
+    node.ref = ref;
+    refMap.set(ref, backendId);
+  });
+
+  if (targets.length > 0) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 1_500);
+    await Promise.allSettled(
+      targets.map(async ({ node, backendId }) => {
+        if (ac.signal.aborted) return;
+        const box = await boxOf(client, backendId, sessionId);
+        if (!box.success) return;
+        if (box.data.x < 0 || box.data.y < 0) return;
+        node.box = box.data;
+        if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
+        const live = await liveValue(client, backendId, sessionId);
+        if (live !== undefined) node.value = live;
+      }),
+    );
+    clearTimeout(timer);
+  }
+
+  const refSig = new Map<string, string>();
+  for (const { node } of targets) {
+    if (node.ref === undefined) continue;
+    refSig.set(node.ref, `${node.role}|${node.name ?? ""}|${node.value ?? ""}|${node.state ?? ""}`);
+  }
+  session.setRefMap(refMap, refSig);
+
+  const stripped = stripInternals(slim);
+  const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);
+  const trunc = await applyTruncation(text, "snapshot");
+
+  let shotPath: string | undefined;
+  if (args.includeScreenshot) {
+    const shot = await captureBase(client, { format: "jpeg", quality: 80 }, sessionId);
+    if (shot.success) shotPath = shot.data.path;
+  }
+
+  const details: SnapshotDetails = {
+    nodeCount: countNodes(slim),
+    truncated: trunc.wasTruncated,
+    url: page.data.url,
+    title: page.data.title,
+  };
+  if (trunc.fullOutputPath !== undefined) details.fullOutputPath = trunc.fullOutputPath;
+  if (shotPath !== undefined) details.screenshotPath = shotPath;
+
+  return ok({ text: trunc.text, details: { ...details, summary: summarize(slim) } });
+};
+
 export const snapshotTool = defineBrowserTool({
   name: "browser_snapshot",
   label: "Browser Snapshot",
@@ -108,80 +211,28 @@ export const snapshotTool = defineBrowserTool({
   parameters: SnapshotArgs,
   concurrency: "parallel",
 
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const session = client.session();
-
-    const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
-    if (!axRes.success) return axRes;
-    const rawNodes = axRes.data.nodes;
-
-    const piRes = await client.pageInfo();
-    if (!piRes.success) return err({ kind: "cdp_error", message: piRes.error.message });
-    const pageUrl = "dialog" in piRes.data ? "" : piRes.data.url;
-    const pageTitle = "dialog" in piRes.data ? "" : piRes.data.title;
-
-    const slim = buildTree(rawNodes, {
-      interestingOnly: args.interestingOnly ?? true,
-      maxNodes: args.maxNodes ?? 1000,
-    });
-
-    const targets = collectInteractiveTargets(slim);
-
-    const refMap = new Map<string, number>();
-    targets.forEach(({ node, backendId }, i) => {
-      const ref = `e${i + 1}`;
-      node.ref = ref;
-      refMap.set(ref, backendId);
-    });
-
-    if (targets.length > 0) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 1_500);
-      await Promise.allSettled(
-        targets.map(async ({ node, backendId }) => {
-          if (ac.signal.aborted) return;
-          const box = await boxOf(client, backendId);
-          if (!box.success) return;
-          if (box.data.x < 0 || box.data.y < 0) return;
-          node.box = box.data;
-          if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
-          const live = await liveValue(client, backendId);
-          if (live !== undefined) node.value = live;
-        }),
-      );
-      clearTimeout(timer);
+  async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
+    if (!args.includeScreenshot) return captureSnapshot(args, client);
+    const releaseMutation = await client.mutationMutex().acquire();
+    try {
+      const visible = await cursor.withCaptureVisibility(args.includeCursor ?? false, async (target) =>
+        captureSnapshot(args, client, target.sessionId));
+      if (!visible.success) return visible;
+      return ok({
+        ...visible.data,
+        details: {
+          ...(visible.data.details ?? {}),
+          ...(visible.visibility.cursorSuppression === undefined
+            ? {}
+            : { cursorSuppression: visible.visibility.cursorSuppression }),
+          ...(visible.visibility.cursorReason === undefined
+            ? {}
+            : { cursorReason: visible.visibility.cursorReason }),
+        },
+      });
+    } finally {
+      releaseMutation();
     }
-
-    const refSig = new Map<string, string>();
-    for (const { node } of targets) {
-      if (node.ref === undefined) continue;
-      refSig.set(node.ref, `${node.role}|${node.name ?? ""}|${node.value ?? ""}|${node.state ?? ""}`);
-    }
-    session.setRefMap(refMap, refSig);
-
-    const stripped = stripInternals(slim);
-    const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);
-    const trunc = await applyTruncation(text, "snapshot");
-
-    let shotPath: string | undefined;
-    if (args.includeScreenshot) {
-      const shot = await cdpCall(client, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
-      if (shot.success) {
-        shotPath = screenshotPath(client.namespace, "jpeg");
-        writeFileSync(shotPath, Buffer.from(shot.data.data, "base64"));
-      }
-    }
-
-    const details: SnapshotDetails = {
-      nodeCount: countNodes(slim),
-      truncated: trunc.wasTruncated,
-      url: pageUrl,
-      title: pageTitle,
-    };
-    if (trunc.fullOutputPath !== undefined) details.fullOutputPath = trunc.fullOutputPath;
-    if (shotPath !== undefined) details.screenshotPath = shotPath;
-
-    return ok({ text: trunc.text, details: { ...details, summary: summarize(slim) } });
   },
 
   renderResult(result, expanded, theme) {
