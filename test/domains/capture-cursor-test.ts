@@ -141,6 +141,23 @@ describe("capture cursor orchestration", () => {
     assert.deepEqual(fake.mutexAcquires, []);
   });
 
+  test("text-only snapshot rejects cursor inclusion before locks or capture calls", async () => {
+    const fake = await createFakeClient();
+    const cursor = createRecordingCursor();
+
+    const result = await snapshotTool.handler(
+      { includeScreenshot: false, includeCursor: true },
+      toolContext(fake.client, cursor),
+    );
+
+    assert.equal(result.success, false);
+    if (!result.success) assert.equal(result.error.kind, "invalid_state");
+    assert.deepEqual(fake.mutexAcquires, []);
+    assert.deepEqual(cursor.includeCalls, []);
+    assert.deepEqual(fake.calls, []);
+    assert.deepEqual(fake.evaluated, []);
+  });
+
   test("snapshot image keeps AX and screenshot calls on the pinned target session", async () => {
     const fake = await createFakeClient({
       canned: {

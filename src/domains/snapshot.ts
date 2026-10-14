@@ -212,6 +212,9 @@ export const snapshotTool = defineBrowserTool({
   concurrency: "parallel",
 
   async handler(args, { client, cursor }): Promise<Result<ToolOk, ToolErr>> {
+    if (args.includeCursor === true && args.includeScreenshot !== true) {
+      return err({ kind: "invalid_state", message: "includeCursor:true requires includeScreenshot:true" });
+    }
     if (!args.includeScreenshot) return captureSnapshot(args, client);
     const releaseMutation = await client.mutationMutex().acquire();
     try {
