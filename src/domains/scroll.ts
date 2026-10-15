@@ -24,7 +24,7 @@ export const scrollTool = defineBrowserTool({
   ],
   parameters: ScrollArgs,
   concurrency: "serialized",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, cursor, signal }): Promise<Result<ToolOk, ToolErr>> {
     const info = await client.pageInfo();
     if (!info.success) return err({ kind: "cdp_error", message: info.error.message });
     if ("dialog" in info.data) {
@@ -37,22 +37,45 @@ export const scrollTool = defineBrowserTool({
     const cy = args.y ?? Math.round(info.data.height / 2);
     const dx = args.deltaX ?? 0;
     const dy = args.deltaY ?? 300;
-    // The page target must be focused or Input events are dropped silently: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling.
-    const front = await cdpCall(client, "Page.bringToFront", {});
-    if (!front.success) return front;
-    // Establish compositor mouse position first, or CDP sometimes drops the wheel event with a timeout.
-    const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
-      type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,
+    const current = client.current();
+    if (!current) return err({ kind: "not_connected", message: "No browser page is attached" });
+    const scrolled = await cursor.runPointerAction(current, signal, async (visual) => {
+      // The page target must be focused or Input events are dropped silently: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling.
+      const front = await cdpCall(client, "Page.bringToFront", {});
+      if (!front.success) return front;
+      try {
+        await visual.moveTo({ x: cx, y: cy });
+      } catch {
+        // Visual feedback is best-effort; CDP input remains authoritative.
+      }
+      // Establish compositor mouse position first, or CDP sometimes drops the wheel event with a timeout.
+      const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
+        type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,
+      });
+      if (!moved.success) return moved;
+      const wheel = await cdpCall(client, "Input.dispatchMouseEvent", {
+        type: "mouseWheel", x: cx, y: cy, deltaX: dx, deltaY: dy,
+        button: "none", buttons: 0, pointerType: "mouse",
+      });
+      if (!wheel.success) return wheel;
+      try {
+        await visual.showScroll(dx, dy);
+      } catch {
+        // Visual feedback is best-effort; CDP input remains authoritative.
+      }
+      return ok({
+        text: `Scrolled at (${cx}, ${cy}) by (${dx}, ${dy})`,
+        details: { x: cx, y: cy, deltaX: dx, deltaY: dy },
+      });
     });
-    if (!moved.success) return moved;
-    const wheel = await cdpCall(client, "Input.dispatchMouseEvent", {
-      type: "mouseWheel", x: cx, y: cy, deltaX: dx, deltaY: dy,
-      button: "none", buttons: 0, pointerType: "mouse",
-    });
-    if (!wheel.success) return wheel;
+    if (!scrolled.success) return err(scrolled.error);
     return ok({
-      text: `Scrolled at (${cx}, ${cy}) by (${dx}, ${dy})`,
-      details: { x: cx, y: cy, deltaX: dx, deltaY: dy },
+      ...scrolled.data,
+      details: {
+        ...(scrolled.data.details ?? {}),
+        cursorVisual: scrolled.diagnostics.status,
+        ...(scrolled.diagnostics.reason === undefined ? {} : { cursorReason: scrolled.diagnostics.reason }),
+      },
     });
   },
 });

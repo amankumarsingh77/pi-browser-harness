@@ -5,7 +5,7 @@ import { type Box, boxOf } from "./box";
 import { cdpCall } from "./cdp-call";
 import { buildTree, collectInteractiveTargets, type SlimNode } from "./ax-tree";
 
-const staleErr = (ref: string): ToolErr => ({
+export const staleRefError = (ref?: string): ToolErr => ({
   kind: "invalid_state",
   message: `Ref ${ref} is unknown or stale — re-run browser_snapshot to get fresh refs.`,
   details: { ref },
@@ -16,19 +16,19 @@ export const resolveRefToObjectId = async (
   ref: string,
 ): Promise<Result<string, ToolErr>> => {
   const backendId = client.session().resolveRef(ref);
-  if (backendId === undefined) return err(staleErr(ref));
+  if (backendId === undefined) return err(staleRefError(ref));
   const resolved = await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) {
-    return err(staleErr(ref));
+    return err(staleRefError(ref));
   }
   const objectId = resolved.data.object.objectId;
-  if (!objectId) return err(staleErr(ref));
+  if (!objectId) return err(staleRefError(ref));
   return ok(objectId);
 };
 
 export const resolveRefToBackendId = (client: BrowserClient, ref: string): Result<number, ToolErr> => {
   const backendId = client.session().resolveRef(ref);
-  if (backendId === undefined) return err(staleErr(ref));
+  if (backendId === undefined) return err(staleRefError(ref));
   return ok(backendId);
 };
 
@@ -37,9 +37,9 @@ export const resolveRefToBox = async (
   ref: string,
 ): Promise<Result<Box, ToolErr>> => {
   const backendId = client.session().resolveRef(ref);
-  if (backendId === undefined) return err(staleErr(ref));
+  if (backendId === undefined) return err(staleRefError(ref));
   const box = await boxOf(client, backendId);
-  if (!box.success) return err(staleErr(ref));
+  if (!box.success) return err(staleRefError(ref));
   return ok(box.data);
 };
 

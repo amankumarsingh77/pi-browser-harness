@@ -4,9 +4,11 @@ import { Compile } from "typebox/compile";
 import { clearHeadersTool, setHeadersTool } from "../../src/domains/headers";
 import type { HandlerContext } from "../../src/util/tool";
 import { createFakeClient, type FakeClient } from "./fake-client";
+import { createFakeCursor } from "../util/fake-cursor";
 
 const ctxFor = (fake: FakeClient): HandlerContext => ({
   client: fake.client,
+  cursor: createFakeCursor(),
   signal: undefined,
   onUpdate: () => {},
   extensionCtx: undefined as never,

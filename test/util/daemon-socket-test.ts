@@ -16,10 +16,12 @@ import {
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
 import { ok } from "../../src/util/result";
+import { createFakeCursor } from "./fake-cursor";
 
 const WINDOWS_PIPE = "\\\\.\\pipe\\pi-browser-daemon";
 const MISSING_SOCKET = "/pi-browser-harness/definitely/not/here.sock";
 const thisFile = fileURLToPath(import.meta.url);
+const fakeCursor = createFakeCursor();
 
 describe("daemon socket presence check", () => {
   test("a Windows named pipe is never judged absent from the filesystem", async () => {
@@ -161,7 +163,7 @@ const runGate = async (ensureAlive: boolean | undefined): Promise<GateProbe> => 
       registered = td;
     },
   } as unknown as ExtensionAPI;
-  registerBrowserTool(pi, client, def);
+  registerBrowserTool(pi, client, fakeCursor, def);
   assert.ok(registered, "tool was not registered");
   const result = await registered.execute?.("id", {}, undefined, undefined, undefined as never);
   const first = result?.content[0];

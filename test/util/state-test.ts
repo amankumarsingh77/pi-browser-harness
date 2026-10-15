@@ -65,6 +65,14 @@ describe("state persister", () => {
     assert.equal(entries.length, 2);
   });
 
+  test("cursor preference changes are persisted", () => {
+    const { pi, entries } = fakePi();
+    const persister = createStatePersister(pi);
+    persister.persist({ ...owned("a"), cursorEnabled: true });
+    persister.persist({ ...owned("a"), cursorEnabled: false });
+    assert.deepEqual(entries.map((entry) => (entry as BrowserState).cursorEnabled), [true, false]);
+  });
+
   test("the default state is persisted once, then skipped", () => {
     const { pi, entries } = fakePi();
     const persister = createStatePersister(pi);

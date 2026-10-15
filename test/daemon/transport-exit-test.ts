@@ -10,6 +10,30 @@ const fixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "trans
 const SKIP = process.platform === "win32" ? "named pipes are not filesystem paths; the fixture uses a temp socket file" : false;
 
 describe("daemon transport and process exit", { skip: SKIP }, () => {
+  test("the process stays alive until daemon registration completes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pbh-register-"));
+    const socketPath = join(dir, "d.sock");
+    try {
+      const child = spawn(process.execPath, ["--conditions=import", "--import", "tsx", fixture, socketPath, "50"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (c: Buffer) => { stdout += c.toString(); });
+      child.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+
+      const exitCode = await new Promise<number | null>((resolve) => {
+        const timer = setTimeout(() => { child.kill("SIGKILL"); resolve(null); }, 15_000);
+        child.on("exit", (code) => { clearTimeout(timer); resolve(code); });
+      });
+
+      assert.equal(exitCode, 0, `fixture failed: ${stderr}`);
+      assert.match(stdout, /^connected$/m, "process exited before the daemon registration ack");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a connected transport does not keep the process alive once nothing else is pending", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pbh-exit-"));
     const socketPath = join(dir, "d.sock");

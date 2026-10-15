@@ -196,6 +196,12 @@ export const COMMANDS = {
     Type.Object({ nodeId: Type.Number(), selector: Type.String() }),
     Type.Object({ nodeId: Type.Number() }),
   ),
+  "DOM.describeNode": cmd(
+    Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
+    Type.Object({
+      node: Type.Object({ backendNodeId: Type.Optional(Type.Number()) }, { additionalProperties: true }),
+    }),
+  ),
   "DOM.getBoxModel": cmd(
     Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
     Type.Object({
@@ -222,6 +228,7 @@ export const COMMANDS = {
   "Input.dispatchMouseEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchKeyEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
   "Input.dispatchDragEvent": cmd(Type.Object({}, { additionalProperties: true }), Empty),
+  "Input.cancelDragging": cmd(Type.Object({}), Empty),
   "Input.insertText": cmd(Type.Object({ text: Type.String() }), Empty),
 
   "Network.getResponseBody": cmd(

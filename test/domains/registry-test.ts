@@ -6,7 +6,9 @@ import type { TSchema } from "typebox";
 import { ALL_TOOLS } from "../../src/registry";
 import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
+import type { VirtualCursorController } from "../../src/cursor/types";
 import { ok } from "../../src/util/result";
+import { createFakeCursor } from "../util/fake-cursor";
 
 const SERIALIZED = new Set([
   "browser_click",
@@ -68,7 +70,7 @@ describe("tool registry", () => {
 
 type LockProbe = {
   readonly acquires: ReadonlyArray<string>;
-  run: (def: AnyBrowserToolDefinition) => Promise<void>;
+  run: (def: AnyBrowserToolDefinition, cursor: VirtualCursorController) => Promise<void>;
 };
 
 const lockProbe = (): LockProbe => {
@@ -83,14 +85,14 @@ const lockProbe = (): LockProbe => {
   } as unknown as BrowserClient;
   return {
     acquires,
-    run: async (def) => {
+    run: async (def, cursor) => {
       let registered: ToolDefinition<TSchema> | undefined;
       const pi = {
         registerTool: (td: ToolDefinition<TSchema>) => {
           registered = td;
         },
       } as unknown as ExtensionAPI;
-      registerBrowserTool(pi, client, def);
+      registerBrowserTool(pi, client, cursor, def);
       assert.ok(registered, "tool was not registered");
       await registered.execute?.("id", {}, undefined, undefined, undefined as never);
     },
@@ -113,19 +115,33 @@ const probeTool = (concurrency: unknown): AnyBrowserToolDefinition =>
 describe("concurrency lane selection", () => {
   test("a parallel tool skips the mutation mutex", async () => {
     const probe = lockProbe();
-    await probe.run(probeTool("parallel"));
+    await probe.run(probeTool("parallel"), createFakeCursor());
     assert.deepEqual([...probe.acquires], []);
   });
 
   test("a serialized tool takes the mutation mutex", async () => {
     const probe = lockProbe();
-    await probe.run(probeTool("serialized"));
+    await probe.run(probeTool("serialized"), createFakeCursor());
     assert.deepEqual([...probe.acquires], ["acquired"]);
   });
 
   test("a definition with no concurrency class takes the mutation mutex", async () => {
     const probe = lockProbe();
-    await probe.run(probeTool(undefined));
+    await probe.run(probeTool(undefined), createFakeCursor());
     assert.deepEqual([...probe.acquires], ["acquired"]);
+  });
+
+  test("registered handlers receive the configured cursor instance", async () => {
+    const cursor = createFakeCursor();
+    const received: unknown[] = [];
+    const probe = lockProbe();
+    await probe.run({
+      ...probeTool("parallel"),
+      handler: async (_args, ctx) => {
+        received.push(ctx.cursor);
+        return ok({ text: "done" });
+      },
+    }, cursor);
+    assert.deepEqual(received, [cursor]);
   });
 });

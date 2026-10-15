@@ -8,6 +8,7 @@ import { deserialize, serialize } from "../../../src/daemon/protocol";
 
 const socketPath = process.argv[2];
 if (!socketPath) throw new Error("usage: fixture <socketPath>");
+const ackDelayMs = Number(process.argv[3] ?? "0");
 
 const server = createServer((conn) => {
   conn.unref();
@@ -15,7 +16,16 @@ const server = createServer((conn) => {
   rl.on("line", (line) => {
     const msg = deserialize(line);
     if (msg?.type === "control" && msg.action === "register" && msg.clientId !== undefined) {
-      conn.write(serialize({ type: "control", action: "registered", clientId: msg.clientId }) + "\n");
+      const clientId = msg.clientId;
+      const acknowledge = (): void => {
+        conn.write(serialize({ type: "control", action: "registered", clientId }) + "\n");
+      };
+      if (ackDelayMs > 0) {
+        const timer = setTimeout(acknowledge, ackDelayMs);
+        timer.unref();
+      } else {
+        acknowledge();
+      }
     }
   });
 });

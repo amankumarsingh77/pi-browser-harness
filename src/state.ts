@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { asArrayOf, asNumber, asString, isRecord } from "./util/guards";
+import { asArrayOf, asBoolean, asNumber, asString, isRecord } from "./util/guards";
 
 export type BrowserState = {
   readonly namespace: string;
+  readonly cursorEnabled?: boolean;
   readonly ownedTargetIds?: ReadonlyArray<string>;
   readonly harnessWindowTargetId?: string;
   readonly harnessWindowId?: number;
@@ -10,6 +11,7 @@ export type BrowserState = {
 
 export const defaultState = (namespace = "default"): BrowserState => ({
   namespace,
+  cursorEnabled: true,
   ownedTargetIds: [],
 });
 
@@ -19,6 +21,7 @@ export const defaultState = (namespace = "default"): BrowserState => ({
 const stateKey = (state: BrowserState): string =>
   JSON.stringify({
     namespace: state.namespace,
+    cursorEnabled: state.cursorEnabled ?? true,
     ownedTargetIds: [...(state.ownedTargetIds ?? [])].sort(),
     harnessWindowTargetId: state.harnessWindowTargetId ?? null,
     harnessWindowId: state.harnessWindowId ?? null,
@@ -50,11 +53,13 @@ export const createStatePersister = (pi: ExtensionAPI): StatePersister => {
 const asPersistedState = (v: unknown): Partial<BrowserState> | undefined => {
   if (!isRecord(v)) return undefined;
   const namespace = asString(v["namespace"]);
+  const cursorEnabled = asBoolean(v["cursorEnabled"]);
   const ownedTargetIds = asArrayOf(v["ownedTargetIds"], asString);
   const harnessWindowTargetId = asString(v["harnessWindowTargetId"]);
   const harnessWindowId = asNumber(v["harnessWindowId"]);
   return {
     ...(namespace !== undefined ? { namespace } : {}),
+    ...(cursorEnabled !== undefined ? { cursorEnabled } : {}),
     ...(ownedTargetIds !== undefined ? { ownedTargetIds } : {}),
     ...(harnessWindowTargetId !== undefined ? { harnessWindowTargetId } : {}),
     ...(harnessWindowId !== undefined ? { harnessWindowId } : {}),

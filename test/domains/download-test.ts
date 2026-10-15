@@ -8,12 +8,14 @@ import { downloadTool, restoreDownloadBehavior } from "../../src/domains/files";
 import type { HandlerContext } from "../../src/util/tool";
 import { cdpError } from "../../src/cdp/errors";
 import { err } from "../../src/util/result";
+import { createFakeCursor } from "../util/fake-cursor";
 import { Value } from "typebox/value";
 
 const SET_BEHAVIOR = "Browser.setDownloadBehavior";
 
 const ctxFor = (fake: FakeClient): HandlerContext => ({
   client: fake.client,
+  cursor: createFakeCursor(),
   signal: undefined,
   onUpdate: () => {},
   extensionCtx: undefined as never,

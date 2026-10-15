@@ -10,6 +10,7 @@ import type {
 import type { Component } from "@mariozechner/pi-tui";
 import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
+import type { VirtualCursorController } from "../cursor/types";
 import type { Result } from "./result";
 
 export type ToolOk = {
@@ -33,6 +34,7 @@ export type ToolErr = {
 
 export type HandlerContext = {
   readonly client: BrowserClient;
+  readonly cursor: VirtualCursorController;
   readonly signal: AbortSignal | undefined;
   readonly onUpdate: (update: ToolOk) => void;
   readonly extensionCtx: ExtensionContext;
@@ -99,6 +101,7 @@ const toToolResult = (
 export const registerBrowserTool = (
   pi: ExtensionAPI,
   client: BrowserClient,
+  cursor: VirtualCursorController,
   def: AnyBrowserToolDefinition,
 ): void => {
   type S = TSchema;
@@ -165,6 +168,7 @@ export const registerBrowserTool = (
       try {
         const result = await def.handler(args, {
           client,
+          cursor,
           signal,
           onUpdate: (u) => {
             if (onUpdate) {

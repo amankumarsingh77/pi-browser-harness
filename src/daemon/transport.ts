@@ -57,11 +57,6 @@ export const createDaemonTransport = (clientId: string, socketPath: string = DAE
         return;
       }
       socket = sock;
-      // The client is kept connected across sessions on purpose (index.ts session_shutdown), so this
-      // socket must not be what keeps the process alive: in `pi -p` it was the last handle standing
-      // and pi never exited (#39). In-flight requests hold their own ref'd timers, so nothing a
-      // caller is awaiting can be dropped by this.
-      sock.unref();
 
       const connectTimer = setTimeout(() => {
         cleanup("Connection timeout");
@@ -69,7 +64,6 @@ export const createDaemonTransport = (clientId: string, socketPath: string = DAE
       }, timeoutMs);
 
       sock.on("connect", () => {
-        clearTimeout(connectTimer);
         rl = createInterface({ input: sock, crlfDelay: Infinity });
 
         rl.on("line", (line: string) => {
@@ -77,7 +71,13 @@ export const createDaemonTransport = (clientId: string, socketPath: string = DAE
           if (!msg) return;
 
           if (msg.type === "control" && msg.action === "registered" && msg.clientId === clientId) {
+            clearTimeout(connectTimer);
             registered = true;
+            // The client is kept connected across sessions on purpose (index.ts
+            // session_shutdown), so once registration has completed this socket must not
+            // be what keeps `pi -p` alive. Before the ack, the referenced socket and timer
+            // keep the pending connect() promise from being abandoned.
+            sock.unref();
             settle(ok(undefined));
             return;
           }

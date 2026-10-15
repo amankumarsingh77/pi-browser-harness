@@ -11,14 +11,39 @@ import { restoreDownloadBehavior } from "./domains/files";
 import { createDaemonTransport } from "./daemon/transport";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
+import { createVirtualCursorController } from "./cursor/controller";
+import type { VirtualCursorController } from "./cursor/types";
 
-export default function browserHarnessExtension(pi: ExtensionAPI): void {
+export type BrowserHarnessDependencies = {
+  readonly createClient?: typeof createBrowserClient;
+  readonly createTransport?: typeof createDaemonTransport;
+  readonly createCursor?: typeof createVirtualCursorController;
+  readonly readProfilePin?: typeof readPin;
+  readonly registerTools?: typeof registerAllTools;
+  readonly registerSetup?: typeof registerSetupCommand;
+  readonly registerProfile?: typeof registerProfileCommand;
+  readonly cleanupTempDirectories?: typeof cleanupTempDirs;
+};
+
+export function createBrowserHarnessExtension(
+  pi: ExtensionAPI,
+  dependencies: BrowserHarnessDependencies = {},
+): void {
+  const createClient = dependencies.createClient ?? createBrowserClient;
+  const createTransport = dependencies.createTransport ?? createDaemonTransport;
+  const createCursor = dependencies.createCursor ?? createVirtualCursorController;
+  const readProfilePin = dependencies.readProfilePin ?? readPin;
+  const registerTools = dependencies.registerTools ?? registerAllTools;
+  const registerSetup = dependencies.registerSetup ?? registerSetupCommand;
+  const registerProfile = dependencies.registerProfile ?? registerProfileCommand;
+  const cleanupTempDirectories = dependencies.cleanupTempDirectories ?? cleanupTempDirs;
   const flagNs = asString(pi.getFlag("browser-namespace"));
   const namespace = flagNs ?? `pi-${Math.random().toString(36).slice(2, 10)}`;
 
   let state: BrowserState = defaultState(namespace);
   const persister = createStatePersister(pi);
   let client: BrowserClient | null = null;
+  let cursor: VirtualCursorController | null = null;
   let toolsRegistered = false;
 
   pi.registerFlag("browser-namespace", {
@@ -29,6 +54,53 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     description: "Enable debug click overlay (saves annotated screenshots to /tmp)",
     type: "boolean",
     default: false,
+  });
+  pi.registerFlag("no-browser-cursor", {
+    description: "Disable the in-page virtual cursor for this process",
+    type: "boolean",
+    default: false,
+  });
+
+  pi.registerCommand("browser-cursor", {
+    description: "Control the in-page virtual cursor: on, off, or status",
+    handler: async (args, ctx) => {
+      if (!cursor) {
+        ctx.ui.notify("Browser client not started. Run /browser-setup first.", "warning");
+        return;
+      }
+      const mode = args.trim().toLowerCase();
+      const forcedOff = asBoolean(pi.getFlag("no-browser-cursor")) ?? false;
+      if (mode === "on") {
+        if (forcedOff) {
+          ctx.ui.notify("Virtual cursor: forced off by --no-browser-cursor", "warning");
+          return;
+        }
+        await cursor.applySessionSettings(true);
+        state = { ...state, cursorEnabled: true };
+        persister.persist(state);
+        ctx.ui.notify("Virtual cursor: on", "info");
+        return;
+      }
+      if (mode === "off") {
+        await cursor.applySessionSettings(false);
+        state = { ...state, cursorEnabled: false };
+        persister.persist(state);
+        ctx.ui.notify("Virtual cursor: off", "info");
+        return;
+      }
+      if (mode === "status") {
+        const status = cursor.status();
+        if (forcedOff) {
+          ctx.ui.notify("Virtual cursor: forced off by --no-browser-cursor", "info");
+        } else if (status.diagnostics.status === "degraded") {
+          ctx.ui.notify(`Virtual cursor: degraded (${status.diagnostics.reason ?? "unknown reason"})`, "warning");
+        } else {
+          ctx.ui.notify(`Virtual cursor: ${status.enabled ? "on" : "off"}`, "info");
+        }
+        return;
+      }
+      ctx.ui.notify("Usage: /browser-cursor on|off|status", "warning");
+    },
   });
 
   pi.registerCommand("browser-status", {
@@ -89,17 +161,17 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
     setDebugClicks(asBoolean(pi.getFlag("browser-debug-clicks")) ?? false);
 
     // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
-    const profilePin = await readPin();
+    const profilePin = await readProfilePin();
 
     if (!client) {
-      const transport = createDaemonTransport(state.namespace);
+      const transport = createTransport(state.namespace);
 
       const initialOwnership: { ownedTargetIds?: ReadonlyArray<string>; harnessWindowTargetId?: string; harnessWindowId?: number } = {};
       if (state.ownedTargetIds !== undefined) initialOwnership.ownedTargetIds = state.ownedTargetIds;
       if (state.harnessWindowTargetId !== undefined) initialOwnership.harnessWindowTargetId = state.harnessWindowTargetId;
       if (state.harnessWindowId !== undefined) initialOwnership.harnessWindowId = state.harnessWindowId;
 
-      client = createBrowserClient({
+      client = createClient({
         namespace: state.namespace,
         transport,
         profilePin,
@@ -118,16 +190,24 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
           try { persister.persist(state); } catch {}
         },
       });
+      cursor = createCursor(client, {
+        enabled: !(asBoolean(pi.getFlag("no-browser-cursor")) ?? false),
+      });
     } else {
       client.setProfilePin(profilePin);
     }
 
+    if (!cursor) throw new Error("virtual cursor was not initialized");
+    await cursor.applySessionSettings(
+      (asBoolean(pi.getFlag("no-browser-cursor")) ?? false) ? false : state.cursorEnabled ?? true,
+    );
+
     if (!toolsRegistered) {
-      registerAllTools(pi, client);
+      registerTools(pi, client, cursor);
       toolsRegistered = true;
     }
-    registerSetupCommand(pi, client);
-    registerProfileCommand(pi, client);
+    registerSetup(pi, client);
+    registerProfile(pi, client);
   });
 
   pi.on("session_shutdown", async () => {
@@ -139,20 +219,29 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
           console.warn(`[pi-browser-harness] ${restored.error.message}`);
         }
         await client.detach();
+      } catch (e) {
+        console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
+      }
+      try {
         await client.closeOwnedTabs();
       } catch (e) {
         console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
+      } finally {
+        await cursor?.clear();
       }
       // Do NOT stop the client or null it out: the surviving daemon connection is what eliminates the per-session "Allow Remote Debugging" prompt.
     }
     persister.persist(state);
-    await cleanupTempDirs();
+    await cleanupTempDirectories();
   });
 
   // The branch already holds the restored snapshot: re-appending it only grows the session file.
   pi.on("session_tree", async (_event, ctx) => {
     state = restoreState(ctx, client?.namespace);
     persister.markPersisted(state);
+    await cursor?.applySessionSettings(
+      (asBoolean(pi.getFlag("no-browser-cursor")) ?? false) ? false : state.cursorEnabled ?? true,
+    );
   });
 
   pi.on("before_agent_start", async (event) => {
@@ -160,4 +249,8 @@ export default function browserHarnessExtension(pi: ExtensionAPI): void {
       systemPrompt: event.systemPrompt + getBrowserSystemPrompt(client?.status().alive ?? false),
     };
   });
+}
+
+export default function browserHarnessExtension(pi: ExtensionAPI): void {
+  createBrowserHarnessExtension(pi);
 }
