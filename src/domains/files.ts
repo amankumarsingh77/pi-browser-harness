@@ -104,7 +104,7 @@ export const uploadFileTool = defineBrowserTool({
   description: "Set files on a file <input> via CDP, with a JS-DataTransfer fallback for stubborn pages. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`.",
   promptSnippet: "Upload a file to a file input by ref (preferred) or selector",
   promptGuidelines: [
-    "PREFER `ref` from browser_snapshot over a CSS selector — survives re-renders. (File inputs are often hidden; snapshot still surfaces them.)",
+    "File inputs are often hidden; browser_snapshot still surfaces them.",
     "File path must be absolute and readable.",
   ],
   parameters: UploadArgs,
@@ -145,22 +145,70 @@ export const uploadFileTool = defineBrowserTool({
   },
 });
 
+// Chrome stores the override in its default browser context, so it outlives this client and
+// silently redirects the user's own downloads. Track it, so session teardown can undo it.
+// The flag only records what THIS process set: the daemon is shared by every pi process on the
+// machine and the CDP primitive is last-writer-wins, so another session may have reset or
+// re-pointed it since. A crashed or killed session never reaches teardown, so the override can
+// also outlive the process that set it.
+let activeDownloadOverride: string | undefined;
+
+// Shutdown must not block on a browser that is already gone: a pending restore against a
+// disconnected daemon would otherwise trigger the one-shot reconnect (and Chrome's consent
+// prompt) that 0.11.1 confined to explicit tool calls, and wait up to the connect timeout.
+const SHUTDOWN_RESTORE_TIMEOUT_MS = 2_000;
+
+export const restoreDownloadBehavior = async (client: BrowserClient): Promise<Result<void, ToolErr>> => {
+  const pending = activeDownloadOverride;
+  if (pending === undefined) return ok(undefined);
+  if (!client.status().alive) {
+    return err({ kind: "not_connected", message: `browser not connected; downloads may keep going to ${pending} until Chrome restarts` });
+  }
+  const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", { behavior: "default" }, { timeoutMs: SHUTDOWN_RESTORE_TIMEOUT_MS });
+  if (!r.success) {
+    return err({ ...r.error, message: `${r.error.message} (downloads may keep going to ${pending})` });
+  }
+  activeDownloadOverride = undefined;
+  return ok(undefined);
+};
+
 const DownloadArgs = Type.Object({
-  downloadPath: Type.String({ description: "Absolute path to a writable directory where downloads should be saved" }),
+  downloadPath: Type.Optional(
+    Type.String({ description: "Absolute path to a writable directory where downloads should be saved" }),
+  ),
+  restore: Type.Optional(
+    Type.Boolean({
+      description:
+        "Undo a previous browser_download: reset Chrome's download behavior back to the user's own default.",
+    }),
+  ),
 });
 
 export const downloadTool = defineBrowserTool({
   name: "browser_download",
   label: "Browser Download",
-  description: "Configure Chrome's download behavior: set the save directory and disable the save-as prompt.",
+  description:
+    "Configure Chrome's download behavior: set the save directory and disable the save-as prompt, or restore the user's default. Restored automatically when this session shuts down cleanly.",
   promptSnippet: "Configure download directory",
   promptGuidelines: [
     "Pass an absolute path to an existing writable directory.",
-    "Affects all subsequent downloads on this browser.",
+    "The override applies to the user's own downloads too, not just yours, and only a clean session shutdown undoes it. Call browser_download({restore:true}) as soon as you are done.",
   ],
   parameters: DownloadArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+    if (args.restore === true) {
+      if (args.downloadPath !== undefined) {
+        return err({ kind: "invalid_state", message: "Pass either downloadPath or restore, not both" });
+      }
+      const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", { behavior: "default" });
+      if (!r.success) return r;
+      activeDownloadOverride = undefined;
+      return ok({ text: "Downloads restored to Chrome's default location", details: { restored: true } });
+    }
+    if (args.downloadPath === undefined) {
+      return err({ kind: "invalid_state", message: "Provide downloadPath to set a directory, or restore:true to undo" });
+    }
     try {
       await mkdir(args.downloadPath, { recursive: true });
     } catch (e) {
@@ -187,6 +235,7 @@ export const downloadTool = defineBrowserTool({
       eventsEnabled: true,
     });
     if (!r.success) return r;
+    activeDownloadOverride = args.downloadPath;
     return ok({
       text: `Downloads will save to: ${args.downloadPath}`,
       details: { downloadPath: args.downloadPath },

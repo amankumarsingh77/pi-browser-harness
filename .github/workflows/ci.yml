@@ -35,14 +35,16 @@ jobs:
       - name: Verify npm package
         run: npm pack --dry-run > /dev/null
 
-  # Profile discovery and pinning are the only parts of the harness whose
-  # behavior differs per operating system: user-data-dir locations, how the
-  # running browser is identified, and whether a --profile-directory launch is
-  # handed to the running browser by Chromium's ProcessSingleton. Chromium's
-  # source says all three behave the same everywhere; this job is what turns
-  # that into evidence on real macOS and Windows machines.
+  # The parts of the harness whose behavior differs per operating system:
+  # profile discovery and pinning (user-data-dir locations, how the running
+  # browser is identified, whether a --profile-directory launch is handed to the
+  # running browser by Chromium's ProcessSingleton), script-path containment
+  # (separators and case rules), and how the daemon process is spawned.
+  # Chromium's source and node:path's docs say these behave as expected
+  # everywhere; this job is what turns that into evidence on real macOS and
+  # Windows machines.
   profiles:
-    name: Profiles (${{ matrix.os }})
+    name: Platform behavior (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -70,6 +72,8 @@ jobs:
           npx tsx test/profile/list-test.ts
           npx tsx test/profile/store-test.ts
           npx tsx test/profile/browser-process-test.ts
+          npx tsx test/util/paths-test.ts
+          npx tsx test/util/daemon-socket-test.ts
         shell: bash
 
       # The runner images ship Google Chrome on all three platforms. Linux has

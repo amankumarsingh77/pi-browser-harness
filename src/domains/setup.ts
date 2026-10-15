@@ -15,8 +15,6 @@ export const setupTool = defineBrowserTool({
     "Call when browser tools fail with 'Browser harness not initialized'. Idempotent.",
   promptSnippet: "Initialize browser connection",
   promptGuidelines: [
-    "Call browser_setup when you get a 'Browser harness not initialized' error from any browser tool.",
-    "This tool is idempotent — calling it when already connected is harmless.",
     "After browser_setup succeeds, retry the browser tool that failed.",
   ],
   parameters: SetupArgs,

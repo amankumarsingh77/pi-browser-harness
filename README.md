@@ -161,13 +161,19 @@ Both run in isolated tabs and never disturb your current page.
 |---|---|
 | `browser_network_requests` | Requests captured on the current tab since attach. Filter by URL, method, status, resource type, or recency; optional response bodies. |
 | `browser_http_get` | Plain GET outside the browser. Much faster than navigate-then-read for JSON APIs — but no JS rendering. |
+| `browser_set_headers` | Set extra HTTP request headers on the current owned tab. Values are not echoed in output. |
+| `browser_clear_headers` | Clear extra HTTP request headers from the current owned tab. |
+
+Extra headers persist for subsequent document, subresource, fetch, and XHR requests until cleared or
+the tab closes. Create or select an owned tab before setting them, and clear them before switching
+tabs or navigating the tab to another origin.
 
 ### Files and viewport
 
 | Tool | Purpose |
 |---|---|
 | `browser_upload_file` | Set files on a file input, with a DataTransfer fallback for stubborn pages. |
-| `browser_download` | Set the download directory and suppress the save-as prompt. |
+| `browser_download` | Set the download directory and suppress the save-as prompt, or restore the default. Applies to the user's own downloads until restored. |
 | `browser_print_to_pdf` | Print the page to PDF via `Page.printToPDF`. |
 | `browser_viewport_resize` | Override viewport size and device pixel ratio for responsive checks. |
 
@@ -344,6 +350,7 @@ re-runnable.
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
+| `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
 
 ---
 
@@ -373,6 +380,14 @@ pi-browser-harness  ──►  daemon (Unix socket / named pipe)  ──►  Chr
 A long-lived daemon owns the CDP connection, so it outlives individual pi sessions — which is why
 you only see Chrome's "Allow Remote Debugging" prompt once. `browser_run_script` executes in the
 harness process with direct daemon and Node access.
+
+### Prompt guidance
+
+Tool descriptions and parameter schemas own per-tool usage. Tool guidelines add only decisions
+and caveats not already covered there. The browser prompt carries cross-tool rules:
+tab isolation, concurrency, checking mutations, and stale-ref recovery. These rules are available
+before and after connection. Longer recipes remain in this README and the bundled skill
+rather than being copied into the browser prompt.
 
 ---
 

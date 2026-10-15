@@ -4,9 +4,10 @@ import { getBrowserSystemPrompt } from "./prompt";
 import { registerSetupCommand } from "./setup";
 import { registerProfileCommand } from "./profile/command";
 import { readPin } from "./profile/store";
-import { type BrowserState, defaultState, persistState, restoreState } from "./state";
+import { type BrowserState, createStatePersister, defaultState, restoreState } from "./state";
 import { registerAllTools } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
+import { restoreDownloadBehavior } from "./domains/files";
 import { createDaemonTransport } from "./daemon/transport";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
@@ -40,6 +41,7 @@ export function createBrowserHarnessExtension(
   const namespace = flagNs ?? `pi-${Math.random().toString(36).slice(2, 10)}`;
 
   let state: BrowserState = defaultState(namespace);
+  const persister = createStatePersister(pi);
   let client: BrowserClient | null = null;
   let cursor: VirtualCursorController | null = null;
   let toolsRegistered = false;
@@ -75,14 +77,14 @@ export function createBrowserHarnessExtension(
         }
         await cursor.applySessionSettings(true);
         state = { ...state, cursorEnabled: true };
-        persistState(pi, state);
+        persister.persist(state);
         ctx.ui.notify("Virtual cursor: on", "info");
         return;
       }
       if (mode === "off") {
         await cursor.applySessionSettings(false);
         state = { ...state, cursorEnabled: false };
-        persistState(pi, state);
+        persister.persist(state);
         ctx.ui.notify("Virtual cursor: off", "info");
         return;
       }
@@ -155,6 +157,7 @@ export function createBrowserHarnessExtension(
 
   pi.on("session_start", async (_event, ctx) => {
     state = restoreState(ctx, state.namespace);
+    persister.markPersisted(state);
     setDebugClicks(asBoolean(pi.getFlag("browser-debug-clicks")) ?? false);
 
     // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
@@ -184,7 +187,7 @@ export function createBrowserHarnessExtension(
               ? { harnessWindowId: snap.harnessWindowId }
               : {}),
           };
-          try { persistState(pi, state); } catch {}
+          try { persister.persist(state); } catch {}
         },
       });
       cursor = createCursor(client, {
@@ -210,6 +213,11 @@ export function createBrowserHarnessExtension(
   pi.on("session_shutdown", async () => {
     if (client) {
       try {
+        // Warn but keep going: detach and tab cleanup still have to run, and a throw here would skip both.
+        const restored = await restoreDownloadBehavior(client);
+        if (!restored.success) {
+          console.warn(`[pi-browser-harness] ${restored.error.message}`);
+        }
         await client.detach();
       } catch (e) {
         console.warn("[pi-browser-harness] browser teardown failed during shutdown:", e);
@@ -223,27 +231,23 @@ export function createBrowserHarnessExtension(
       }
       // Do NOT stop the client or null it out: the surviving daemon connection is what eliminates the per-session "Allow Remote Debugging" prompt.
     }
-    persistState(pi, state);
+    persister.persist(state);
     await cleanupTempDirectories();
   });
 
+  // The branch already holds the restored snapshot: re-appending it only grows the session file.
   pi.on("session_tree", async (_event, ctx) => {
     state = restoreState(ctx, client?.namespace);
+    persister.markPersisted(state);
     await cursor?.applySessionSettings(
       (asBoolean(pi.getFlag("no-browser-cursor")) ?? false) ? false : state.cursorEnabled ?? true,
     );
-    persistState(pi, state);
   });
 
   pi.on("before_agent_start", async (event) => {
-    if (!client || !client.status().alive) {
-      return {
-        systemPrompt:
-          event.systemPrompt +
-          `\n\n## Browser Control\n\nBrowser tools (browser_*) are available but the browser is not connected. Run /browser-setup.`,
-      };
-    }
-    return { systemPrompt: event.systemPrompt + getBrowserSystemPrompt() };
+    return {
+      systemPrompt: event.systemPrompt + getBrowserSystemPrompt(client?.status().alive ?? false),
+    };
   });
 }
 

@@ -17,6 +17,7 @@ import { uploadFileTool, downloadTool, printToPdfTool } from "./domains/files";
 import { viewportResizeTool } from "./domains/viewport";
 import { dragAndDropTool } from "./domains/drag";
 import { httpGetTool, networkRequestsTool } from "./domains/network";
+import { clearHeadersTool, setHeadersTool } from "./domains/headers";
 import { consoleTool } from "./domains/console";
 import { snapshotTool } from "./domains/snapshot";
 import { executeJsTool, runScriptTool } from "./domains/js";
@@ -59,6 +60,8 @@ export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   dragAndDropTool,
   httpGetTool,
   networkRequestsTool,
+  setHeadersTool,
+  clearHeadersTool,
   consoleTool,
   snapshotTool,
   executeJsTool,

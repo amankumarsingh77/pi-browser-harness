@@ -13,7 +13,7 @@ import {
   serialize,
 } from "./protocol";
 
-export const createDaemonTransport = (clientId: string): CdpTransport => {
+export const createDaemonTransport = (clientId: string, socketPath: string = DAEMON_SOCKET_PATH): CdpTransport => {
   let socket: Socket | null = null;
   let rl: ReturnType<typeof createInterface> | null = null;
   let queue = makeEventQueue();
@@ -51,7 +51,7 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
 
       let sock: Socket;
       try {
-        sock = createConnection(DAEMON_SOCKET_PATH);
+        sock = createConnection(socketPath);
       } catch (e) {
         settle(err(cdpError("transport_closed", e instanceof Error ? e.message : String(e))));
         return;
@@ -64,7 +64,6 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
       }, timeoutMs);
 
       sock.on("connect", () => {
-        clearTimeout(connectTimer);
         rl = createInterface({ input: sock, crlfDelay: Infinity });
 
         rl.on("line", (line: string) => {
@@ -72,7 +71,13 @@ export const createDaemonTransport = (clientId: string): CdpTransport => {
           if (!msg) return;
 
           if (msg.type === "control" && msg.action === "registered" && msg.clientId === clientId) {
+            clearTimeout(connectTimer);
             registered = true;
+            // The client is kept connected across sessions on purpose (index.ts
+            // session_shutdown), so once registration has completed this socket must not
+            // be what keeps `pi -p` alive. Before the ack, the referenced socket and timer
+            // keep the pending connect() promise from being abandoned.
+            sock.unref();
             settle(ok(undefined));
             return;
           }

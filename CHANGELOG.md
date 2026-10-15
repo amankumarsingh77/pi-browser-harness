@@ -4,6 +4,10 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Changed
+
+- **Browser guidance no longer repeats tool declarations.** The browser prompt now contains only cross-tool coordination, available before and after connection, and tool guidelines omit usage and argument details already present in descriptions and schemas. Tool names, schemas, handlers, and safety warnings are unchanged.
+
 ### Added
 
 - **Virtual cursor controls and capture options.** The page-only cursor is default-on and never
@@ -14,6 +18,23 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **Real-Chrome cursor verification and benchmark commands.** The manual fixture checks click,
   drag, scroll, reinjection, capture suppression, pointer interception, focus, and accessibility;
   the deterministic benchmark gates the incremental P95 visual latency at 220ms.
+- **Per-tab extra HTTP request headers.** `browser_set_headers` applies headers to subsequent document, subresource, fetch, and XHR requests on the current owned tab through CDP, while `browser_clear_headers` removes them. Header values are not echoed in tool output, and guidance requires clearing them before switching tabs or navigating to another origin.
+
+### Fixed
+
+- **`pi -p` exits after using browser tools.** The client's socket to the daemon is kept open across sessions by design, and in non-interactive mode it was the last handle keeping Node alive, so a print-mode run that had connected to the browser printed its answer and then hung until killed. The socket no longer holds the event loop; in-flight requests keep their own timers, so nothing awaited is affected. (#39)
+- **`browser_download` no longer redirects the user's own downloads for good.** `Browser.setDownloadBehavior` was sent without a `browserContextId`, which Chrome applies to its default context — the one the user's own tabs are in — and the override lives on the browser connection, which the daemon keeps open across pi sessions. Every later download in that Chrome, the user's own included, went to the tool's temp directory, and nothing undid it when the session ended. The tool now takes `restore: true` to reset the behavior, and a clean session shutdown restores the default whenever this session's override is still in force (a killed session cannot, so call `restore: true` as soon as you are done).
+- **Browser state is no longer appended to the session on every callback.** Every ownership change, every `session_tree` event (even one that merely restored the entry already on the branch) and every shutdown appended a `browser-harness-state` entry, so the append-only session file and Pi Web's `+N custom` chain grew without bound. A snapshot is now written only when it differs from the last one persisted or restored; tab order does not count as a difference. (#26)
+- **The daemon starts from a pi-managed install without `typebox`.** pi installs packages with dev and peer dependencies omitted and maps host-provided packages such as `typebox` only inside the extension host, but the daemon is a separate Node process that resolved `typebox` through `src/cdp/discovery.ts` and died with `Cannot find module 'typebox'` before binding its socket, so `/browser-setup` reported `Could not start the browser daemon`. The daemon's `/json/version` parsing no longer uses `typebox`, and a test walks the daemon's import graph to keep every reachable package a runtime dependency. (#34)
+- **The daemon starts from a Bun-compiled pi binary.** Inside `pi.exe` (and any other `bun build --compile` host), `createRequire().resolve("tsx/cli")` is rooted at the binary's embedded virtual filesystem and cannot see the extension's real `node_modules`, so `browser_setup` failed instantly with `Could not start the browser daemon`. The resolver result is now checked on disk and, when it fails, the tsx CLI is found by walking up the `node_modules` chain the way Node does. Under Bun the daemon is launched with `node` from `PATH` instead of `process.execPath` (which is the pi binary itself); `PI_BROWSER_NODE` overrides the executable. (#27)
+
+## 0.11.1 — 2026-08-12
+
+### Fixed
+
+- **Chrome remote-debugging consent is no longer retriggered indefinitely in the background.** A cancelled, failed, or disconnected CDP connection now remains disconnected until the next explicit browser request, which makes one on-demand connection attempt instead of running an unbounded retry loop that can repeatedly interrupt normal browsing.
+- **`browser_run_script` accepts paths on Windows again.** The allowed-directory check compared against a hardcoded `/` separator, so every backslash path — including files inside `os.tmpdir()`, which the rejection message itself listed as allowed — was refused. Containment is now decided by `path.relative`, which carries each platform's own separator and case rules.
+- **The daemon starts from a production install.** `tsx` is needed to run the daemon but was declared only as a dev dependency, so `browser_setup` reported `Could not start the browser daemon` under `npm omit=dev`. It is now a runtime dependency, and the daemon is launched via the CLI entry that Node's resolver finds — a fixed `node_modules/.bin` path does not exist in a hoisted install, which is how pi lays extensions out.
 
 ## 0.11.0 — 2026-08-02
 
