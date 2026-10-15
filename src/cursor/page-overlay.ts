@@ -103,7 +103,7 @@ export const CURSOR_BOOTSTRAP_SOURCE = String.raw`(() => {
       };
     },
     command(request) {
-      reset();
+      resetHost();
       const computed = getComputedStyle(host);
       if (computed.display === "none" || computed.visibility === "hidden" || computed.pointerEvents !== "none") {
         return { ok: false, reason: "critical cursor host styles were overridden" };

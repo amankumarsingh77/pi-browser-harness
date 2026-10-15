@@ -275,6 +275,27 @@ async function main(): Promise<void> {
     check(contextClick.success, "real context-menu handler succeeds");
     check((await evaluate(client, "window.counts.context")) === 1, "fixture receives one context-menu event");
 
+    const dragVisualProbe = await cursor.runPointerAction(client.current()!, undefined, async (visual) => {
+      await visual.moveTo({ x: 90, y: 250 }, true);
+      await visual.press("left");
+      await visual.moveDrag({ x: 110, y: 250 });
+      const pressedSnapshot = await cursorSnapshot(client);
+      await visual.release("left", 1);
+      const releasedSnapshot = await cursorSnapshot(client);
+      return {
+        success: true as const,
+        data: { pressedSnapshot, releasedSnapshot },
+      };
+    });
+    check(
+      dragVisualProbe.success && dragVisualProbe.data.pressedSnapshot?.["pressed"] === true,
+      "drag visual remains pressed after a move",
+    );
+    check(
+      dragVisualProbe.success && dragVisualProbe.data.releasedSnapshot?.["pressed"] === false,
+      "drag visual release clears pressed state",
+    );
+
     const dragged = await dragAndDropTool.handler({ startX: 90, startY: 250, endX: 350, endY: 250 }, context);
     check(dragged.success, "real drag handler succeeds");
     check((await evaluate(client, "window.counts.drop")) === 1, "fixture receives one drop");
