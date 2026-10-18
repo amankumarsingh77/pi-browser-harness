@@ -32,8 +32,13 @@ jobs:
       - name: Check
         run: npm run check
 
+      # Packed-install smoke test (browser-use/browser-harness#808): the 0.11.0
+      # release shipped without tsx in dependencies, so the daemon could not
+      # start from a clean install. This packs the real tarball, checks its
+      # manifest declares every runtime dep, and proves a clean install
+      # resolves the tsx CLI the daemon spawns.
       - name: Verify npm package
-        run: npm pack --dry-run > /dev/null
+        run: npx tsx scripts/check-pack.ts
 
   # The parts of the harness whose behavior differs per operating system:
   # profile discovery and pinning (user-data-dir locations, how the running
