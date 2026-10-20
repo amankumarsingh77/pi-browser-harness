@@ -8,16 +8,14 @@ describe("cdp events", () => {
   test("decodes a dialog-opening event", () => {
     const r = decodeEvent("Page.javascriptDialogOpening", { type: "confirm", message: "Sure?" });
     assert.equal(r.success, true);
-    if (r.success) assert.equal(r.data.type, "confirm");
+    assert.equal(r.data.type, "confirm");
   });
 
   test("rejects a malformed event payload", () => {
     const r = decodeEvent("Page.javascriptDialogOpening", { type: 5 });
     assert.equal(r.success, false);
-    if (!r.success) {
-      assert.equal(r.error.kind, "invalid_response");
-      assert.equal(r.error.method, "Page.javascriptDialogOpening");
-    }
+    assert.equal(r.error.kind, "invalid_response");
+    assert.equal(r.error.method, "Page.javascriptDialogOpening");
   });
 
   test("tolerates unknown extra fields Chrome may add", () => {
@@ -57,7 +55,7 @@ describe("cdp events", () => {
       targetInfo: { targetId: "t1", type: "page", title: "x", url: "about:blank" },
     });
     assert.equal(r.success, true);
-    if (r.success) assert.equal(r.data.targetInfo.openerId, undefined);
+    assert.equal(r.data.targetInfo.openerId, undefined);
   });
 });
 
@@ -74,7 +72,7 @@ describe("cdp events dropped payloads", () => {
     const drained = buf.drain({});
     assert.equal(drained.records.length, 1);
     assert.equal(drained.records[0]?.text, "boom");
-    assert.equal(drained.records[0]?.level, "error");
+    assert.equal(drained.records[0].level, "error");
   });
 
   test("network buffer ignores a malformed requestWillBeSent without throwing", () => {

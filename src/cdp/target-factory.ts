@@ -3,7 +3,9 @@
 import { randomUUID } from "node:crypto";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
+import { safeJs } from "../util/js-template";
 import { type CdpError, cdpError } from "./errors";
+import { reconcileOwnership } from "./ownership";
 
 const SPAWN_DEADLINE_MS = 8_000;
 const SPAWN_POLL_MS = 100;
@@ -26,30 +28,42 @@ const listPageTargets = async (client: BrowserClient): Promise<Result<ReadonlyAr
   return ok(r.data.targetInfos.filter((t) => t.type === "page"));
 };
 
-const sessionForTarget = async (client: BrowserClient, targetId: string): Promise<Result<string, CdpError>> => {
-  const current = client.current();
-  if (current?.targetId === targetId) return ok(current.sessionId);
-  return client.session().attach(targetId);
+export type BorrowedSession = { readonly sessionId: string; readonly release: () => Promise<void> };
+
+// Reuses the tracked, domain-enabled session when the harness holds one for the target; otherwise attaches a raw throwaway session that `release` detaches, so no session outlives its single use.
+export const borrowSession = async (client: BrowserClient, targetId: string): Promise<Result<BorrowedSession, CdpError>> => {
+  const tracked = client.session().sessionFor(targetId);
+  if (tracked !== undefined) return ok({ sessionId: tracked, release: () => Promise.resolve() });
+  const attached = await client.session().attach(targetId);
+  if (!attached.success) return attached;
+  const sessionId = attached.data;
+  return ok({
+    sessionId,
+    release: async () => {
+      await client.session().detach(sessionId);
+    },
+  });
 };
 
 const spawnTabViaOpener = async (
   client: BrowserClient,
   openerTargetId: string,
 ): Promise<Result<string, CdpError>> => {
-  const session = await sessionForTarget(client, openerTargetId);
-  if (!session.success) return session;
+  const borrowed = await borrowSession(client, openerTargetId);
+  if (!borrowed.success) return borrowed;
 
   const token = `pi-${randomUUID()}`;
   // userGesture: true is what gets this past the popup blocker.
   const opened = await client.session().callOnTarget(
     "Runtime.evaluate",
     {
-      expression: `!!window.open('about:blank#${token}', '_blank')`,
+      expression: safeJs`!!window.open(${`about:blank#${token}`}, '_blank')`,
       returnByValue: true,
       userGesture: true,
     },
-    session.data,
+    borrowed.data.sessionId,
   );
+  await borrowed.data.release();
   if (!opened.success) return opened;
   if (opened.data.result.value !== true) {
     return err(cdpError(
@@ -93,6 +107,7 @@ const ensureHarnessWindowUncoordinated = async (
   const live = new Set(targets.data.map((t) => t.targetId));
 
   const ownership = client.ownership();
+  reconcileOwnership(ownership, live);
   const pinnedCtx = client.profileContextId();
   // With a pin set but no context resolved yet, a recorded tab's profile cannot be verified, so seed a new window rather than risk adopting one from the wrong profile.
   const canReuse = client.profilePin() === null || pinnedCtx !== undefined;

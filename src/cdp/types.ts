@@ -11,7 +11,7 @@ export type CdpEvent = {
 export type CdpRawMessage = {
   readonly id?: number;
   readonly method?: string;
-  readonly params?: Record<string, unknown>;
+  readonly params?: Readonly<Record<string, unknown>>;
   readonly result?: unknown;
   readonly error?: { readonly message: string; readonly code?: number };
   readonly sessionId?: string;
@@ -30,6 +30,15 @@ export type TabInfo = {
   readonly owned?: boolean;
 };
 
+// The identity of an interactive element as seen in one snapshot. Kept on the tab session per ref so the next
+// mutation can report what changed without re-running a full snapshot.
+export type RefSignature = {
+  readonly role: string;
+  readonly name: string;
+  readonly value: string;
+  readonly state: string;
+};
+
 export type PageInfo = {
   readonly url: string;
   readonly title: string;
@@ -40,6 +49,11 @@ export type PageInfo = {
   readonly pageWidth: number;
   readonly pageHeight: number;
 };
+
+// Discriminated so callers can switch on `kind`; the dialog variant keeps a `dialog` property so older `"dialog" in` narrowing still works.
+export type PageInfoResult =
+  | ({ readonly kind: "page" } & PageInfo)
+  | { readonly kind: "dialog"; readonly dialog: DialogInfo };
 
 export type DaemonStatus = {
   readonly alive: boolean;
@@ -56,6 +70,8 @@ export const isCdpRawMessage = (v: unknown): v is CdpRawMessage => {
   if (method !== undefined && typeof method !== "string") return false;
   const sessionId = v["sessionId"];
   if (sessionId !== undefined && typeof sessionId !== "string") return false;
+  const params = v["params"];
+  if (params !== undefined && !isRecord(params)) return false;
   const errVal = v["error"];
   if (errVal !== undefined) {
     if (!isRecord(errVal)) return false;

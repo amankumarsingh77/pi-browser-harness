@@ -8,11 +8,11 @@ import { discoverEndpoint } from "./cdp/discovery";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/types";
 import { type CdpSession, createCdpSession } from "./cdp/session";
-import { type OwnershipRegistry, createOwnershipRegistry } from "./cdp/ownership";
+import { type OwnershipRegistry, createOwnershipRegistry, reconcileOwnership } from "./cdp/ownership";
 import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";
 import { seedProfileWindow } from "./profile/bind";
 import type { ProfilePin } from "./profile/store";
-import type { DaemonStatus, DialogInfo, PageInfo, TabInfo } from "./cdp/types";
+import type { DaemonStatus, DialogInfo, PageInfo, PageInfoResult, TabInfo } from "./cdp/types";
 
 export type BrowserClientOptions = {
   readonly namespace: string;
@@ -40,7 +40,7 @@ export type BrowserClient = {
   detach(): Promise<void>;
   closeOwnedTabs(): Promise<void>;
   evaluateJs(expression: string, sessionId?: string): Promise<Result<unknown, CdpError>>;
-  pageInfo(): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>>;
+  pageInfo(): Promise<Result<PageInfoResult, CdpError>>;
   takeDialog(): DialogInfo | null;
   listTabs(includeInternal?: boolean): Promise<Result<ReadonlyArray<TabInfo>, CdpError>>;
   switchTab(targetId: string): Promise<Result<void, CdpError>>;
@@ -123,7 +123,8 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   });
   const mutationMutex = createMutex();
   let lastHealth = 0;
-  let pageCaches = new Map<string, { readonly info: PageInfo; readonly at: number }>();
+  let healthCheck: Promise<Result<void, CdpError>> | null = null;
+  const pageCaches = new Map<string, { readonly info: PageInfo; readonly at: number }>();
   let remote: BrowserClientOptions["remote"] | null = opts.remote ?? null;
   let userDataDir: string | undefined;
   let profilePin: ProfilePin | null = opts.profilePin ?? null;
@@ -152,7 +153,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     if (!connected.success) return connected;
 
     const newBrowserId: string = wsUrl.split("/").pop() ?? "unknown";
-    if (!remote || remote.browserId !== newBrowserId) {
+    if (remote?.browserId !== newBrowserId) {
       profileContextId = undefined;
     }
     remote = { cdpUrl: wsUrl, browserId: newBrowserId };
@@ -177,33 +178,57 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     lastHealth = 0;
   };
 
-  const ensureAlive = async (): Promise<Result<void, CdpError>> => {
-    if (transport.state() !== "open" || !session.current()) {
-      await stop();
-      return start();
+  const restart = async (): Promise<Result<void, CdpError>> => {
+    await stop();
+    return start();
+  };
+
+  const reattach = async (): Promise<Result<void, CdpError>> => {
+    const seeded = await seedIfPinned();
+    if (!seeded.success) return seeded;
+    const reattached = await session.attachFirstPage();
+    if (reattached.success) {
+      pageCaches.clear();
+      return ok(undefined);
     }
+    return restart();
+  };
+
+  // Two probes: the browser one proves the socket works, the page one proves the current session does.
+  // Only transport-level failures (closed socket, timeout) mean the connection is dead. A page probe that
+  // fails for a page-level reason (navigation in flight, a throwing page) still proves the session routes,
+  // so it counts as alive; only a dead session id triggers a re-attach.
+  const checkHealth = async (): Promise<Result<void, CdpError>> => {
+    if (transport.state() !== "open" || !session.current()) return restart();
     if (Date.now() - lastHealth < HEALTH_TTL_MS) return ok(undefined);
-    const probe = await transport.request("Target.getTargets", {}, { sessionId: null, timeoutMs: 2_000 });
-    if (!probe.success) {
-      await stop();
-      return start();
-    }
+    const probe = await session.callBrowser("Target.getTargets", {}, { timeoutMs: 2_000 });
+    if (!probe.success) return restart();
     lastHealth = Date.now();
     const jsProbe = await session.call("Runtime.evaluate", {
       expression: "1", returnByValue: true,
     }, { timeoutMs: 2_000 });
-    if (!jsProbe.success && jsProbe.error.kind === "session_not_found") {
-      const seeded = await seedIfPinned();
-      if (!seeded.success) return seeded;
-      const reattached = await session.attachFirstPage();
-      if (reattached.success) {
-        pageCaches.clear();
+    if (jsProbe.success) return ok(undefined);
+    switch (jsProbe.error.kind) {
+      case "session_not_found":
+        return reattach();
+      case "transport_closed":
+      case "timeout":
+        return restart();
+      case "discovery_failed":
+      case "invalid_response":
+      case "remote_error":
         return ok(undefined);
-      }
-      await stop();
-      return start();
     }
-    return ok(undefined);
+  };
+
+  // Concurrent callers share one in-flight check, so two tools racing after a disconnect cannot both restart the transport.
+  const ensureAlive = (): Promise<Result<void, CdpError>> => {
+    if (healthCheck) return healthCheck;
+    const running = checkHealth().finally(() => {
+      healthCheck = null;
+    });
+    healthCheck = running;
+    return running;
   };
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
@@ -236,10 +261,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return ok(info.data);
   };
 
-  const pageInfo = async (): Promise<Result<PageInfo | { readonly dialog: DialogInfo }, CdpError>> => {
+  const pageInfo = async (): Promise<Result<PageInfoResult, CdpError>> => {
     const d = session.takeDialog();
-    if (d) return ok({ dialog: d });
-    return readPageInfo();
+    if (d) return ok({ kind: "dialog", dialog: d });
+    const info = await readPageInfo();
+    if (!info.success) return info;
+    return ok({ kind: "page", ...info.data });
   };
 
   const listTabs = async (includeInternal = true): Promise<Result<ReadonlyArray<TabInfo>, CdpError>> => {
@@ -255,11 +282,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
         owned: ownership.has(t.targetId),
       }));
     const live = new Set(tabs.map((t) => t.targetId));
-    const owned = ownership.list();
-    const survivors = owned.filter((id) => live.has(id));
-    if (survivors.length !== owned.length) ownership.replaceAll(survivors);
-    const hw = ownership.harnessWindow();
-    if (hw && !live.has(hw)) ownership.setHarnessWindow(undefined);
+    reconcileOwnership(ownership, live);
     for (const tid of pageCaches.keys()) {
       if (!live.has(tid)) pageCaches.delete(tid);
     }
@@ -276,9 +299,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const newTab = async (url?: string): Promise<Result<string, CdpError>> => {
-    const tabsResult = await listTabs(true);
-    if (!tabsResult.success) return tabsResult;
-
+    // ensureHarnessWindow lists live targets and reconciles ownership itself, so no listing is needed here.
     const window = await ensureHarnessWindow(api);
     if (!window.success) return window;
     let tabId: string;
@@ -308,8 +329,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
 
   const closeOwnedTabs = async (): Promise<void> => {
     for (const id of ownership.list()) {
-      await session.callBrowser("Target.closeTarget", { targetId: id }).catch(() => {});
-      ownership.remove(id);
+      const closed = await session.callBrowser("Target.closeTarget", { targetId: id });
+      // A remote error means the browser answered (typically "no target with given id"): the tab is gone either way. A transport failure means nothing was closed, so keep the record for the next attempt.
+      if (closed.success || closed.error.kind === "remote_error") ownership.remove(id);
     }
     ownership.setHarnessWindow(undefined);
     ownership.setHarnessWindowId(undefined);
@@ -323,9 +345,8 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   });
 
   const detach = async (): Promise<void> => {
-    const cur = session.current();
-    if (!cur) return;
-    await transport.request("Target.detachFromTarget", { sessionId: cur.sessionId }, { sessionId: null });
+    if (transport.state() !== "open") return;
+    await session.detachAll();
   };
 
   const api: BrowserClient = {
@@ -344,7 +365,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     setProfilePin: (pin) => {
       const changed = pin === null
         ? profilePin !== null
-        : profilePin === null || profilePin.userDataDir !== pin.userDataDir || profilePin.profileDir !== pin.profileDir;
+        : profilePin?.userDataDir !== pin.userDataDir || profilePin.profileDir !== pin.profileDir;
       profilePin = pin;
       if (changed) {
         profileContextId = undefined;
