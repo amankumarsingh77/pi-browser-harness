@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
-import { createInterface } from "node:readline";
+import { readLines } from "./lines";
 import { DAEMON_SOCKET_PATH, deserialize, serialize, type WireControl } from "./protocol";
 import { destroyQuietly } from "./socket";
 
@@ -59,8 +59,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
     });
 
     // Line-framed like every other reader of this protocol: a chunk may hold a partial line.
-    const lines = createInterface({ input: sock, crlfDelay: Infinity });
-    lines.on("line", (line: string) => {
+    readLines(sock, (line) => {
       const msg = deserialize(line);
       if (msg?.type !== "control" || msg.action !== "registered") return;
       clearTimeout(timer);
