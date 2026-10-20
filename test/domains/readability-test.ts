@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractReadable, type PageCapture } from "../../src/domains/readpage/readability";
+import { toPageCapture } from "../../src/domains/readpage/read-page";
 
-const fixture = (name: string): PageCapture =>
-  JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", name), "utf8")) as PageCapture;
+const fixture = (name: string): PageCapture => {
+  const capture = toPageCapture(readFileSync(join(import.meta.dirname, "fixtures", name), "utf8"));
+  if (capture === undefined) throw new Error(`fixture ${name} is not a page capture`);
+  return capture;
+};
 
 describe("pure readability extractor", () => {
   test("S10: article body text is present", () => {

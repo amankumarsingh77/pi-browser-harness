@@ -16,14 +16,14 @@ describe("fake browser client", () => {
     });
     const r = await fake.session.call("DOM.getBoxModel", { backendNodeId: 3 });
     assert.equal(r.success, false);
-    if (!r.success) assert.equal(r.error.kind, "invalid_response");
+    assert.equal(r.error.kind, "invalid_response");
   });
 
   test("unconfigured client methods fail loudly instead of returning success", async () => {
     const fake = await createFakeClient();
     const r = await fake.client.evaluateJs("1");
     assert.equal(r.success, false);
-    if (!r.success) assert.match(r.error.message, /not configured/);
+    assert.match(r.error.message, /not configured/);
   });
 
   test("seeded refs resolve through the real ref map", async () => {

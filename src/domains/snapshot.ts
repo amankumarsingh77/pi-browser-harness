@@ -1,9 +1,13 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { Type } from "typebox";
-import { Container, Image, type ImageTheme, Markdown, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Container, Image, type ImageTheme, Markdown, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
+import type { BrowserClient } from "../client";
 import { boxOf } from "./box";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, fromClient } from "./cdp-call";
+import { deadlineSignal, runLimited } from "./concurrency";
+import { writeFileResult } from "./io";
+import { type RefSignature, signatureOf } from "./ref-signature";
 import {
   buildTree,
   collectInteractiveTargets,
@@ -14,11 +18,10 @@ import {
   stripInternals,
   VALUE_ROLES,
 } from "./ax-tree";
-import { type Result, err, ok } from "../util/result";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { type Result, ok } from "../util/result";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { screenshotPath } from "../util/paths";
-import { asBoolean, asNumber, asRecord, asString } from "../util/guards";
 
 const SnapshotArgs = Type.Object({
   includeScreenshot: Type.Optional(
@@ -82,13 +85,28 @@ const renderOutline = (nodes: ReadonlyArray<SlimNode>): string => {
   return lines.join("\n");
 };
 
-type SnapshotDetails = {
-  nodeCount: number;
-  truncated: boolean;
-  fullOutputPath?: string;
-  screenshotPath?: string;
-  url: string;
-  title: string;
+const SnapshotDetailsSchema = Type.Object({
+  nodeCount: Type.Number(),
+  truncated: Type.Boolean(),
+  fullOutputPath: Type.Optional(Type.String()),
+  screenshotPath: Type.Optional(Type.String()),
+  url: Type.String(),
+  title: Type.String(),
+  summary: Type.String(),
+});
+
+export type SnapshotDetails = DetailsOf<typeof SnapshotDetailsSchema>;
+
+const BOX_BUDGET_MS = 1_500;
+const BOX_CONCURRENCY = 8;
+
+// Best-effort: a capture or write failure just drops the screenshot from the result.
+const captureJpeg = async (client: BrowserClient): Promise<string | undefined> => {
+  const shot = await cdpCall(client, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
+  if (!shot.success) return undefined;
+  const path = screenshotPath(client.namespace, "jpeg");
+  const written = await writeFileResult(path, Buffer.from(shot.data.data, "base64"));
+  return written.success ? path : undefined;
 };
 
 export const snapshotTool = defineBrowserTool({
@@ -103,17 +121,18 @@ export const snapshotTool = defineBrowserTool({
     "format:'json' returns the raw slim structure (with `ref` and `box` per node) for programmatic use; default 'outline' is human/LLM-readable.",
   ],
   parameters: SnapshotArgs,
+  details: SnapshotDetailsSchema,
   concurrency: "parallel",
 
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, signal }): Promise<Result<ToolOk<SnapshotDetails>, ToolErr>> {
     const session = client.session();
 
     const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
     if (!axRes.success) return axRes;
     const rawNodes = axRes.data.nodes;
 
-    const piRes = await client.pageInfo();
-    if (!piRes.success) return err({ kind: "cdp_error", message: piRes.error.message });
+    const piRes = fromClient(await client.pageInfo(), "pageInfo");
+    if (!piRes.success) return piRes;
     const pageUrl = "dialog" in piRes.data ? "" : piRes.data.url;
     const pageTitle = "dialog" in piRes.data ? "" : piRes.data.title;
 
@@ -132,27 +151,24 @@ export const snapshotTool = defineBrowserTool({
     });
 
     if (targets.length > 0) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 1_500);
-      await Promise.allSettled(
-        targets.map(async ({ node, backendId }) => {
-          if (ac.signal.aborted) return;
-          const box = await boxOf(client, backendId);
-          if (!box.success) return;
-          if (box.data.x < 0 || box.data.y < 0) return;
-          node.box = box.data;
-          if (ac.signal.aborted || !VALUE_ROLES.has(node.role)) return;
-          const live = await liveValue(client, backendId);
-          if (live !== undefined) node.value = live;
-        }),
-      );
-      clearTimeout(timer);
+      // Geometry and live values are best-effort decoration: whatever lands inside the budget is kept, the rest is omitted.
+      const deadline = deadlineSignal(BOX_BUDGET_MS, signal);
+      await runLimited(targets, { limit: BOX_CONCURRENCY, signal: deadline.signal }, async ({ node, backendId }, sig) => {
+        const box = await boxOf(client, backendId);
+        if (!box.success || sig.aborted) return;
+        if (box.data.x < 0 || box.data.y < 0) return;
+        node.box = box.data;
+        if (!VALUE_ROLES.has(node.role)) return;
+        const live = await liveValue(client, backendId);
+        if (live !== undefined) node.value = live;
+      });
+      deadline.clear();
     }
 
-    const refSig = new Map<string, string>();
+    const refSig = new Map<string, RefSignature>();
     for (const { node } of targets) {
       if (node.ref === undefined) continue;
-      refSig.set(node.ref, `${node.role}|${node.name ?? ""}|${node.value ?? ""}|${node.state ?? ""}`);
+      refSig.set(node.ref, signatureOf(node));
     }
     session.setRefMap(refMap, refSig);
 
@@ -160,73 +176,56 @@ export const snapshotTool = defineBrowserTool({
     const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);
     const trunc = await applyTruncation(text, "snapshot");
 
-    let shotPath: string | undefined;
-    if (args.includeScreenshot) {
-      const shot = await cdpCall(client, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
-      if (shot.success) {
-        shotPath = screenshotPath(client.namespace, "jpeg");
-        writeFileSync(shotPath, Buffer.from(shot.data.data, "base64"));
-      }
-    }
+    const shotPath = args.includeScreenshot ? await captureJpeg(client) : undefined;
 
     const details: SnapshotDetails = {
       nodeCount: countNodes(slim),
       truncated: trunc.wasTruncated,
       url: pageUrl,
       title: pageTitle,
+      summary: summarize(slim),
+      ...(trunc.fullOutputPath !== undefined ? { fullOutputPath: trunc.fullOutputPath } : {}),
+      ...(shotPath !== undefined ? { screenshotPath: shotPath } : {}),
     };
-    if (trunc.fullOutputPath !== undefined) details.fullOutputPath = trunc.fullOutputPath;
-    if (shotPath !== undefined) details.screenshotPath = shotPath;
 
-    return ok({ text: trunc.text, details: { ...details, summary: summarize(slim) } });
+    return ok({ text: trunc.text, details });
   },
 
   renderResult(result, expanded, theme) {
-    const raw = asRecord(result.details);
-    if (raw === undefined) return new Text(theme.fg("error", "snapshot: no details"), 0, 0);
-    const details = {
-      nodeCount: asNumber(raw["nodeCount"]),
-      truncated: asBoolean(raw["truncated"]),
-      fullOutputPath: asString(raw["fullOutputPath"]),
-      screenshotPath: asString(raw["screenshotPath"]),
-      url: asString(raw["url"]),
-      title: asString(raw["title"]),
-      summary: asString(raw["summary"]),
-    };
-
-    const titleLine = details.title ? ` "${details.title}"` : "";
-    const summary = details.summary ?? "";
-    const screenshotNote = details.screenshotPath ? "screenshot attached" : "screenshot omitted";
-    const truncNote = details.truncated && details.fullOutputPath ? `\n\nFull tree at \`${details.fullOutputPath}\`` : "";
+    const details = result.details;
+    const titleLine = details.title !== "" ? ` "${details.title}"` : "";
+    const urlLabel = details.url !== "" ? details.url : "(no url)";
+    const screenshotNote = details.screenshotPath !== undefined ? "screenshot attached" : "screenshot omitted";
+    const truncNote = details.truncated && details.fullOutputPath !== undefined ? `\n\nFull tree at \`${details.fullOutputPath}\`` : "";
 
     if (!expanded) {
       const md = [
-        `**AX tree:** ${details.nodeCount} nodes · \`${details.url || "(no url)"}\``,
-        `${titleLine ? "  " + titleLine : ""}`,
-        summary ? `  • ${summary}` : "",
+        `**AX tree:** ${details.nodeCount} nodes · \`${urlLabel}\``,
+        titleLine !== "" ? `  ${titleLine}` : "",
+        details.summary !== "" ? `  • ${details.summary}` : "",
         `  ${keyHint("app.tools.expand", "to expand")} · ${screenshotNote}`,
       ].filter((l) => l !== "").join("\n");
       return new Markdown(md, 0, 0, getMarkdownTheme());
     }
 
     const content = result.content[0];
-    const treeText = content && content.type === "text" ? content.text : "";
+    const treeText = content?.type === "text" ? content.text : "";
 
     const headerMd = [
-      `**AX tree:** ${details.nodeCount} nodes · \`${details.url || "(no url)"}\``,
-      titleLine ? `  ${titleLine}` : "",
+      `**AX tree:** ${details.nodeCount} nodes · \`${urlLabel}\``,
+      titleLine !== "" ? `  ${titleLine}` : "",
       "",
       "```",
       treeText,
       "```",
       truncNote,
       "",
-      `${keyHint("app.tools.expand", "to collapse")}`,
+      keyHint("app.tools.expand", "to collapse"),
     ].filter((l) => l !== "").join("\n");
 
     const treeBlock = new Markdown(headerMd, 0, 0, getMarkdownTheme());
 
-    if (!details.screenshotPath) return treeBlock;
+    if (details.screenshotPath === undefined) return treeBlock;
 
     try {
       const buf = readFileSync(details.screenshotPath);
@@ -238,7 +237,7 @@ export const snapshotTool = defineBrowserTool({
         filename: details.screenshotPath,
       });
       const safeImage = {
-        invalidate: () => image.invalidate(),
+        invalidate: () => { image.invalidate(); },
         render: (width: number) =>
           image.render(width).map((line) => (visibleWidth(line) > width ? truncateToWidth(line, width) : line)),
       };

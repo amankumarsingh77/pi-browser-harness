@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "./client";
-import { type AnyBrowserToolDefinition, registerBrowserTool } from "./util/tool";
+import type { BrowserTool } from "./util/tool";
+import { type Result, err, ok } from "./util/result";
 import { clickTool } from "./domains/click";
 import { typeTool, pressKeyTool, dispatchKeyTool } from "./domains/keyboard";
 import { fillTool, selectOptionTool, focusTool, setCheckedTool } from "./domains/form";
@@ -24,7 +25,7 @@ import { setupTool } from "./domains/setup";
 import { webSearchTool } from "./domains/search/web-search";
 import { readPageTool } from "./domains/readpage/read-page";
 
-export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
+export const ALL_TOOLS: ReadonlyArray<BrowserTool> = [
   setupTool,
   clickTool,
   typeTool,
@@ -69,6 +70,61 @@ export const ALL_TOOLS: ReadonlyArray<AnyBrowserToolDefinition> = [
   readPageTool,
 ];
 
-export const registerAllTools = (pi: ExtensionAPI, client: BrowserClient): void => {
-  for (const t of ALL_TOOLS) registerBrowserTool(pi, client, t);
+export type RegistryError = {
+  readonly kind: "duplicate_name";
+  readonly message: string;
+};
+
+// The only surface pi needs for tool registration; keeping it narrow lets tests pass a sink
+// instead of a full ExtensionAPI.
+export type ToolRegistrar = Pick<ExtensionAPI, "registerTool">;
+
+export type ToolRegistry = {
+  // Current contents, in insertion order. Built-ins come first, contributed tools after.
+  readonly tools: () => ReadonlyArray<BrowserTool>;
+  // Append one tool. Rejects a name already present so a contributor cannot shadow a built-in
+  // (or another contributor) silently; the first registration wins.
+  readonly add: (tool: BrowserTool) => Result<void, RegistryError>;
+  // Register every tool that has not been registered with pi yet. Safe to call on every
+  // session_start: tools added after an earlier call land on the next one.
+  readonly register: (pi: ToolRegistrar, client: BrowserClient) => void;
+};
+
+const duplicateName = (name: string): RegistryError => ({
+  kind: "duplicate_name",
+  message: `A browser tool named "${name}" is already registered; pick a distinct name`,
+});
+
+export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOOLS): ToolRegistry => {
+  const tools: BrowserTool[] = [];
+  const names = new Set<string>();
+  const registered = new Set<string>();
+
+  const add = (tool: BrowserTool): Result<void, RegistryError> => {
+    if (names.has(tool.name)) return err(duplicateName(tool.name));
+    names.add(tool.name);
+    tools.push(tool);
+    return ok(undefined);
+  };
+
+  for (const tool of initial) {
+    const added = add(tool);
+    if (!added.success) throw new Error(added.error.message);
+  }
+
+  return {
+    tools: () => [...tools],
+    add,
+    register: (pi, client) => {
+      for (const tool of tools) {
+        if (registered.has(tool.name)) continue;
+        tool.register(pi, client);
+        registered.add(tool.name);
+      }
+    },
+  };
+};
+
+export const registerAllTools = (pi: ToolRegistrar, client: BrowserClient): void => {
+  createToolRegistry(ALL_TOOLS).register(pi, client);
 };

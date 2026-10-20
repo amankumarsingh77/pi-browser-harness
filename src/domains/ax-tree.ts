@@ -2,6 +2,8 @@ import type { AxNodeResult } from "../cdp/commands";
 import type { BrowserClient } from "../client";
 import type { Box } from "./box";
 import { cdpCall } from "./cdp-call";
+import { elementFunctionSource } from "./page/inject";
+import { liveValue as liveValueInPage } from "./page/live-value.page";
 
 export type RawAxNode = AxNodeResult;
 type AxValue = NonNullable<RawAxNode["role"]>;
@@ -138,8 +140,9 @@ export const countNodes = (nodes: ReadonlyArray<SlimNode>): number => {
 
 export const stripInternals = (nodes: ReadonlyArray<SlimNode>): SlimNode[] =>
   nodes.map((n) => {
-    const { _backendId: _bid, ...rest } = n;
-    return { ...rest, children: stripInternals(n.children) };
+    const stripped: SlimNode = { ...n, children: stripInternals(n.children) };
+    delete stripped._backendId;
+    return stripped;
   });
 
 export const collectInteractiveTargets = (
@@ -158,19 +161,16 @@ export const collectInteractiveTargets = (
   return out;
 };
 
+const LIVE_VALUE_FN = elementFunctionSource(liveValueInPage);
+
 export const liveValue = async (client: BrowserClient, backendId: number): Promise<string | undefined> => {
   const resolved = await cdpCall(client, "DOM.resolveNode", { backendNodeId: backendId });
   if (!resolved.success) return undefined;
   const objectId = resolved.data.object.objectId;
   if (!objectId) return undefined;
-  const fn = `function () {
-    if (this.type === "checkbox" || this.type === "radio") return this.checked ? "checked" : "unchecked";
-    if (typeof this.value === "string") return this.value;
-    return null;
-  }`;
   const r = await cdpCall(client, "Runtime.callFunctionOn", {
     objectId,
-    functionDeclaration: fn,
+    functionDeclaration: LIVE_VALUE_FN,
     returnByValue: true,
   });
   if (!r.success) return undefined;

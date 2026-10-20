@@ -1,4 +1,4 @@
-import { mkdir, access, constants, stat, readFile, writeFile } from "node:fs/promises";
+import { mkdir, access, constants, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import type { BrowserClient } from "../client";
@@ -7,6 +7,7 @@ import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { safeJs } from "../util/js-template";
 import { pdfPath } from "../util/paths";
 import { cdpCall, cdpCallBrowser, evalJs } from "./cdp-call";
+import { readFileResult, statResult, writeFileResult } from "./io";
 import { resolveRefToBackendId } from "./ref-resolve";
 
 const UploadArgs = Type.Object({
@@ -73,18 +74,20 @@ const jsFallbackUpload = async (
   selector: string,
   filePath: string,
 ): Promise<Result<void, ToolErr>> => {
-  const buf = await readFile(filePath);
-  const st = await stat(filePath);
+  const buf = await readFileResult(filePath);
+  if (!buf.success) return buf;
+  const st = await statResult(filePath);
+  if (!st.success) return st;
   const name = basename(filePath);
   const mime = inferMime(name);
   const expr = safeJs`
     (() => {
       const input = document.querySelector(${selector});
       if (!input || input.type !== 'file') throw new Error('File input not found');
-      const bin = atob(${buf.toString("base64")});
+      const bin = atob(${buf.data.toString("base64")});
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const file = new File([bytes], ${name}, { type: ${mime}, lastModified: ${st.mtimeMs} });
+      const file = new File([bytes], ${name}, { type: ${mime}, lastModified: ${st.data.mtimeMs} });
       const dt = new DataTransfer();
       dt.items.add(file);
       input.files = dt.files;
@@ -122,7 +125,7 @@ export const uploadFileTool = defineBrowserTool({
     }
 
     if (args.selector === undefined) {
-      return err({ kind: "invalid_state", message: "Provide either `ref` or `selector`." });
+      return err({ kind: "invalid_args", message: "Provide either `ref` or `selector`." });
     }
     const cdp = await tryCdpUpload(client, args.selector, args.filePath);
     if (cdp.success) {
@@ -199,7 +202,7 @@ export const downloadTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     if (args.restore === true) {
       if (args.downloadPath !== undefined) {
-        return err({ kind: "invalid_state", message: "Pass either downloadPath or restore, not both" });
+        return err({ kind: "invalid_args", message: "Pass either downloadPath or restore, not both" });
       }
       const r = await cdpCallBrowser(client, "Browser.setDownloadBehavior", { behavior: "default" });
       if (!r.success) return r;
@@ -207,7 +210,7 @@ export const downloadTool = defineBrowserTool({
       return ok({ text: "Downloads restored to Chrome's default location", details: { restored: true } });
     }
     if (args.downloadPath === undefined) {
-      return err({ kind: "invalid_state", message: "Provide downloadPath to set a directory, or restore:true to undo" });
+      return err({ kind: "invalid_args", message: "Provide downloadPath to set a directory, or restore:true to undo" });
     }
     try {
       await mkdir(args.downloadPath, { recursive: true });
@@ -262,7 +265,8 @@ export const printToPdfTool = defineBrowserTool({
     });
     if (!r.success) return r;
     const path = args.outputPath ?? pdfPath(client.namespace);
-    await writeFile(path, Buffer.from(r.data.data, "base64"));
+    const written = await writeFileResult(path, Buffer.from(r.data.data, "base64"));
+    if (!written.success) return written;
     return ok({ text: `PDF saved: ${path}`, details: { path } });
   },
 });

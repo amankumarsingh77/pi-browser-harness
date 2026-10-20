@@ -31,5 +31,5 @@ export const resolveTarget = async (
   if (args.x !== undefined && args.y !== undefined) {
     return ok({ x: args.x, y: args.y, label: `(${args.x}, ${args.y})` });
   }
-  return err({ kind: "invalid_state", message: "Provide either `ref` or both `x` and `y`." });
+  return err({ kind: "invalid_args", message: "Provide either `ref` or both `x` and `y`." });
 };

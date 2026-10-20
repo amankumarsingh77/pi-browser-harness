@@ -4,27 +4,52 @@ import { isPathWithin } from "../util/paths";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { Type } from "typebox";
-import { Markdown, Text } from "@mariozechner/pi-tui";
+import { Markdown } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { formatBytes } from "../util/truncate";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { type DetailsOf, defineBrowserTool, isJsonObject, type ToolErr, type ToolOk } from "../util/tool";
 import { evalJs } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
-import { asNumber, asRecord, asString, isRecord } from "../util/guards";
+import { isRecord } from "../util/guards";
 
 const COMPACT_PREVIEW_BYTES = 120;
 
-// The AsyncFunction constructor is the documented way to compile user source; a plain `unknown` cast would lose the constructor signature, so this typed cast stays.
-const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as
-  new (...args: ReadonlyArray<string>) => (...args: ReadonlyArray<unknown>) => Promise<unknown>;
+type AsyncFunctionConstructor = new (...args: ReadonlyArray<string>) => (...args: ReadonlyArray<unknown>) => Promise<unknown>;
+
+// The AsyncFunction constructor is the documented way to compile user source. It is only reachable through
+// Object.getPrototypeOf, which returns `any`; this is the one sanctioned cast (budgeted in boundary-allowlist.ts)
+// because a plain `unknown` would lose the constructor signature and nothing can narrow back to it.
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-type-assertion -- the constructor is only reachable through an `any`-typed prototype lookup */
+const AsyncFunction = Object.getPrototypeOf(async () => { /* only its prototype is wanted */ }).constructor as
+  AsyncFunctionConstructor;
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-type-assertion */
 
 const requireFromHere = createRequire(import.meta.url);
+
+// Pretty-prints for the expanded renderer; a truncated (unparseable) payload is shown as-is.
+const prettyJson = (text: string): string => {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return text;
+  }
+};
 
 const ExecuteJsArgs = Type.Object({
   expression: Type.String({ description: "JavaScript expression. `return X` is auto-wrapped in an IIFE." }),
   targetId: Type.Optional(Type.String({ description: "Optional iframe targetId; default = current page." })),
 });
+
+const ExecuteJsDetailsSchema = Type.Object({
+  valueLength: Type.Number(),
+  preview: Type.String(),
+  isJson: Type.Boolean(),
+  fullOutputPath: Type.Optional(Type.String()),
+});
+
+export type ExecuteJsDetails = DetailsOf<typeof ExecuteJsDetailsSchema>;
 
 export const executeJsTool = defineBrowserTool({
   name: "browser_execute_js",
@@ -40,46 +65,35 @@ export const executeJsTool = defineBrowserTool({
     "Result must be JSON-serializable (Runtime.evaluate returnByValue=true).",
   ],
   parameters: ExecuteJsArgs,
+  details: ExecuteJsDetailsSchema,
   concurrency: "parallel",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client }): Promise<Result<ToolOk<ExecuteJsDetails>, ToolErr>> {
     const r = await evalJs(client, args.expression, args.targetId);
     if (!r.success) return r;
     const valueStr = r.data === undefined ? "undefined" : JSON.stringify(r.data);
+    // The full value lives in the text (and in fullOutputPath when truncated); details carry only what the
+    // renderer needs so a large result is not persisted twice.
+    const isJson = r.data !== undefined;
     const truncated = await applyTruncation(valueStr, "js");
-    let pretty: string | undefined;
-    try {
-      const parsed: unknown = JSON.parse(valueStr);
-      pretty = JSON.stringify(parsed, null, 2);
-    } catch {
-      pretty = undefined;
-    }
+    const preview = valueStr.length > COMPACT_PREVIEW_BYTES ? valueStr.slice(0, COMPACT_PREVIEW_BYTES) + "…" : valueStr;
     return ok({
       text: truncated.text,
       details: {
         valueLength: valueStr.length,
-        full: valueStr.length > 200_000 ? valueStr.slice(0, 200_000) : valueStr,
-        ...(pretty !== undefined ? { pretty: pretty.length > 200_000 ? pretty.slice(0, 200_000) : pretty } : {}),
+        preview,
+        isJson,
         ...(truncated.fullOutputPath !== undefined ? { fullOutputPath: truncated.fullOutputPath } : {}),
       },
     });
   },
 
-  renderResult(result, expanded, theme) {
-    const raw = asRecord(result.details);
-    if (raw === undefined) return new Text(theme.fg("error", "execute_js: no details"), 0, 0);
-    const details = {
-      valueLength: asNumber(raw["valueLength"]),
-      full: asString(raw["full"]),
-      pretty: asString(raw["pretty"]),
-      fullOutputPath: asString(raw["fullOutputPath"]),
-    };
-
-    const len = details.valueLength ?? 0;
-    const full = details.full ?? "";
-    const isJson = details.pretty !== undefined;
+  renderResult(result, expanded) {
+    const { valueLength: len, preview, isJson, fullOutputPath } = result.details;
+    const content = result.content[0];
+    const fullText = content?.type === "text" ? content.text : preview;
+    const body = isJson ? prettyJson(fullText) : fullText;
 
     if (!expanded) {
-      const preview = full.length > COMPACT_PREVIEW_BYTES ? full.slice(0, COMPACT_PREVIEW_BYTES) + "…" : full;
       const md = [
         `**${formatBytes(len)}** ${isJson ? "JSON" : "value"}`,
         "```",
@@ -90,10 +104,9 @@ export const executeJsTool = defineBrowserTool({
       return new Markdown(md, 0, 0, getMarkdownTheme());
     }
 
-    const body = details.pretty ?? full;
     const fence = isJson ? "```json" : "```";
-    const tail = details.fullOutputPath
-      ? `\n\nFull value at \`${details.fullOutputPath}\` · ${keyHint("app.tools.expand", "to collapse")}`
+    const tail = fullOutputPath !== undefined
+      ? `\n\nFull value at \`${fullOutputPath}\` · ${keyHint("app.tools.expand", "to collapse")}`
       : `\n\n${keyHint("app.tools.expand", "to collapse")}`;
     const md = [`**${formatBytes(len)}** ${isJson ? "JSON" : "value"}`, fence, body, "```", tail].join("\n");
     return new Markdown(md, 0, 0, getMarkdownTheme());
@@ -144,11 +157,11 @@ export const runScriptTool = defineBrowserTool({
   concurrency: "parallel",
   async handler(args, { client, signal, onUpdate, extensionCtx }): Promise<Result<ToolOk, ToolErr>> {
     if (!isAbsolute(args.path)) {
-      return err({ kind: "invalid_state", message: "Script path must be absolute" });
+      return err({ kind: "invalid_args", message: "Script path must be absolute" });
     }
     if (!isPathAllowed(args.path)) {
       return err({
-        kind: "invalid_state",
+        kind: "invalid_args",
         message: `Script path outside allowed directories (allowed: ${allowedRoots().join(", ")})`,
       });
     }
@@ -161,9 +174,9 @@ export const runScriptTool = defineBrowserTool({
         message: `Failed to read script: ${e instanceof Error ? e.message : String(e)}`,
       });
     }
-    if (source.length === 0) return err({ kind: "invalid_state", message: "Script is empty" });
+    if (source.length === 0) return err({ kind: "invalid_args", message: "Script is empty" });
     if (source.length > MAX_SOURCE_BYTES) {
-      return err({ kind: "invalid_state", message: `Script exceeds ${MAX_SOURCE_BYTES}B size cap` });
+      return err({ kind: "invalid_args", message: `Script exceeds ${MAX_SOURCE_BYTES}B size cap` });
     }
 
     let executeFn: (...a: ReadonlyArray<unknown>) => Promise<unknown>;
@@ -175,16 +188,16 @@ export const runScriptTool = defineBrowserTool({
       );
     } catch (e) {
       return err({
-        kind: "invalid_state",
+        kind: "invalid_args",
         message: `Syntax error: ${e instanceof Error ? e.message : String(e)}`,
       });
     }
 
     const timeoutMs = args.timeoutMs ?? 60_000;
     const ac = new AbortController();
-    const onAbort = (): void => ac.abort();
+    const onAbort = (): void => { ac.abort(); };
     if (signal !== undefined) signal.addEventListener("abort", onAbort, { once: true });
-    const timeoutTimer = setTimeout(() => ac.abort(), timeoutMs);
+    const timeoutTimer = setTimeout(onAbort, timeoutMs);
 
     try {
       const scriptPromise = executeFn(
@@ -200,13 +213,17 @@ export const runScriptTool = defineBrowserTool({
           if (!isRecord(first)) return;
           const txt = first["text"];
           if (typeof txt !== "string") return;
-          try { onUpdate({ text: txt }); } catch {}
+          try {
+            onUpdate({ text: txt });
+          } catch {
+            // Progress is best-effort; a renderer failure must not abort the script.
+          }
         },
-        extensionCtx ?? { cwd: process.cwd() },
+        extensionCtx,
         console, fetch, JSON, Buffer, setTimeout, clearTimeout,
       );
       const abortPromise = new Promise<never>((_, reject) => {
-        ac.signal.addEventListener("abort", () => reject(new Error("script aborted (timeout or cancellation)")), { once: true });
+        ac.signal.addEventListener("abort", () => { reject(new Error("script aborted (timeout or cancellation)")); }, { once: true });
       });
       const result = await Promise.race([scriptPromise, abortPromise]);
       clearTimeout(timeoutTimer);
@@ -224,7 +241,11 @@ export const runScriptTool = defineBrowserTool({
       }
       const textOut = content.map((c) => c.text).join("\n");
       const details = result["details"];
-      return isRecord(details) ? ok({ text: textOut, details }) : ok({ text: textOut });
+      if (details === undefined) return ok({ text: textOut });
+      if (!isJsonObject(details)) {
+        return err({ kind: "invalid_state", message: "Script details must be a plain JSON object (no Map, function or undefined values)" });
+      }
+      return ok({ text: textOut, details });
     } catch (e) {
       clearTimeout(timeoutTimer);
       if (signal !== undefined) signal.removeEventListener("abort", onAbort);

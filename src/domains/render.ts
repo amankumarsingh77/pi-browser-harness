@@ -1,32 +1,21 @@
-import { Markdown, Text } from "@mariozechner/pi-tui";
+import { Type } from "typebox";
+import { Markdown } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
-import type { Theme } from "@mariozechner/pi-coding-agent";
-import { isRecord } from "../util/guards";
+import type { DetailsOf } from "../util/tool";
 
 const COMPACT_PREVIEW_LINES = 6;
 
-type ExpandableText = {
-  readonly summary: string;
-  readonly body: string;
-  readonly fullOutputPath?: string;
-};
+// A tool whose details embed this under `render` gets a compact/expanded text view for free.
+export const ExpandableTextSchema = Type.Object({
+  summary: Type.String(),
+  body: Type.String(),
+  fullOutputPath: Type.Optional(Type.String()),
+});
 
-const isExpandableText = (value: unknown): value is ExpandableText =>
-  isRecord(value) && typeof value["summary"] === "string" && typeof value["body"] === "string";
+export type ExpandableText = DetailsOf<typeof ExpandableTextSchema>;
 
-const extractRender = (details: unknown): unknown =>
-  isRecord(details) ? details["render"] : undefined;
-
-export const renderExpandableText = (
-  label: string,
-  result: { readonly details?: unknown },
-  expanded: boolean,
-  theme: Theme,
-): Component => {
-  const render = extractRender(result.details);
-  if (!isExpandableText(render)) return new Text(theme.fg("error", `${label}: no details`), 0, 0);
-
+export const renderExpandableText = (render: ExpandableText, expanded: boolean): Component => {
   if (!expanded) {
     const lines = render.body.split("\n");
     const preview = lines.slice(0, COMPACT_PREVIEW_LINES).join("\n");
@@ -35,7 +24,7 @@ export const renderExpandableText = (
     return new Markdown(md, 0, 0, getMarkdownTheme());
   }
 
-  const tail = render.fullOutputPath
+  const tail = render.fullOutputPath !== undefined
     ? `\n\nFull output at \`${render.fullOutputPath}\` · ${keyHint("app.tools.expand", "to collapse")}`
     : `\n\n${keyHint("app.tools.expand", "to collapse")}`;
   const md = `**${render.summary}**\n\n${render.body}${tail}`;

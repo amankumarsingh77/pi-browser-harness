@@ -1,4 +1,4 @@
-import { rename, writeFile } from "node:fs/promises";
+import { rename } from "node:fs/promises";
 import type { BrowserClient } from "../client";
 import { type Result, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
@@ -6,6 +6,7 @@ import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
 import { safeJs } from "../util/js-template";
 import { cdpCall, evalJs } from "./cdp-call";
+import { writeFileResult } from "./io";
 
 export type CaptureArgs = {
   readonly fullPage?: boolean;
@@ -26,7 +27,8 @@ export const captureBase = async (
     ...(format === "jpeg" ? { quality } : {}),
   });
   if (!r.success) return r;
-  await writeFile(path, Buffer.from(r.data.data, "base64"));
+  const written = await writeFileResult(path, Buffer.from(r.data.data, "base64"));
+  if (!written.success) return written;
   return ok({ path, format });
 };
 

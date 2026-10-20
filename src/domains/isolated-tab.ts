@@ -1,10 +1,10 @@
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
-import { safeJs } from "../util/js-template";
 import { ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 import { evaluateJson } from "../cdp/session";
 import type { ToolErr } from "../util/tool";
-import { cdpCallBrowser, cdpCallOnTarget, cdpErrToToolErr, evalJs } from "./cdp-call";
+import { cdpCallBrowser, cdpCallOnTarget, cdpErrToToolErr } from "./cdp-call";
+import { pollUntil, READY_STATE_COMPLETE } from "./poll";
 
 export type IsolatedTab = {
   readonly targetId: string;
@@ -12,7 +12,6 @@ export type IsolatedTab = {
 };
 
 const EVAL_TIMEOUT_MS = 15_000;
-const READY_POLL_INTERVAL_MS = 50;
 
 export const openIsolatedTab = async (client: BrowserClient): Promise<Result<IsolatedTab, ToolErr>> => {
   // Routed through the target factory so an isolated tab lands in the pinned profile, not another profile's cookies.
@@ -60,14 +59,9 @@ export const waitForIsolatedLoad = async (
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<Result<void, ToolErr>> => {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
-    const r = await evalJs(client, safeJs`document.readyState`, tab.sessionId);
-    if (r.success && r.data === "complete") return ok(undefined);
-    await new Promise((res) => setTimeout(res, READY_POLL_INTERVAL_MS));
-  }
-  return err({ kind: "timeout", message: `page did not finish loading in ${Math.round(timeoutMs / 1000)}s` });
+  const r = await pollUntil(client, READY_STATE_COMPLETE, { timeoutMs, signal, sessionId: tab.sessionId, what: "page load" });
+  if (!r.success) return r;
+  return ok(undefined);
 };
 
 export const isJsonText = (v: unknown): v is string => typeof v === "string";
@@ -87,5 +81,5 @@ export const evalInIsolatedTab = async <T>(
 };
 
 export const closeIsolatedTab = async (client: BrowserClient, tab: IsolatedTab): Promise<void> => {
-  await client.closeTab(tab.targetId).catch(() => {});
+  await client.closeTab(tab.targetId);
 };

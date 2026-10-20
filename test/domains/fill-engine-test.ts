@@ -1,6 +1,8 @@
 import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { fillBody, type FillOptions } from "../../src/domains/fill-engine";
+import { fillField, type FillOptions } from "../../src/domains/page/fill.page";
+import { asRecord } from "../../src/util/guards";
+import { callPage } from "./page-harness";
 
 type Fired = string[];
 
@@ -64,6 +66,10 @@ const defineValueSetter = (proto: object): void => {
 let execCommandCalls: Array<{ command: string; value: unknown }> = [];
 let execCommandWorks = true;
 
+const ignoreSelection = (): void => {
+  // The fake DOM has no selection; the engine only needs these calls to exist.
+};
+
 before(() => {
   defineValueSetter(FakeHTMLInputElement.prototype);
   defineValueSetter(FakeHTMLTextAreaElement.prototype);
@@ -79,10 +85,10 @@ before(() => {
     window: {
       HTMLInputElement: FakeHTMLInputElement,
       HTMLTextAreaElement: FakeHTMLTextAreaElement,
-      getSelection: () => ({ removeAllRanges: () => {}, addRange: () => {} }),
+      getSelection: () => ({ removeAllRanges: ignoreSelection, addRange: ignoreSelection }),
     },
     document: {
-      createRange: () => ({ selectNodeContents: () => {} }),
+      createRange: () => ({ selectNodeContents: ignoreSelection }),
       execCommand: (command: string, _show: boolean, value: unknown) => {
         execCommandCalls.push({ command, value });
         return execCommandWorks;
@@ -94,11 +100,12 @@ before(() => {
 const AS_FILL: FillOptions = { rejectSelect: true, focusFirst: false };
 const AS_FILL_FORM: FillOptions = { rejectSelect: false, focusFirst: true };
 
-const runFill = (el: FakeHTMLElement, value: unknown, opts: FillOptions): Record<string, unknown> => {
-  const fn = new Function("value", fillBody(opts));
-  const out: unknown = fn.call(el, value);
-  assert.ok(typeof out === "object" && out !== null, "engine returned no result object");
-  return { ...(out as Record<string, unknown>) };
+// The engine runs from its shipped source text (see page-harness.ts), with the element and the options as real
+// arguments — the calling convention elementFunctionSource wraps for Runtime.callFunctionOn.
+const runFill = (el: FakeHTMLElement, value: unknown, opts: FillOptions): Readonly<Record<string, unknown>> => {
+  const out = asRecord(callPage(fillField, el, value, opts));
+  assert.ok(out !== undefined, "engine returned no result object");
+  return out;
 };
 
 const textInput = (): FakeHTMLInputElement => {
@@ -200,7 +207,7 @@ describe("fill engine — selects", () => {
   test("browser_fill refuses a select so its documented error survives", () => {
     const res = runFill(select(), "India", AS_FILL);
     assert.equal(res["ok"], false);
-    assert.equal(res["kind"], "select");
+    assert.equal(res["code"], "select_rejected");
   });
 
   test("browser_fill_form matches an option by visible label", () => {

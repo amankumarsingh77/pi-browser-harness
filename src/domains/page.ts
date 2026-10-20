@@ -1,25 +1,9 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { evalJs } from "./cdp-call";
+import { fromClient } from "./cdp-call";
 import { safeJs } from "../util/js-template";
-
-const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new Error("aborted"));
-      return;
-    }
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      reject(signal?.reason ?? new Error("aborted"));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+import { pollUntil, READY_STATE_COMPLETE, sleep } from "./poll";
 
 export const pageInfoTool = defineBrowserTool({
   name: "browser_page_info",
@@ -33,8 +17,8 @@ export const pageInfoTool = defineBrowserTool({
   parameters: Type.Object({}),
   concurrency: "parallel",
   async handler(_args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.pageInfo();
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = fromClient(await client.pageInfo(), "pageInfo");
+    if (!r.success) return r;
     if ("dialog" in r.data) {
       const d = r.data.dialog;
       return ok({
@@ -63,12 +47,9 @@ export const waitTool = defineBrowserTool({
   parameters: WaitArgs,
   concurrency: "parallel",
   async handler(args, { signal }): Promise<Result<ToolOk, ToolErr>> {
-    try {
-      await sleep(Math.round(args.seconds * 1000), signal);
-      return ok({ text: `Waited ${args.seconds}s` });
-    } catch (e) {
-      return err({ kind: "internal", message: e instanceof Error ? e.message : String(e) });
-    }
+    await sleep(Math.round(args.seconds * 1000), signal);
+    if (signal?.aborted) return err({ kind: "timeout", message: `Aborted before ${args.seconds}s elapsed` });
+    return ok({ text: `Waited ${args.seconds}s` });
   },
 });
 
@@ -89,17 +70,10 @@ export const waitForLoadTool = defineBrowserTool({
   concurrency: "serialized",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     const timeoutMs = (args.timeout ?? 15) * 1000;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
-      const r = await evalJs(client, safeJs`document.readyState`);
-      if (r.success && r.data === "complete") {
-        const ms = Date.now() - start;
-        return ok({ text: `Page loaded in ${Math.round(ms / 100) / 10}s`, details: { ms } });
-      }
-      await new Promise((res) => setTimeout(res, 50));
-    }
-    return err({ kind: "timeout", message: `Page did not finish loading in ${args.timeout ?? 15}s` });
+    const r = await pollUntil(client, READY_STATE_COMPLETE, { timeoutMs, signal, what: "page load" });
+    if (!r.success) return r;
+    const ms = r.data.elapsedMs;
+    return ok({ text: `Page loaded in ${Math.round(ms / 100) / 10}s`, details: { ms } });
   },
 });
 
@@ -123,7 +97,7 @@ export const waitForTool = defineBrowserTool({
   concurrency: "parallel",
   async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
     if (args.selector === undefined && args.text === undefined) {
-      return err({ kind: "invalid_state", message: "Provide a selector or text to wait for." });
+      return err({ kind: "invalid_args", message: "Provide a selector or text to wait for." });
     }
     const gone = args.gone ?? false;
     const timeoutMs = (args.timeout ?? 5) * 1000;
@@ -131,18 +105,11 @@ export const waitForTool = defineBrowserTool({
       args.selector !== undefined
         ? safeJs`(() => { const found = !!document.querySelector(${args.selector}); return ${gone} ? !found : found; })()`
         : safeJs`(() => { const t = document.body ? document.body.innerText : ""; return t.includes(${args.text}); })()`;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (signal?.aborted) return err({ kind: "internal", message: "aborted" });
-      const r = await evalJs(client, expr);
-      if (r.success && r.data === true) {
-        const ms = Date.now() - start;
-        const what = args.selector !== undefined ? `${args.selector}${gone ? " gone" : ""}` : `text "${args.text}"`;
-        return ok({ text: `Condition met (${what}) in ${Math.round(ms / 100) / 10}s`, details: { ms } });
-      }
-      await sleep(50, signal);
-    }
     const what = args.selector !== undefined ? `${args.selector}${gone ? " to disappear" : ""}` : `text "${args.text}"`;
-    return err({ kind: "timeout", message: `Timed out after ${args.timeout ?? 5}s waiting for ${what}` });
+    const r = await pollUntil(client, expr, { timeoutMs, signal, what });
+    if (!r.success) return r;
+    const ms = r.data.elapsedMs;
+    const met = args.selector !== undefined ? `${args.selector}${gone ? " gone" : ""}` : `text "${args.text}"`;
+    return ok({ text: `Condition met (${met}) in ${Math.round(ms / 100) / 10}s`, details: { ms } });
   },
 });

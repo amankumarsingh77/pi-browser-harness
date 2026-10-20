@@ -1,4 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
+import { safeJs } from "../../src/util/js-template";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
     const opened = await cdp.call(
       "Runtime.evaluate",
       {
-        expression: `!!window.open('about:blank#${token}', '_blank')`,
+        expression: safeJs`!!window.open(${`about:blank#${token}`}, '_blank')`,
         returnByValue: true,
         userGesture: true,
       },

@@ -26,6 +26,9 @@ export const handleDialogTool = defineBrowserTool({
       ...(args.promptText !== undefined ? { promptText: args.promptText } : {}),
     });
     if (!r.success) return r;
+    // The session keeps the dialog record until something reads it; a handled dialog must not be
+    // reported as still open by the next browser_page_info.
+    client.takeDialog();
     return ok({
       text: `Dialog ${args.accept ? "accepted" : "dismissed"}`,
       details: { accept: args.accept },

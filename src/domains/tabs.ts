@@ -1,7 +1,8 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { cdpCallBrowser } from "./cdp-call";
+import { cdpCallBrowser, fromClient } from "./cdp-call";
+import { resolveOwnedTargetId } from "./tab-resolve";
 
 const ListTabsArgs = Type.Object({
   includeInternal: Type.Optional(Type.Boolean({ default: true, description: "Include chrome:// pages" })),
@@ -24,8 +25,8 @@ export const listTabsTool = defineBrowserTool({
   parameters: ListTabsArgs,
   concurrency: "parallel",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.listTabs(args.includeInternal ?? true);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = fromClient(await client.listTabs(args.includeInternal ?? true), "Target.getTargets");
+    if (!r.success) return r;
     const scope = args.scope ?? "owned";
     const filtered = scope === "owned" ? r.data.filter((t) => t.owned) : r.data;
     const lines = filtered.map((t, i) => {
@@ -68,10 +69,6 @@ const SwitchTabArgs = Type.Object({
   targetId: Type.String({ description: "Target ID from browser_list_tabs" }),
 });
 
-const ownershipDeniedMessage = (id: string, namespace: string): string =>
-  `Tab ${id} is not owned by this harness session (namespace: ${namespace}). ` +
-  `Use browser_list_tabs with scope:'all' to see it, or browser_new_tab to open one this session can control.`;
-
 export const switchTabTool = defineBrowserTool({
   name: "browser_switch_tab",
   label: "Browser Switch Tab",
@@ -79,44 +76,16 @@ export const switchTabTool = defineBrowserTool({
   promptSnippet: "Switch tabs",
   promptGuidelines: [
     "Get a targetId via browser_list_tabs first.",
-    "Accepts exact targetId or a unique prefix of at least 8 hex characters.",
+    "Accepts exact targetId or a unique prefix (>=8 hex characters) of an owned tab.",
   ],
   parameters: SwitchTabArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    let resolved = args.targetId;
-    if (!client.owns(resolved)) {
-      const isHexPrefix = /^[0-9A-Fa-f]{8,}$/.test(args.targetId);
-      if (isHexPrefix) {
-        const tabs = await client.listTabs(true);
-        if (!tabs.success) return err({ kind: "cdp_error", message: tabs.error.message });
-        const matches = tabs.data.filter((t) => t.targetId.startsWith(args.targetId));
-        if (matches.length === 0) {
-          return err({ kind: "cdp_error", message: `No tab found with prefix "${args.targetId}"` });
-        }
-        if (matches.length > 1) {
-          const ids = matches.map((t) => t.targetId).join(", ");
-          return err({
-            kind: "invalid_state",
-            message: `Ambiguous prefix "${args.targetId}" matches ${matches.length} tabs: ${ids}`,
-            details: { matches: matches.map((t) => ({ targetId: t.targetId, url: t.url })) },
-          });
-        }
-        const first = matches[0];
-        if (first === undefined) return err({ kind: "invalid_state", message: "no matching tab" });
-        resolved = first.targetId;
-      }
-      if (!client.owns(resolved)) {
-        return err({
-          kind: "invalid_state",
-          message: ownershipDeniedMessage(resolved, client.namespace),
-          details: { targetId: resolved, namespace: client.namespace },
-        });
-      }
-    }
-
-    const r = await client.switchTab(resolved);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const target = resolveOwnedTargetId(client, args.targetId);
+    if (!target.success) return target;
+    const resolved = target.data;
+    const r = fromClient(await client.switchTab(resolved), "Target.attachToTarget");
+    if (!r.success) return r;
     const note = resolved === args.targetId ? "" : ` (resolved from prefix "${args.targetId}")`;
     return ok({
       text: `Switched to ${resolved}${note}`,
@@ -138,8 +107,8 @@ export const newTabTool = defineBrowserTool({
   parameters: NewTabArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await client.newTab(args.url);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const r = fromClient(await client.newTab(args.url), "Target.createTarget");
+    if (!r.success) return r;
     return ok({
       text: `New tab: ${r.data}${args.url ? ` (${args.url})` : ""}`,
       details: args.url !== undefined
@@ -159,36 +128,16 @@ export const closeTabTool = defineBrowserTool({
   description: "Close a tab the harness owns. Refuses tabs not opened by this session.",
   promptSnippet: "Close an owned tab",
   promptGuidelines: [
-    "Accepts exact targetId or a unique hex prefix (>=8 chars).",
+    "Same targetId rules as browser_switch_tab: exact id or a unique prefix (>=8 hex) of an owned tab.",
   ],
   parameters: CloseTabArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    let resolved = args.targetId;
-    if (!client.owns(resolved)) {
-      const isHexPrefix = /^[0-9A-Fa-f]{8,}$/.test(args.targetId);
-      if (isHexPrefix) {
-        const owned = client.ownership().list();
-        const matches = owned.filter((id) => id.startsWith(args.targetId));
-        const first = matches[0];
-        if (matches.length === 1 && first !== undefined) resolved = first;
-        else if (matches.length > 1) {
-          return err({
-            kind: "invalid_state",
-            message: `Ambiguous prefix "${args.targetId}" matches ${matches.length} owned tabs: ${matches.join(", ")}`,
-          });
-        }
-      }
-      if (!client.owns(resolved)) {
-        return err({
-          kind: "invalid_state",
-          message: ownershipDeniedMessage(resolved, client.namespace),
-          details: { targetId: resolved, namespace: client.namespace },
-        });
-      }
-    }
-    const r = await client.closeTab(resolved);
-    if (!r.success) return err({ kind: "cdp_error", message: r.error.message });
+    const target = resolveOwnedTargetId(client, args.targetId);
+    if (!target.success) return target;
+    const resolved = target.data;
+    const r = fromClient(await client.closeTab(resolved), "Target.closeTarget");
+    if (!r.success) return r;
     return ok({ text: `Closed tab ${resolved}`, details: { targetId: resolved } });
   },
 });

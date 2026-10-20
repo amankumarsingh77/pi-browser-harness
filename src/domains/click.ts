@@ -80,13 +80,13 @@ export const clickTool = defineBrowserTool({
       if (debug.success) {
         return ok({
           text: `Clicked at ${target}\n[DEBUG] Overlay screenshot: ${debug.data.path}${diff}`,
-          details: { debugScreenshotPath: debug.data.path, x, y, ref: args.ref },
+          details: { debugScreenshotPath: debug.data.path, x, y, ...(args.ref !== undefined ? { ref: args.ref } : {}) },
         });
       }
     }
     return ok({
       text: `Clicked at ${target}${diff}`,
-      details: { x, y, ref: args.ref },
+      details: { x, y, ...(args.ref !== undefined ? { ref: args.ref } : {}) },
     });
   },
 });

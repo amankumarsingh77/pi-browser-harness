@@ -1,11 +1,10 @@
 import { Type } from "typebox";
-import { Markdown, Text } from "@mariozechner/pi-tui";
+import { Markdown } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, ok } from "../util/result";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import type { ConsoleRecord, ConsoleLevel } from "../cdp/console-buffer";
-import { asArrayOf, asBoolean, asNumber, asRecord, asString } from "../util/guards";
 
 const ConsoleArgs = Type.Object({
   levels: Type.Optional(
@@ -42,7 +41,7 @@ const levelTag = (lvl: ConsoleLevel): string => {
     case "warn":  return "[warn] ";
     case "info":  return "[info] ";
     case "debug": return "[debug]";
-    default:      return "[log]  ";
+    case "log":   return "[log]  ";
   }
 };
 
@@ -97,59 +96,36 @@ const renderConsoleMarkdown = (
   return `${headerLines.join("\n")}\n\n${rows}${more}${cursor}`;
 };
 
-type ConsoleDetails = {
-  total: number;
-  returned: number;
-  bufferOverflowed: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-  records: ReadonlyArray<ConsoleRecord>;
-  nextCursor?: number;
-};
+// Mirrors ConsoleRecord from the buffer: the handler's records must fit it and the renderer reads records out of
+// it, so a drift in either direction fails to compile.
+const ConsoleRecordSchema = Type.Object({
+  seq: Type.Number(),
+  timestampMs: Type.Number(),
+  level: Type.Union([
+    Type.Literal("log"),
+    Type.Literal("info"),
+    Type.Literal("warn"),
+    Type.Literal("error"),
+    Type.Literal("debug"),
+  ]),
+  text: Type.String(),
+  source: Type.Union([Type.Literal("console-api"), Type.Literal("log-entry")]),
+  url: Type.Optional(Type.String()),
+  lineNumber: Type.Optional(Type.Number()),
+  stackTrace: Type.Optional(Type.String()),
+});
 
-const CONSOLE_LEVELS: ReadonlyArray<ConsoleLevel> = ["log", "info", "warn", "error", "debug"];
+const ConsoleDetailsSchema = Type.Object({
+  total: Type.Number(),
+  returned: Type.Number(),
+  bufferOverflowed: Type.Boolean(),
+  truncated: Type.Boolean(),
+  fullOutputPath: Type.Optional(Type.String()),
+  records: Type.Array(ConsoleRecordSchema),
+  nextCursor: Type.Optional(Type.Number()),
+});
 
-const asConsoleLevel = (v: unknown): ConsoleLevel | undefined =>
-  CONSOLE_LEVELS.find((l) => l === v);
-
-const asConsoleRecord = (v: unknown): ConsoleRecord | undefined => {
-  const o = asRecord(v);
-  if (o === undefined) return undefined;
-  const level = asConsoleLevel(o["level"]);
-  const text = asString(o["text"]);
-  if (level === undefined || text === undefined) return undefined;
-  const url = asString(o["url"]);
-  const lineNumber = asNumber(o["lineNumber"]);
-  const stackTrace = asString(o["stackTrace"]);
-  return {
-    seq: asNumber(o["seq"]) ?? 0,
-    timestampMs: asNumber(o["timestampMs"]) ?? 0,
-    level,
-    text,
-    source: o["source"] === "log-entry" ? "log-entry" : "console-api",
-    ...(url !== undefined ? { url } : {}),
-    ...(lineNumber !== undefined ? { lineNumber } : {}),
-    ...(stackTrace !== undefined ? { stackTrace } : {}),
-  };
-};
-
-const asConsoleDetails = (v: unknown): ConsoleDetails | undefined => {
-  const o = asRecord(v);
-  if (o === undefined) return undefined;
-  const records = asArrayOf(o["records"], asConsoleRecord);
-  if (records === undefined) return undefined;
-  const fullOutputPath = asString(o["fullOutputPath"]);
-  const nextCursor = asNumber(o["nextCursor"]);
-  return {
-    total: asNumber(o["total"]) ?? records.length,
-    returned: asNumber(o["returned"]) ?? records.length,
-    bufferOverflowed: asBoolean(o["bufferOverflowed"]) ?? false,
-    truncated: asBoolean(o["truncated"]) ?? false,
-    records,
-    ...(fullOutputPath !== undefined ? { fullOutputPath } : {}),
-    ...(nextCursor !== undefined ? { nextCursor } : {}),
-  };
-};
+export type ConsoleDetails = DetailsOf<typeof ConsoleDetailsSchema>;
 
 export const consoleTool = defineBrowserTool({
   name: "browser_console",
@@ -162,9 +138,10 @@ export const consoleTool = defineBrowserTool({
     "Don't use as a default observation tool — prefer browser_snapshot for page structure.",
   ],
   parameters: ConsoleArgs,
+  details: ConsoleDetailsSchema,
   concurrency: "parallel",
 
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client }): Promise<Result<ToolOk<ConsoleDetails>, ToolErr>> {
     const session = client.session();
     const drained = session.drainConsoleBuffer({
       ...(args.levels !== undefined ? { levels: args.levels } : {}),
@@ -192,16 +169,14 @@ export const consoleTool = defineBrowserTool({
       truncated: trunc.wasTruncated,
       records: drained.records,
       ...(nextCursor !== undefined ? { nextCursor } : {}),
+      ...(trunc.fullOutputPath !== undefined ? { fullOutputPath: trunc.fullOutputPath } : {}),
     };
-    if (trunc.fullOutputPath !== undefined) details.fullOutputPath = trunc.fullOutputPath;
 
     return ok({ text: trunc.text, details });
   },
 
-  renderResult(result, expanded, theme) {
-    const details = asConsoleDetails(result.details);
-    if (!details) return new Text(theme.fg("error", "console: no details"), 0, 0);
-
+  renderResult(result, expanded) {
+    const details = result.details;
     const md = renderConsoleMarkdown(details.records, {
       total: details.total,
       bufferOverflowed: details.bufferOverflowed,
@@ -209,7 +184,7 @@ export const consoleTool = defineBrowserTool({
       nextCursor: details.nextCursor,
     });
     const tail = expanded
-      ? `\n\n${keyHint("app.tools.expand", "to collapse")}${details.fullOutputPath ? ` · full payload at \`${details.fullOutputPath}\`` : ""}`
+      ? `\n\n${keyHint("app.tools.expand", "to collapse")}${details.fullOutputPath !== undefined ? ` · full payload at \`${details.fullOutputPath}\`` : ""}`
       : `\n\n${keyHint("app.tools.expand", "to expand")}`;
 
     return new Markdown(md + tail, 0, 0, getMarkdownTheme());

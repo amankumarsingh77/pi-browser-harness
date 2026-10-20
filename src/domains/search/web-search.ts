@@ -3,7 +3,7 @@ import { Compile } from "typebox/compile";
 import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
 import {
   closeIsolatedTab,
   evalInIsolatedTab,
@@ -12,7 +12,10 @@ import {
   openIsolatedTab,
   waitForIsolatedLoad,
 } from "../isolated-tab";
-import { renderExpandableText } from "../render";
+import { pageCallExpression } from "../page/inject";
+import { extractSerp } from "../page/serp.page";
+import type * as extracted from "../page/serp.page";
+import { ExpandableTextSchema, renderExpandableText } from "../render";
 import { classifySerp, parseGoogleSerp, type SearchResult, type SerpExtraction } from "./google-serp";
 
 const LOAD_TIMEOUT_MS = 15_000;
@@ -26,32 +29,11 @@ const WebSearchArgs = Type.Object({
 
 const PAGE_TEXT_LIMIT = 4000;
 
-const buildSerpExtractionExpr = (): string => `
-  (() => {
-    const main = document.querySelector('#search, #rso, #main') || document.body;
-    const headings = Array.from(main.querySelectorAll('a h3'));
-    const seen = new Set();
-    const anchors = [];
-    for (const h3 of headings) {
-      const a = h3.closest('a[href]');
-      if (!a) continue;
-      const href = a.href;
-      if (!href || seen.has(href)) continue;
-      seen.add(href);
-      const container =
-        a.closest('div.g') ||
-        a.closest('div[data-hveid]') ||
-        a.parentElement?.parentElement ||
-        a.parentElement;
-      const containerText = container ? container.innerText || '' : '';
-      const heading = h3.innerText || h3.textContent || '';
-      const snippet = containerText.replace(heading, '').replace(/\\s+/g, ' ').trim().slice(0, 500);
-      anchors.push({ href, heading, snippet });
-    }
-    const pageText = (document.body.innerText || '').slice(0, ${PAGE_TEXT_LIMIT});
-    return JSON.stringify({ anchors, pageText });
-  })()
-`;
+// The page function declares the extraction shape it produces; this pins it to the shape the SERP parser consumes,
+// so the two cannot drift apart silently (the runtime validator below still guards the actual wire value).
+export const asSerpExtraction = (e: extracted.SerpExtraction): SerpExtraction => e;
+
+const buildSerpExtractionExpr = (): string => pageCallExpression(extractSerp, PAGE_TEXT_LIMIT);
 
 const buildSerpUrl = (query: string, limit: number): string =>
   `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${limit}&hl=en`;
@@ -64,6 +46,26 @@ const SerpExtractionSchema = Type.Object({
 });
 
 const serpExtractionValidator = Compile(SerpExtractionSchema);
+
+export const parseSerpExtraction = (raw: string): Result<SerpExtraction, string> =>
+  parseJson(raw, serpExtractionValidator);
+
+const SearchResultSchema = Type.Object({
+  title: Type.String(),
+  url: Type.String(),
+  snippet: Type.String(),
+  rank: Type.Number(),
+});
+
+const WebSearchDetailsSchema = Type.Object({
+  results: Type.Array(SearchResultSchema),
+  engine: Type.Literal("google"),
+  query: Type.String(),
+  render: ExpandableTextSchema,
+  fullOutputPath: Type.Optional(Type.String()),
+});
+
+export type WebSearchDetails = DetailsOf<typeof WebSearchDetailsSchema>;
 
 const formatResults = (query: string, results: ReadonlyArray<SearchResult>): string => {
   const lines = results.map((r) => `${r.rank}. ${r.title}\n   ${r.url}\n   ${r.snippet}`);
@@ -82,8 +84,9 @@ export const webSearchTool = defineBrowserTool({
     "Runs in its own isolated tab and never disturbs the user's current tab.",
   ],
   parameters: WebSearchArgs,
+  details: WebSearchDetailsSchema,
   concurrency: "serialized",
-  async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, signal }): Promise<Result<ToolOk<WebSearchDetails>, ToolErr>> {
     const limit = args.limit ?? 10;
     const serpUrl = buildSerpUrl(args.query, limit);
 
@@ -101,7 +104,7 @@ export const webSearchTool = defineBrowserTool({
       const extracted = await evalInIsolatedTab(client, tab, buildSerpExtractionExpr(), isJsonText);
       if (!extracted.success) return err(extracted.error);
 
-      const parsedJson = parseJson(extracted.data, serpExtractionValidator);
+      const parsedJson = parseSerpExtraction(extracted.data);
       if (!parsedJson.success) {
         return err({ kind: "internal", message: `SERP extraction returned an unexpected shape: ${parsedJson.error}` });
       }
@@ -137,7 +140,7 @@ export const webSearchTool = defineBrowserTool({
       await closeIsolatedTab(client, tab);
     }
   },
-  renderResult(result, expanded, theme) {
-    return renderExpandableText("web_search", result, expanded, theme);
+  renderResult(result, expanded) {
+    return renderExpandableText(result.details.render, expanded);
   },
 });
