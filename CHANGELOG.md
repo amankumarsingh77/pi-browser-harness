@@ -2,6 +2,40 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Tool failures now reach the model as errors.** `defineBrowserTool` set `isError` on the returned result, but pi only flags a result as an error when `execute` rejects, so every failed browser tool read as a success. Failed handlers now throw with the rendered error text; replayed errors still render in the UI.
+- **The daemon transport no longer exits mid-handshake.** The connect timer was cleared on TCP connect, before the daemon's `registered` reply, and the socket was already unref'd, so a print-mode run could exit before registering. The timer now stays armed until the handshake settles; a daemon that accepts but never registers times out instead of hanging.
+- **Disconnected clients are cleaned up in the daemon.** The idle-timer registration overwrote the bridge's disconnect handler, so router ownership and armed timers leaked per client. The IPC server now keeps a handler list; `deregister` is handled.
+- **`--browser-namespace` works.** The flag was read before it was registered, so it was always undefined.
+- **CDP sessions are reused or detached.** Switching tabs re-attached every time and left the old session alive; destroying the current target left `current()` pointing at it for up to 30s. Sessions are now tracked per target, detached on re-attach, and cleared on `Target.targetDestroyed` / `Inspector.detached`.
+- **Connect timeouts no longer kick every client off the daemon**, overlapping `connect()` calls share one handshake, the detach release reads the session from `params`, and the duplicate-clientId reply is flushed before the socket closes.
+- **Time budgets in `browser_network_requests` and `browser_snapshot` actually bound the work** through a concurrency-limited runner that honours the abort signal.
+- **`browser_handle_dialog` clears the recorded dialog**, so the next `browser_page_info` no longer reports an already-handled dialog.
+- **`browser_press_key` sends virtual key codes for function and modifier keys.**
+- **`browser_open_urls` applies the tab-title marker after the page loads** instead of to the document being replaced.
+- **`browser_print_to_pdf`, screenshots and uploads return `io_error`** on unwritable or unreadable paths instead of throwing.
+- **Element refs are released** (`Runtime.releaseObject`) on every ref path; `browser_read_page` and `browser_open_urls` detach the sessions they attach.
+- sharp "missing" is classified correctly under ESM; `isPathWithin` accepts siblings starting with `..`; `BH_DEBUG_CLICKS=0` disables debug; Linux `chromium-browser` process names are matched after `ps` truncation; discovery probes stale `DevToolsActivePort` candidates concurrently under one deadline.
+
+### Changed
+
+- **Bad arguments return `invalid_args`** instead of `invalid_state`.
+- **`browser_switch_tab` resolves targetId prefixes against owned tabs only**, matching `browser_close_tab`.
+- **`browser_execute_js` details hold a bounded preview**; the full value lives in the text.
+- **CDP calls require params when the method needs them**, and `Input.*`, `Emulation.setDeviceMetricsOverride`, `Page.printToPDF` and `Page.captureScreenshot` have real schemas.
+- **Tool `details` are typed** via a TypeBox schema on the definition and validated on replay.
+- **Page-side JS is TypeScript** under `src/domains/page/*.page.ts`, type-checked against the DOM lib and injected via `fn.toString()`. `src/domains/fill-engine.ts` is removed.
+- The browser prompt's lane lists and the skill file's tool reference are generated from the registry (`npm run gen:skill`).
+
+### Added
+
+- **Other pi extensions can contribute browser tools** through `registerBrowserTools` (see README, Extending).
+- Type-aware ESLint (`npm run lint`) and `npm run check` running typecheck, boundaries, lint and tests. The boundary scanner gained a `raw-js-template` rule.
+- Injection seams on the daemon entry, extension factory, setup and profile binding; tests for every tool in `src/domains` and the previously untested util, profile and daemon modules (365 tests to 1017).
+
 ## 0.12.0 — 2026-10-19
 
 ### Changed
