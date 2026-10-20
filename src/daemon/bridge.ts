@@ -1,9 +1,28 @@
 import { isCdpRawMessage } from "../cdp/types";
 import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
-import { CDP_COMMAND_TIMEOUT_MS } from "./protocol";
+import { CDP_COMMAND_TIMEOUT_MS, DAEMON_RECONNECT_METHOD } from "./protocol";
 import { asString, isRecord } from "../util/guards";
-import { type ChromeConnectionDependencies, createChromeConnection } from "./connection";
+import { type ChromeConnectionDependencies, type ConnectionStatus, createChromeConnection } from "./connection";
+
+// The text a tool sees when the daemon has no Chrome connection to offer; it tells the model
+// (and through it the user) whether to wait, to look at Chrome, or to run /browser-setup.
+export const describeDisconnected = (status: ConnectionStatus): string => {
+  switch (status.state) {
+    case "open":
+      return "Chrome not connected";
+    case "connecting":
+      return `Chrome not connected: a connection attempt has been waiting ${Math.round(status.pendingForMs / 1000)}s. `
+        + "If Chrome is showing an \"Allow remote debugging\" prompt, accept it; no further prompts will be opened while this attempt is pending.";
+    case "cooldown":
+      return `Chrome not connected: the last attempt failed (${status.lastFailure}). `
+        + `The next automatic attempt is in ${Math.ceil(status.retryInMs / 1000)}s; run /browser-setup to retry now.`;
+    case "disconnected":
+      return status.lastFailure ? `Chrome not connected: ${status.lastFailure}` : "Chrome not connected";
+    case "stopped":
+      return "Chrome not connected: the daemon is shutting down";
+  }
+};
 
 export type SendToClient = (clientId: string, msg: WireResponse | WireEvent) => void;
 
@@ -207,9 +226,17 @@ export const createCdpBridge = (options: ChromeConnectionDependencies = {}): Cdp
     clientId: string,
     send: SendToClient,
   ): Promise<void> => {
+    // The one request the daemon answers itself: a human asked for a fresh dial.
+    if (req.method === DAEMON_RECONNECT_METHOD) {
+      const open = await connection.reconnectNow();
+      send(clientId, open
+        ? { type: "response", id: req.id, result: { connected: true } }
+        : errorResponse(req.id, describeDisconnected(connection.status())));
+      return;
+    }
     // Connection attempts happen only in response to explicit browser work.
     if (!connection.isOpen() && !(await connection.connect())) {
-      send(clientId, errorResponse(req.id, "Chrome not connected"));
+      send(clientId, errorResponse(req.id, describeDisconnected(connection.status())));
       return;
     }
 

@@ -45,7 +45,7 @@ export async function performSetup(
 
   const profileNote = await promptForProfileIfUnset(client, ctx);
 
-  const startResult = await client.start();
+  const startResult = await client.start({ reconnectNow: true });
   if (!startResult.success) {
     const msg = startResult.error.message;
     const lower = msg.toLowerCase();

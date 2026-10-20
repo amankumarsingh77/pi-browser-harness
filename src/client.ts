@@ -1,3 +1,4 @@
+import { DAEMON_RECONNECT_METHOD } from "./daemon/protocol";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "./schemas/parse";
@@ -35,7 +36,9 @@ export type BrowserClient = {
   readonly namespace: string;
   ensureAlive(): Promise<Result<void, CdpError>>;
   status(): DaemonStatus;
-  start(): Promise<Result<void, CdpError>>;
+  // `reconnectNow` is for explicit human demand (/browser-setup, /browser-reload-daemon): it asks the
+  // daemon to dial Chrome immediately even if it is cooling down after a failed attempt.
+  start(opts?: { readonly reconnectNow?: boolean }): Promise<Result<void, CdpError>>;
   stop(): Promise<void>;
   detach(): Promise<void>;
   closeOwnedTabs(): Promise<void>;
@@ -138,7 +141,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return ok(undefined);
   };
 
-  const start = async (): Promise<Result<void, CdpError>> => {
+  const start = async (opts: { readonly reconnectNow?: boolean } = {}): Promise<Result<void, CdpError>> => {
     if (transport.state() === "open" && session.current()) return ok(undefined);
     let wsUrl: string;
     if (remote?.cdpUrl) {
@@ -151,6 +154,15 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     }
     const connected = await transport.connect(wsUrl, { timeoutMs: 10_000 });
     if (!connected.success) return connected;
+    if (opts.reconnectNow) {
+      // Only the daemon understands this; a direct Chrome transport answers "method not found",
+      // which is fine because it has no cooldown to clear.
+      const dialed = await transport.request(DAEMON_RECONNECT_METHOD, {}, { timeoutMs: 15_000 });
+      if (!dialed.success && dialed.error.kind !== "remote_error") {
+        await transport.close();
+        return dialed;
+      }
+    }
 
     const newBrowserId: string = wsUrl.split("/").pop() ?? "unknown";
     if (remote?.browserId !== newBrowserId) {

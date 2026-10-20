@@ -125,7 +125,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       }
       ctx.ui.notify("Restarting browser client...", "info");
       await client.stop();
-      const r = await client.start();
+      const r = await client.start({ reconnectNow: true });
       if (r.success) {
         ctx.ui.notify("Browser client restarted ✓", "info");
       } else {

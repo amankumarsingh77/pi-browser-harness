@@ -119,6 +119,22 @@ export const DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export const DAEMON_MAX_CLIENTS = 16;
 
+// How long a caller waits for a Chrome connection before being told "not connected". The dial
+// itself keeps going (see CDP_ATTEMPT_LIFETIME_MS): a human answering Chrome's "Allow remote
+// debugging" prompt takes longer than any tool call should block.
 export const CDP_CONNECT_TIMEOUT_MS = 10_000;
+
+// How long one dial stays open waiting for Chrome. One dial is one "Allow" prompt, so the attempt
+// must outlive a user who is away from the keyboard rather than be replaced by a fresh prompt.
+export const CDP_ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
+
+// After a dial fails outright (discovery failed, refused, denied, lifetime passed), no automatic
+// re-dial happens until this cooldown passes; it doubles per consecutive failure up to the cap.
+// An explicit Daemon.reconnect request (/browser-setup, /browser-reload-daemon) bypasses it.
+export const CDP_RECONNECT_COOLDOWN_MS = 30_000;
+export const CDP_RECONNECT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
+
+// The one request the daemon answers itself: clears the reconnect cooldown and dials Chrome now.
+export const DAEMON_RECONNECT_METHOD = "Daemon.reconnect";
 
 export const CDP_COMMAND_TIMEOUT_MS = 10_000;

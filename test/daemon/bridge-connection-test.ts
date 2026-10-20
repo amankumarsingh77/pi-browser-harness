@@ -168,6 +168,10 @@ const testUnresolvedDiscoveryIsBounded = async (): Promise<void> => {
       return socket;
     },
     connectTimeoutMs: 25,
+    // These tests exercise the attempt itself ending: the dial must die with the caller wait and re-dial at once.
+    attemptLifetimeMs: 25,
+    cooldownMs: 0,
+    cooldownMaxMs: 0,
     onAttemptSettled: () => {
       settled += 1;
     },
@@ -208,6 +212,10 @@ const testHandleRequestStopsPollingAfterFailedAttempt = async (): Promise<void> 
       return socket;
     },
     connectTimeoutMs: 30,
+    // These tests exercise the attempt itself ending: the dial must die with the caller wait and re-dial at once.
+    attemptLifetimeMs: 30,
+    cooldownMs: 0,
+    cooldownMaxMs: 0,
   });
 
   await bridge.start();
@@ -227,8 +235,8 @@ const testHandleRequestStopsPollingAfterFailedAttempt = async (): Promise<void> 
 
   check(elapsed < 200, "handleRequest returns quickly after failed attempt settlement");
   check(
-    responses.some((msg) => msg.id === 20 && msg.error?.message === "Chrome not connected"),
-    "handleRequest fails fast with Chrome not connected",
+    responses.some((msg) => msg.id === 20 && msg.error?.message.startsWith("Chrome not connected: forced connect failure")),
+    "handleRequest fails fast with Chrome not connected and the attempt's failure reason",
   );
   await bridge.stop();
 };
@@ -595,6 +603,10 @@ const testConnectTimeoutDoesNotNotifyClose = async (): Promise<void> => {
     discoverWsUrl: () => Promise.resolve(ok("ws://never-opens.invalid:9222")),
     createWebSocket: (url: string): ChromeSocket => new FakeWebSocket(url),
     connectTimeoutMs: 15,
+    // These tests exercise the attempt itself ending: the dial must die with the caller wait and re-dial at once.
+    attemptLifetimeMs: 15,
+    cooldownMs: 0,
+    cooldownMaxMs: 0,
     onAttemptSettled: () => { settled += 1; },
   });
   bridge.onClose(() => { closes += 1; });
@@ -608,6 +620,10 @@ const testConnectTimeoutDoesNotNotifyClose = async (): Promise<void> => {
   const failing = createCdpBridge({
     discoverWsUrl: () => Promise.resolve(err({ kind: "discovery_failed", message: "no chrome" })),
     connectTimeoutMs: 15,
+    // These tests exercise the attempt itself ending: the dial must die with the caller wait and re-dial at once.
+    attemptLifetimeMs: 15,
+    cooldownMs: 0,
+    cooldownMaxMs: 0,
     onAttemptSettled: () => { settled += 1; },
   });
   failing.onClose(() => { closes += 1; });
