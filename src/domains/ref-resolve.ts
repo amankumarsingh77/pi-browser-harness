@@ -3,7 +3,8 @@ import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
 import { type Box, boxOf } from "./box";
 import { cdpCall } from "./cdp-call";
-import { buildTree, collectInteractiveTargets, type SlimNode } from "./ax-tree";
+import { buildTree, collectInteractiveTargets } from "./ax-tree";
+import { type RefSignature, signatureOf } from "./ref-signature";
 
 const staleErr = (ref: string): ToolErr => ({
   kind: "invalid_state",
@@ -43,17 +44,20 @@ export const resolveRefToBox = async (
   return ok(box.data);
 };
 
-const sigOf = (n: SlimNode): string => `${n.role}|${n.name ?? ""}|${n.value ?? ""}|${n.state ?? ""}`;
-const keyOf = (n: SlimNode): string => `${n.role}|${n.name ?? ""}`;
+export type RefRefresh = {
+  readonly prev: ReadonlyMap<string, RefSignature>;
+  readonly cur: ReadonlyMap<string, RefSignature>;
+};
 
-export const interactiveDiff = async (client: BrowserClient): Promise<string> => {
+// Re-reads the AX tree and republishes the session's ref map: an element seen before keeps its ref, a new one gets
+// the next unused index. Returns the signatures before and after so the caller can diff them.
+export const refreshRefs = async (client: BrowserClient): Promise<Result<RefRefresh, ToolErr>> => {
   const session = client.session();
   const prev = session.refSignatures();
 
   const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
-  if (!axRes.success) return "";
-  const rawNodes = axRes.data.nodes;
-  const slim = buildTree(rawNodes, { interestingOnly: true, maxNodes: 1000 });
+  if (!axRes.success) return axRes;
+  const slim = buildTree(axRes.data.nodes, { interestingOnly: true, maxNodes: 1000 });
   const targets = collectInteractiveTargets(slim);
 
   const priorRefs = session.refMappings();
@@ -65,7 +69,7 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
     if (digits !== undefined) nextIndex = Math.max(nextIndex, Number(digits) + 1);
   }
   const refMap = new Map<string, number>();
-  const refSig = new Map<string, string>();
+  const cur = new Map<string, RefSignature>();
   const taken = new Set<string>();
   for (const { node, backendId } of targets) {
     const prior = refByBackendId.get(backendId);
@@ -73,38 +77,40 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
     taken.add(ref);
     node.ref = ref;
     refMap.set(ref, backendId);
-    refSig.set(ref, sigOf(node));
+    cur.set(ref, signatureOf(node));
   }
-  session.setRefMap(refMap, refSig);
+  session.setRefMap(refMap, cur);
+  return ok({ prev, cur });
+};
 
-  const prevByKey = new Map<string, string>();
-  for (const sig of prev.values()) {
-    const parts = sig.split("|");
-    prevByKey.set(`${parts[0]}|${parts[1]}`, sig);
-  }
-  const curByKey = new Map<string, { ref: string; sig: string }>();
-  for (const { node } of targets) {
-    if (node.ref) curByKey.set(keyOf(node), { ref: node.ref, sig: sigOf(node) });
-  }
+const identityKey = (s: RefSignature): string => JSON.stringify([s.role, s.name]);
+const describe = (s: RefSignature): string => `${s.role} "${s.name}"`;
+
+// Pure: renders what changed between two signature sets, keyed by role+name. Empty string when nothing changed.
+export const diffSignatures = (
+  prev: ReadonlyMap<string, RefSignature>,
+  cur: ReadonlyMap<string, RefSignature>,
+): string => {
+  const prevByKey = new Map<string, RefSignature>();
+  for (const sig of prev.values()) prevByKey.set(identityKey(sig), sig);
+  const curByKey = new Map<string, { readonly ref: string; readonly sig: RefSignature }>();
+  for (const [ref, sig] of cur) curByKey.set(identityKey(sig), { ref, sig });
 
   const appeared: string[] = [];
   const changed: string[] = [];
   for (const [key, { ref, sig }] of curByKey) {
     const before = prevByKey.get(key);
     if (before === undefined) {
-      appeared.push(`  *[${ref}] ${key.replace("|", ' "')}"`);
-    } else if (before !== sig) {
-      const va = before.split("|")[2] ?? "";
-      const vb = sig.split("|")[2] ?? "";
-      const sa = before.split("|")[3] ?? "";
-      const sb = sig.split("|")[3] ?? "";
-      const detail = va !== vb ? `value ${JSON.stringify(va)} → ${JSON.stringify(vb)}` : `state ${JSON.stringify(sa)} → ${JSON.stringify(sb)}`;
-      changed.push(`  [${ref}] ${key.replace("|", ' "')}": ${detail}`);
+      appeared.push(`  *[${ref}] ${describe(sig)}`);
+    } else if (before.value !== sig.value) {
+      changed.push(`  [${ref}] ${describe(sig)}: value ${JSON.stringify(before.value)} → ${JSON.stringify(sig.value)}`);
+    } else if (before.state !== sig.state) {
+      changed.push(`  [${ref}] ${describe(sig)}: state ${JSON.stringify(before.state)} → ${JSON.stringify(sig.state)}`);
     }
   }
   const removed: string[] = [];
-  for (const key of prevByKey.keys()) {
-    if (!curByKey.has(key)) removed.push(`  ${key.replace("|", ' "')}"`);
+  for (const [key, sig] of prevByKey) {
+    if (!curByKey.has(key)) removed.push(`  ${describe(sig)}`);
   }
 
   if (appeared.length === 0 && changed.length === 0 && removed.length === 0) return "";
@@ -115,4 +121,12 @@ export const interactiveDiff = async (client: BrowserClient): Promise<string> =>
   const overflow = Math.max(0, changed.length - 12) + Math.max(0, appeared.length - 12) + Math.max(0, removed.length - 8);
   if (overflow > 0) lines.push(`  …and ${overflow} more (browser_snapshot for full state)`);
   return lines.join("\n");
+};
+
+// Convenience for action tools: refresh refs and append a diff to the action's text. A failed refresh is reported
+// inline rather than failing the action that already happened.
+export const interactiveDiff = async (client: BrowserClient): Promise<string> => {
+  const refreshed = await refreshRefs(client);
+  if (!refreshed.success) return `\n(page diff unavailable: ${refreshed.error.message})`;
+  return diffSignatures(refreshed.data.prev, refreshed.data.cur);
 };

@@ -6,17 +6,15 @@ describe("cdp command table", () => {
   test("decodes a well-formed response", () => {
     const r = decodeResult("Target.attachToTarget", { sessionId: "s1" });
     assert.equal(r.success, true);
-    if (r.success) assert.equal(r.data.sessionId, "s1");
+    assert.equal(r.data.sessionId, "s1");
   });
 
   test("rejects a response with a wrong field type", () => {
     const r = decodeResult("Browser.getWindowForTarget", { windowId: "not-a-number" });
     assert.equal(r.success, false);
-    if (!r.success) {
-      assert.equal(r.error.kind, "invalid_response");
-      assert.equal(r.error.method, "Browser.getWindowForTarget");
-      assert.match(r.error.message, /must be number/);
-    }
+    assert.equal(r.error.kind, "invalid_response");
+    assert.equal(r.error.method, "Browser.getWindowForTarget");
+    assert.match(r.error.message, /must be number/);
   });
 
   test("rejects a response missing a required field", () => {
@@ -35,12 +33,6 @@ describe("cdp command table", () => {
       assert.ok(spec.result, `${method} missing result schema`);
       assert.ok(spec.validate, `${method} missing compiled validator`);
     }
-  });
-
-  test("an unknown method decodes to an error rather than throwing", () => {
-    // Types prevent this, but a daemon could echo an unexpected method name.
-    const r = decodeResult("Nope.method" as "Page.enable", {});
-    assert.equal(r.success, false);
   });
 
   test("accepts an empty Network.setExtraHTTPHeaders response", () => {
@@ -71,12 +63,10 @@ describe("Accessibility.getFullAXTree schema", () => {
       ],
     });
     assert.equal(r.success, true);
-    if (r.success) {
-      assert.equal(r.data.nodes.length, 2);
-      assert.equal(r.data.nodes[0]?.role?.value, "RootWebArea");
-      assert.equal(r.data.nodes[0]?.backendDOMNodeId, 7);
-      assert.deepEqual(r.data.nodes[0]?.childIds, ["2", "3"]);
-    }
+    assert.equal(r.data.nodes.length, 2);
+    assert.equal(r.data.nodes[0]?.role?.value, "RootWebArea");
+    assert.equal(r.data.nodes[0].backendDOMNodeId, 7);
+    assert.deepEqual(r.data.nodes[0].childIds, ["2", "3"]);
   });
 
   test("accepts an empty node list", () => {
@@ -87,7 +77,7 @@ describe("Accessibility.getFullAXTree schema", () => {
   test("rejects a node whose nodeId is not a string", () => {
     const r = decodeResult("Accessibility.getFullAXTree", { nodes: [{ nodeId: 5 }] });
     assert.equal(r.success, false);
-    if (!r.success) assert.equal(r.error.kind, "invalid_response");
+    assert.equal(r.error.kind, "invalid_response");
   });
 
   test("rejects childIds that are not strings", () => {

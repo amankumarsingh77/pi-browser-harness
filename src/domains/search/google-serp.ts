@@ -29,7 +29,7 @@ const CAPTCHA_MARKERS: ReadonlyArray<string> = [
 ];
 
 const unwrapRedirect = (href: string): string => {
-  const wrapper = href.match(/^(?:https?:\/\/[^/]*google\.[^/]*)?\/url\?/i);
+  const wrapper = /^(?:https?:\/\/[^/]*google\.[^/]*)?\/url\?/i.exec(href);
   if (!wrapper) return href;
   const query = href.slice(href.indexOf("?") + 1);
   const target = new URLSearchParams(query).get("q");

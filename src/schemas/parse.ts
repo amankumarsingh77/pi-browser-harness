@@ -1,10 +1,10 @@
-import type { Static, TSchema } from "typebox";
+import type { Static, TProperties, TSchema } from "typebox";
 import type { Validator } from "typebox/compile";
 import { type Result, err, ok } from "../util/result";
 
 export const parseJson = <S extends TSchema>(
   raw: string,
-  validator: Validator<{}, S>,
+  validator: Validator<TProperties, S>,
 ): Result<Static<S>, string> => {
   let parsed: unknown;
   try {

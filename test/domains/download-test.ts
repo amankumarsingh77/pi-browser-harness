@@ -3,21 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFakeClient, type FakeClient } from "./fake-client";
+import { createFakeClient, type FakeClient, handlerContext } from "./fake-client";
 import { downloadTool, restoreDownloadBehavior } from "../../src/domains/files";
-import type { HandlerContext } from "../../src/util/tool";
 import { cdpError } from "../../src/cdp/errors";
 import { err } from "../../src/util/result";
 import { Value } from "typebox/value";
 
 const SET_BEHAVIOR = "Browser.setDownloadBehavior";
-
-const ctxFor = (fake: FakeClient): HandlerContext => ({
-  client: fake.client,
-  signal: undefined,
-  onUpdate: () => {},
-  extensionCtx: undefined as never,
-});
 
 const behaviorCalls = (fake: FakeClient): ReadonlyArray<Record<string, unknown>> =>
   fake.callsTo(SET_BEHAVIOR).map((c) => c.params);
@@ -33,48 +25,46 @@ const withTmp = async (fn: (dir: string) => Promise<void>): Promise<void> => {
 
 // The override flag is module state, so every test starts from "nothing set".
 beforeEach(async () => {
-  await downloadTool.handler({ restore: true }, ctxFor(await createFakeClient()));
+  await downloadTool.handler({ restore: true }, handlerContext((await createFakeClient()).client));
 });
 
 describe("browser_download sets and restores Chrome's download behavior", () => {
   test("restore resets to the browser default without a path", async () => {
     const fake = await createFakeClient();
-    const r = await downloadTool.handler({ restore: true }, ctxFor(fake));
+    const r = await downloadTool.handler({ restore: true }, handlerContext(fake.client));
     assert.equal(r.success, true);
-    const calls = behaviorCalls(fake);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.["behavior"], "default");
-    assert.equal(calls[0]?.["downloadPath"], undefined);
+    const [call] = behaviorCalls(fake);
+    assert.ok(call);
+    assert.equal(call["behavior"], "default");
+    assert.equal(call["downloadPath"], undefined);
   });
 
   test("a download path sets an allow behavior pointing at it", async () => {
     await withTmp(async (dir) => {
       const fake = await createFakeClient();
-      const r = await downloadTool.handler({ downloadPath: dir }, ctxFor(fake));
+      const r = await downloadTool.handler({ downloadPath: dir }, handlerContext(fake.client));
       assert.equal(r.success, true);
-      const calls = behaviorCalls(fake);
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0]?.["behavior"], "allow");
-      assert.equal(calls[0]?.["downloadPath"], dir);
+      const [call] = behaviorCalls(fake);
+      assert.ok(call);
+      assert.equal(call["behavior"], "allow");
+      assert.equal(call["downloadPath"], dir);
     });
   });
 
   test("restore and downloadPath together are refused before any CDP call", async () => {
     const fake = await createFakeClient();
-    const r = await downloadTool.handler({ restore: true, downloadPath: "/tmp/whatever" }, ctxFor(fake));
+    const r = await downloadTool.handler({ restore: true, downloadPath: "/tmp/whatever" }, handlerContext(fake.client));
     assert.equal(r.success, false);
-    if (r.success) return;
-    assert.equal(r.error.kind, "invalid_state");
+    assert.equal(r.error.kind, "invalid_args");
     assert.match(r.error.message, /not both/);
     assert.equal(fake.callsTo(SET_BEHAVIOR).length, 0);
   });
 
   test("neither argument is refused before any CDP call", async () => {
     const fake = await createFakeClient();
-    const r = await downloadTool.handler({}, ctxFor(fake));
+    const r = await downloadTool.handler({}, handlerContext(fake.client));
     assert.equal(r.success, false);
-    if (r.success) return;
-    assert.equal(r.error.kind, "invalid_state");
+    assert.equal(r.error.kind, "invalid_args");
     assert.match(r.error.message, /restore:true to undo/);
     assert.equal(fake.callsTo(SET_BEHAVIOR).length, 0);
   });
@@ -82,7 +72,7 @@ describe("browser_download sets and restores Chrome's download behavior", () => 
   test("an explicit restore:false is not a restore", async () => {
     await withTmp(async (dir) => {
       const fake = await createFakeClient();
-      const r = await downloadTool.handler({ restore: false, downloadPath: dir }, ctxFor(fake));
+      const r = await downloadTool.handler({ restore: false, downloadPath: dir }, handlerContext(fake.client));
       assert.equal(r.success, true);
       assert.equal(behaviorCalls(fake)[0]?.["behavior"], "allow");
     });
@@ -90,10 +80,9 @@ describe("browser_download sets and restores Chrome's download behavior", () => 
 
   test("restore:false without a path is refused rather than defaulting to a restore", async () => {
     const fake = await createFakeClient();
-    const r = await downloadTool.handler({ restore: false }, ctxFor(fake));
+    const r = await downloadTool.handler({ restore: false }, handlerContext(fake.client));
     assert.equal(r.success, false);
-    if (r.success) return;
-    assert.equal(r.error.kind, "invalid_state");
+    assert.equal(r.error.kind, "invalid_args");
     assert.equal(fake.callsTo(SET_BEHAVIOR).length, 0);
   });
 
@@ -101,9 +90,8 @@ describe("browser_download sets and restores Chrome's download behavior", () => 
     const fake = await createFakeClient({
       canned: { [SET_BEHAVIOR]: err(cdpError("remote_error", "not allowed in this context")) },
     });
-    const r = await downloadTool.handler({ restore: true }, ctxFor(fake));
+    const r = await downloadTool.handler({ restore: true }, handlerContext(fake.client));
     assert.equal(r.success, false);
-    if (r.success) return;
     assert.equal(r.error.kind, "cdp_error");
     assert.match(r.error.message, /not allowed in this context/);
   });
@@ -113,9 +101,8 @@ describe("browser_download sets and restores Chrome's download behavior", () => 
       const file = join(dir, "not-a-dir");
       await writeFile(file, "x");
       const fake = await createFakeClient();
-      const r = await downloadTool.handler({ downloadPath: file }, ctxFor(fake));
+      const r = await downloadTool.handler({ downloadPath: file }, handlerContext(fake.client));
       assert.equal(r.success, false);
-      if (r.success) return;
       assert.equal(r.error.kind, "io_error");
       assert.equal(fake.callsTo(SET_BEHAVIOR).length, 0);
     });
@@ -152,7 +139,7 @@ describe("session teardown undoes an override that is still in force", () => {
   test("a teardown after a set restores the default exactly once", async () => {
     await withTmp(async (dir) => {
       const fake = await createFakeClient();
-      const set = await downloadTool.handler({ downloadPath: dir }, ctxFor(fake));
+      const set = await downloadTool.handler({ downloadPath: dir }, handlerContext(fake.client));
       assert.equal(set.success, true);
 
       const first = await restoreDownloadBehavior(fake.client);
@@ -170,8 +157,8 @@ describe("session teardown undoes an override that is still in force", () => {
   test("an explicit restore clears the override, so teardown is a no-op", async () => {
     await withTmp(async (dir) => {
       const fake = await createFakeClient();
-      await downloadTool.handler({ downloadPath: dir }, ctxFor(fake));
-      await downloadTool.handler({ restore: true }, ctxFor(fake));
+      await downloadTool.handler({ downloadPath: dir }, handlerContext(fake.client));
+      await downloadTool.handler({ restore: true }, handlerContext(fake.client));
       const r = await restoreDownloadBehavior(fake.client);
       assert.equal(r.success, true);
       assert.equal(fake.callsTo(SET_BEHAVIOR).length, 2);
@@ -181,14 +168,13 @@ describe("session teardown undoes an override that is still in force", () => {
   test("a failed teardown reports the failure and keeps the override pending for a retry", async () => {
     await withTmp(async (dir) => {
       const setFake = await createFakeClient();
-      await downloadTool.handler({ downloadPath: dir }, ctxFor(setFake));
+      await downloadTool.handler({ downloadPath: dir }, handlerContext(setFake.client));
 
       const failing = await createFakeClient({
         canned: { [SET_BEHAVIOR]: err(cdpError("transport_closed", "socket closed")) },
       });
       const failed = await restoreDownloadBehavior(failing.client);
       assert.equal(failed.success, false);
-      if (failed.success) return;
       assert.equal(failed.error.kind, "cdp_error");
       assert.match(failed.error.message, /socket closed/);
       assert.ok(

@@ -11,8 +11,9 @@ const makeUdd = (): string => {
   roots.push(dir);
   return dir;
 };
-const writeLocalState = (udd: string, body: unknown): void =>
+const writeLocalState = (udd: string, body: unknown): void => {
   writeFileSync(join(udd, "Local State"), typeof body === "string" ? body : JSON.stringify(body), "utf8");
+};
 const writeProfileDir = (udd: string, dir: string, prefs?: unknown): void => {
   mkdirSync(join(udd, dir), { recursive: true });
   if (prefs !== undefined) writeFileSync(join(udd, dir, "Preferences"), JSON.stringify(prefs), "utf8");

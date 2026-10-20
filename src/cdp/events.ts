@@ -39,6 +39,11 @@ const ConsoleArg = Type.Object(
 
 export const EVENTS = {
   "Inspector.detached": ev(Anything),
+  // Browser-level notice that a session ended; carries the session id in params rather than on the envelope.
+  "Target.detachedFromTarget": ev(
+    Type.Object({ sessionId: Type.String(), targetId: Type.Optional(Type.String()) }, open),
+  ),
+  "Page.javascriptDialogClosed": ev(Anything),
 
   "Page.javascriptDialogOpening": ev(
     Type.Object(
@@ -158,13 +163,13 @@ export const decodeEvent = <E extends CdpEventName>(
   name: E,
   raw: unknown,
 ): Result<EventParamsOf<E>, CdpError> => {
+  // `name` is a key of EVENTS, so the lookup cannot miss.
   const spec = EVENTS[name];
-  if (spec === undefined) {
-    return err(cdpError("invalid_response", "unknown CDP event", name));
-  }
   if (!spec.validate.Check(raw)) {
     const why = spec.validate.Errors(raw).map((e) => e.message).join("; ");
     return err(cdpError("invalid_response", why, name));
   }
+  // Guarded assertion: same generic-key correlation limit as decodeResult in cdp/commands.ts.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- sanctioned decoder, see scripts/boundary-allowlist.ts
   return ok(raw as EventParamsOf<E>);
 };

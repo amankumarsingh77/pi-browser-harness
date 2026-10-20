@@ -1,11 +1,17 @@
+import { setImmediate as tick } from "node:timers/promises";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createCdpSession, type CdpSession } from "../../src/cdp/session";
 import { createOwnershipRegistry, type OwnershipRegistry } from "../../src/cdp/ownership";
 import { type CdpError, cdpError } from "../../src/cdp/errors";
-import type { CdpTransport } from "../../src/cdp/types";
-import type { CdpEvent } from "../../src/cdp/types";
+import type { CdpEvent, CdpTransport, RefSignature } from "../../src/cdp/types";
 import type { BrowserClient } from "../../src/client";
 import { createMutex } from "../../src/util/mutex";
 import { type Result, err, ok } from "../../src/util/result";
+import type { HandlerContext } from "../../src/util/tool";
+
+const noop = (): void => {
+  // Tests observe handler results, not progress updates or pin changes.
+};
 
 export type RecordedCall = {
   readonly method: string;
@@ -37,7 +43,8 @@ export const createStubTransport = (canned: Canned = {}): StubTransport => {
   const calls: RecordedCall[] = [];
   const queues = new Map<string, CannedResult[]>();
   for (const [method, value] of Object.entries(canned)) {
-    queues.set(method, Array.isArray(value) ? [...value] : [value]);
+    // A single Result has `success`; a queue of them is an array and does not.
+    queues.set(method, "success" in value ? [value] : [...value]);
   }
 
   const buffered: CdpEvent[] = [];
@@ -70,7 +77,7 @@ export const createStubTransport = (canned: Canned = {}): StubTransport => {
       }),
     }),
     state: () => "open",
-    onClose: () => () => {},
+    onClose: () => noop,
   };
 
   return {
@@ -91,7 +98,7 @@ export const createStubTransport = (canned: Canned = {}): StubTransport => {
 export type FakeClientOptions = {
   readonly canned?: Canned;
   readonly evaluate?: (expression: string, sessionId?: string) => Result<unknown, CdpError>;
-  readonly refs?: ReadonlyArray<{ readonly ref: string; readonly backendId: number; readonly sig?: string }>;
+  readonly refs?: ReadonlyArray<{ readonly ref: string; readonly backendId: number; readonly sig?: RefSignature }>;
   readonly ownedTargetIds?: ReadonlyArray<string>;
 };
 
@@ -113,7 +120,7 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
   const ownership = createOwnershipRegistry({ ownedTargetIds: opts.ownedTargetIds ?? ["t1"] });
   const session = createCdpSession(stub.transport, ownership);
   const mutex = createMutex();
-  const evaluated: string[] = [];
+  const expressions: string[] = [];
 
   const attached = await session.attachFirstPage();
   if (!attached.success) throw new Error(`fake client could not attach: ${attached.error.message}`);
@@ -121,10 +128,10 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
 
   if (opts.refs !== undefined) {
     const refMap = new Map<string, number>();
-    const refSig = new Map<string, string>();
+    const refSig = new Map<string, RefSignature>();
     for (const r of opts.refs) {
       refMap.set(r.ref, r.backendId);
-      refSig.set(r.ref, r.sig ?? `textbox|${r.ref}||`);
+      refSig.set(r.ref, r.sig ?? { role: "textbox", name: r.ref, value: "", state: "" });
     }
     session.setRefMap(refMap, refSig);
   }
@@ -138,7 +145,7 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     detach: () => Promise.resolve(),
     closeOwnedTabs: () => Promise.resolve(),
     evaluateJs: (expression, sessionId) => {
-      evaluated.push(expression);
+      expressions.push(expression);
       const run = opts.evaluate;
       if (run === undefined) return Promise.resolve(notConfigured<unknown>("evaluateJs"));
       return Promise.resolve(sessionId === undefined ? run(expression) : run(expression, sessionId));
@@ -156,9 +163,9 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     transport: () => stub.transport,
     userDataDir: () => undefined,
     profilePin: () => null,
-    setProfilePin: () => {},
+    setProfilePin: noop,
     profileContextId: () => undefined,
-    setProfileContextId: () => {},
+    setProfileContextId: noop,
     seedPinnedProfileWindow: () => Promise.resolve(notConfigured("seedPinnedProfileWindow")),
     mutationMutex: () => mutex,
   };
@@ -170,9 +177,31 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     calls: stub.calls,
     emit: stub.emit,
     callsTo: (method) => stub.calls.filter((c) => c.method === method),
-    evaluated,
+    evaluated: expressions,
   };
 };
+
+// pi's ExtensionContext carries a ModelRegistry, a class with private fields, so no structural fake can satisfy
+// it. Only browser_run_script forwards the context (to user scripts) and no test runs one, so the one cast lives
+// here rather than in every test that builds a HandlerContext.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- pi's host context cannot be constructed outside pi
+const absentExtensionContext: ExtensionContext = undefined as never;
+
+// Two microtask turns let a session's event loop deliver an emitted event and run its handlers.
+export const flush = async (): Promise<void> => {
+  await tick();
+  await tick();
+};
+
+// A canned Runtime.evaluate result carrying `value` as a page-side JS value.
+export const evaluated = (value: unknown): CannedResult => ok({ result: { type: typeof value, value } });
+
+export const handlerContext = (client: BrowserClient, signal?: AbortSignal): HandlerContext => ({
+  client,
+  signal,
+  onUpdate: noop,
+  extensionCtx: absentExtensionContext,
+});
 
 export const axNode = (
   nodeId: string,

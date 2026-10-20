@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, fromClient } from "./cdp-call";
 
 type HistoryEntry = { readonly id: number; readonly url: string; readonly title: string };
 type History = { readonly entries: ReadonlyArray<HistoryEntry>; readonly currentIndex: number };
@@ -64,9 +64,9 @@ export const reloadTool = defineBrowserTool({
   async handler(_a, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = await cdpCall(client, "Page.reload", {});
     if (!r.success) return r;
-    const info = await client.pageInfo();
-    if (!info.success) return err({ kind: "cdp_error", message: info.error.message });
-    if ("dialog" in info.data) {
+    const info = fromClient(await client.pageInfo(), "pageInfo");
+    if (!info.success) return info;
+    if (info.data.kind === "dialog") {
       return ok({
         text: `Reloaded. ⚠️ Dialog open: ${info.data.dialog.type}`,
         details: { dialog: info.data.dialog },

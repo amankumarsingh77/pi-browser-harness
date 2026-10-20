@@ -1,5 +1,5 @@
 export type DrainPage<T> = {
-  readonly records: T[];
+  readonly records: ReadonlyArray<T>;
   readonly total: number;
   readonly bufferOverflowed: boolean;
 };
@@ -10,7 +10,7 @@ export type RecordStore<K, T> = {
   delete(key: K): void;
   values(): IterableIterator<T>;
   // Takes the overflow flag as it pages, so each drain reports only the loss since the previous one.
-  page(matched: T[], limit: number | undefined): DrainPage<T>;
+  page(matched: ReadonlyArray<T>, limit: number | undefined): DrainPage<T>;
   clear(): void;
 };
 

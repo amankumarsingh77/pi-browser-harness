@@ -1,0 +1,22 @@
+{
+  // Page-side JavaScript: functions whose *source text* is shipped into Chrome through
+  // Runtime.callFunctionOn / Runtime.evaluate (see src/domains/page/inject.ts). They are
+  // type-checked against the DOM lib only — no node types — so a page function cannot
+  // accidentally reach for Buffer, process or a node-only API that does not exist in the page.
+  //
+  // This is a composite project: tsconfig.json and tsconfig.test.json reference it and consume
+  // its emitted .d.ts (dist/page-types/), which is how the node side shares the page result
+  // types without pulling the DOM lib into normal src. `npm run typecheck` builds it first.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "./src/domains/page",
+    "outDir": "./dist/page-types",
+    "tsBuildInfoFile": "./dist/page-types/tsconfig.page.tsbuildinfo",
+    "lib": ["dom", "dom.iterable", "es2022"],
+    "types": []
+  },
+  "include": ["src/domains/page/**/*.page.ts"]
+}

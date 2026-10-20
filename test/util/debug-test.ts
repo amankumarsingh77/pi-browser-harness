@@ -24,6 +24,17 @@ describe("debug click overlay switch", () => {
     assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "" }), false);
   });
 
+  test("BH_DEBUG_CLICKS=true turns it on, case-insensitively", () => {
+    assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "true" }), true);
+    assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "TRUE" }), true);
+  });
+
+  test("BH_DEBUG_CLICKS=0 and =false leave it off", () => {
+    assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "0" }), false);
+    assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "false" }), false);
+    assert.equal(debugClicksEnabled({ BH_DEBUG_CLICKS: "no" }), false);
+  });
+
   test("the flag can be turned back off", () => {
     setDebugClicks(true);
     setDebugClicks(false);

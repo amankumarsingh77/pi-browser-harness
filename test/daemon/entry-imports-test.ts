@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "../../src/util/guards";
 
 // The daemon is spawned as a separate Node process that resolves modules from the package directory
 // upward. pi installs packages with dev and peer dependencies omitted and maps host-provided packages
 // (typebox) only inside the extension host, so anything the daemon imports must be a runtime
 // dependency of this package or a Node builtin. Issue #34 was `Cannot find module 'typebox'`.
+const manifest: unknown = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
 const RUNTIME_DEPENDENCIES: ReadonlySet<string> = new Set(
-  Object.keys(JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).dependencies ?? {}),
+  isRecord(manifest) && isRecord(manifest["dependencies"]) ? Object.keys(manifest["dependencies"]) : [],
 );
 
 const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "src");
@@ -39,7 +41,7 @@ const externalImportsReachableFrom = (entry: string): ReadonlyMap<string, string
 
 describe("daemon entrypoint imports", () => {
   test("the daemon only reaches runtime dependencies, never host-provided or dev packages", () => {
-    const external = externalImportsReachableFrom(join(srcRoot, "daemon", "index.ts"));
+    const external = externalImportsReachableFrom(join(srcRoot, "daemon", "main.ts"));
     const offenders = [...external].filter(([spec]) => !RUNTIME_DEPENDENCIES.has(spec.split("/")[0] ?? spec));
     assert.deepEqual(
       offenders,

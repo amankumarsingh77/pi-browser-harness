@@ -26,14 +26,40 @@ export type WireEvent = {
   readonly sessionId?: string;
 };
 
-export type WireControl = {
-  readonly type: "control";
-  readonly action: "register" | "registered" | "deregister" | "shutdown";
-  readonly clientId?: string;
-  readonly reason?: string;
-};
+export const CONTROL_ACTIONS = ["register", "registered", "deregister", "shutdown"] as const;
+
+export type ControlAction = (typeof CONTROL_ACTIONS)[number];
+
+// Each action carries exactly the fields it needs, so a handler that has matched on `action`
+// never has to re-check what the guard already proved.
+export type WireRegister = { readonly type: "control"; readonly action: "register"; readonly clientId: string };
+export type WireRegistered = { readonly type: "control"; readonly action: "registered"; readonly clientId: string };
+export type WireDeregister = { readonly type: "control"; readonly action: "deregister"; readonly clientId: string };
+export type WireShutdown = { readonly type: "control"; readonly action: "shutdown"; readonly reason?: string };
+
+export type WireControl = WireRegister | WireRegistered | WireDeregister | WireShutdown;
 
 export type WireMessage = WireRequest | WireResponse | WireEvent | WireControl;
+
+const isControlAction = (v: unknown): v is ControlAction =>
+  typeof v === "string" && CONTROL_ACTIONS.some((a) => a === v);
+
+const isOptionalString = (v: unknown): v is string | undefined => v === undefined || typeof v === "string";
+
+const isOptionalRecord = (v: unknown): v is Record<string, unknown> | undefined => v === undefined || isRecord(v);
+
+const isWireControl = (v: Record<string, unknown>): v is WireControl => {
+  const action = v["action"];
+  if (!isControlAction(action)) return false;
+  switch (action) {
+    case "register":
+    case "registered":
+    case "deregister":
+      return typeof v["clientId"] === "string";
+    case "shutdown":
+      return isOptionalString(v["reason"]);
+  }
+};
 
 const isWireMessage = (v: unknown): v is WireMessage => {
   if (!isRecord(v)) return false;
@@ -44,9 +70,8 @@ const isWireMessage = (v: unknown): v is WireMessage => {
     case "request": {
       if (typeof v["id"] !== "number") return false;
       if (typeof v["method"] !== "string") return false;
-      const sid = v["sessionId"];
-      if (sid !== undefined && typeof sid !== "string") return false;
-      return true;
+      if (!isOptionalRecord(v["params"])) return false;
+      return isOptionalString(v["sessionId"]);
     }
     case "response": {
       if (typeof v["id"] !== "number") return false;
@@ -55,28 +80,17 @@ const isWireMessage = (v: unknown): v is WireMessage => {
         if (!isRecord(errVal)) return false;
         if (typeof errVal["message"] !== "string") return false;
         if (typeof errVal["code"] !== "number") return false;
+        if (!isOptionalString(errVal["data"])) return false;
       }
       return true;
     }
     case "event": {
       if (typeof v["method"] !== "string") return false;
-      const sid = v["sessionId"];
-      if (sid !== undefined && typeof sid !== "string") return false;
-      return true;
+      if (!isOptionalRecord(v["params"])) return false;
+      return isOptionalString(v["sessionId"]);
     }
-    case "control": {
-      const action = v["action"];
-      if (typeof action !== "string") return false;
-      if (!["register", "registered", "deregister", "shutdown"].includes(action)) return false;
-      const cid = v["clientId"];
-      if (
-        (action === "register" || action === "registered" || action === "deregister") &&
-        typeof cid !== "string"
-      ) {
-        return false;
-      }
-      return true;
-    }
+    case "control":
+      return isWireControl(v);
     default:
       return false;
   }
@@ -105,6 +119,22 @@ export const DAEMON_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export const DAEMON_MAX_CLIENTS = 16;
 
+// How long a caller waits for a Chrome connection before being told "not connected". The dial
+// itself keeps going (see CDP_ATTEMPT_LIFETIME_MS): a human answering Chrome's "Allow remote
+// debugging" prompt takes longer than any tool call should block.
 export const CDP_CONNECT_TIMEOUT_MS = 10_000;
+
+// How long one dial stays open waiting for Chrome. One dial is one "Allow" prompt, so the attempt
+// must outlive a user who is away from the keyboard rather than be replaced by a fresh prompt.
+export const CDP_ATTEMPT_LIFETIME_MS = 5 * 60 * 1000;
+
+// After a dial fails outright (discovery failed, refused, denied, lifetime passed), no automatic
+// re-dial happens until this cooldown passes; it doubles per consecutive failure up to the cap.
+// An explicit Daemon.reconnect request (/browser-setup, /browser-reload-daemon) bypasses it.
+export const CDP_RECONNECT_COOLDOWN_MS = 30_000;
+export const CDP_RECONNECT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
+
+// The one request the daemon answers itself: clears the reconnect cooldown and dials Chrome now.
+export const DAEMON_RECONNECT_METHOD = "Daemon.reconnect";
 
 export const CDP_COMMAND_TIMEOUT_MS = 10_000;

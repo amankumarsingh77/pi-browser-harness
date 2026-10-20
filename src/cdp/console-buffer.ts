@@ -1,32 +1,39 @@
+import { Type, type Static } from "typebox";
 import { decodeEvent } from "./events";
-import { createRecordStore } from "./record-store";
+import { createRecordStore, type DrainPage } from "./record-store";
 
 export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
 
-export type ConsoleRecord = {
-  seq: number;
-  timestampMs: number;
-  level: ConsoleLevel;
-  text: string;
-  source: "console-api" | "log-entry";
-  url?: string;
-  lineNumber?: number;
-  stackTrace?: string;
-};
+// The one declaration of a console record: the buffer produces it and browser_console validates replayed
+// details against it, so the two cannot drift.
+export const ConsoleRecordSchema = Type.Object({
+  seq: Type.Number(),
+  timestampMs: Type.Number(),
+  level: Type.Union([
+    Type.Literal("log"),
+    Type.Literal("info"),
+    Type.Literal("warn"),
+    Type.Literal("error"),
+    Type.Literal("debug"),
+  ]),
+  text: Type.String(),
+  source: Type.Union([Type.Literal("console-api"), Type.Literal("log-entry")]),
+  url: Type.Optional(Type.String()),
+  lineNumber: Type.Optional(Type.Number()),
+  stackTrace: Type.Optional(Type.String()),
+});
+
+export type ConsoleRecord = Readonly<Static<typeof ConsoleRecordSchema>>;
 
 export type ConsoleFilter = {
-  levels?: ConsoleLevel[];
-  textPattern?: string;
-  sinceSeq?: number;
-  sinceMs?: number;
-  limit?: number;
+  readonly levels?: ReadonlyArray<ConsoleLevel>;
+  readonly textPattern?: string;
+  readonly sinceSeq?: number;
+  readonly sinceMs?: number;
+  readonly limit?: number;
 };
 
-export type ConsoleDrainResult = {
-  readonly records: ConsoleRecord[];
-  readonly total: number;
-  readonly bufferOverflowed: boolean;
-};
+export type ConsoleDrainResult = DrainPage<ConsoleRecord>;
 
 export type ConsoleBuffer = {
   ingestConsoleApi(p: unknown): void;
@@ -43,7 +50,9 @@ const compileTextMatcher = (pattern: string): ((text: string) => boolean) => {
     try {
       const re = new RegExp(pattern.slice(1, -1));
       return (text) => re.test(text);
-    } catch {}
+    } catch {
+      // Not a valid regex: fall through and match the pattern as a literal substring.
+    }
   }
   return (text) => text.includes(pattern);
 };
@@ -60,7 +69,8 @@ const stringifyRemoteObject = (
     try {
       return JSON.stringify(arg.value);
     } catch {
-      return String(arg.value);
+      // Circular or BigInt payloads cannot be JSON-encoded; fall back to the CDP description.
+      return arg.description ?? arg.type ?? "";
     }
   }
   if (arg.description !== undefined) return arg.description;
@@ -69,6 +79,8 @@ const stringifyRemoteObject = (
 
 const mapConsoleApiLevel = (type: string | undefined): ConsoleLevel => {
   switch (type) {
+    case undefined:
+      return "log";
     case "error":
     case "assert":
       return "error";
@@ -86,6 +98,8 @@ const mapConsoleApiLevel = (type: string | undefined): ConsoleLevel => {
 
 const mapLogEntryLevel = (level: string | undefined): ConsoleLevel => {
   switch (level) {
+    case undefined:
+      return "info";
     case "error":
       return "error";
     case "warning":

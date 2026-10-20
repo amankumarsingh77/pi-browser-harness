@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { cdpCall } from "./cdp-call";
+import { cdpCall, fromClient } from "./cdp-call";
 
 const ScrollArgs = Type.Object({
   x: Type.Optional(Type.Number({ description: "X coordinate where to scroll. Default: viewport center" })),
@@ -25,9 +25,9 @@ export const scrollTool = defineBrowserTool({
   parameters: ScrollArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const info = await client.pageInfo();
-    if (!info.success) return err({ kind: "cdp_error", message: info.error.message });
-    if ("dialog" in info.data) {
+    const info = fromClient(await client.pageInfo(), "pageInfo");
+    if (!info.success) return info;
+    if (info.data.kind === "dialog") {
       return err({
         kind: "invalid_state",
         message: `Dialog open: ${info.data.dialog.type} — ${info.data.dialog.message}`,

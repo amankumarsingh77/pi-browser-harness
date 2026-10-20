@@ -1,37 +1,40 @@
+import { Type, type Static } from "typebox";
 import { decodeEvent, type EventParamsOf } from "./events";
-import { createRecordStore } from "./record-store";
+import { createRecordStore, type DrainPage } from "./record-store";
 
-export type NetworkRecord = {
-  requestId: string;
-  method: string;
-  url: string;
-  status?: number;
-  statusText?: string;
-  type: string;
-  mimeType?: string;
-  requestStartedMs: number;
-  durationMs?: number;
-  requestBodySize: number;
-  responseBodySize?: number;
-  failed?: boolean;
-  errorText?: string;
-  body?: string | null;
-};
+// Only the buffer itself may update a record in place as follow-up events arrive; everything it hands out is readonly.
+// The one declaration of a network record: the buffer produces it and browser_network_requests validates
+// replayed details against it, so the two cannot drift.
+export const NetworkRecordSchema = Type.Object({
+  requestId: Type.String(),
+  method: Type.String(),
+  url: Type.String(),
+  status: Type.Optional(Type.Number()),
+  statusText: Type.Optional(Type.String()),
+  type: Type.String(),
+  mimeType: Type.Optional(Type.String()),
+  requestStartedMs: Type.Number(),
+  durationMs: Type.Optional(Type.Number()),
+  requestBodySize: Type.Number(),
+  responseBodySize: Type.Optional(Type.Number()),
+  failed: Type.Optional(Type.Boolean()),
+  errorText: Type.Optional(Type.String()),
+  body: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
+
+type MutableNetworkRecord = Static<typeof NetworkRecordSchema>;
+export type NetworkRecord = Readonly<MutableNetworkRecord>;
 
 export type NetworkFilter = {
-  urlPattern?: string;
-  methodFilter?: string[];
-  statusFilter?: { min?: number; max?: number };
-  resourceTypes?: string[];
-  sinceMs?: number;
-  limit?: number;
+  readonly urlPattern?: string;
+  readonly methodFilter?: ReadonlyArray<string>;
+  readonly statusFilter?: { readonly min?: number; readonly max?: number };
+  readonly resourceTypes?: ReadonlyArray<string>;
+  readonly sinceMs?: number;
+  readonly limit?: number;
 };
 
-export type DrainResult = {
-  readonly records: NetworkRecord[];
-  readonly total: number;
-  readonly bufferOverflowed: boolean;
-};
+export type DrainResult = DrainPage<NetworkRecord>;
 
 export type NetworkBuffer = {
   ingestRequestWillBeSent(p: unknown): void;
@@ -47,7 +50,9 @@ const compileUrlMatcher = (pattern: string): ((url: string) => boolean) => {
     try {
       const re = new RegExp(pattern.slice(1, -1));
       return (url) => re.test(url);
-    } catch {}
+    } catch {
+      // Not a valid regex: fall through and match the pattern as a literal substring.
+    }
   }
   return (url) => url.includes(pattern);
 };
@@ -55,13 +60,13 @@ const compileUrlMatcher = (pattern: string): ((url: string) => boolean) => {
 type UpdateEvent = "Network.responseReceived" | "Network.loadingFinished" | "Network.loadingFailed";
 
 export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
-  const records = createRecordStore<string, NetworkRecord>(capacity);
+  const records = createRecordStore<string, MutableNetworkRecord>(capacity);
 
   // All three follow-up events say the same thing first: decode, find the request they belong to, give up quietly if it is gone.
   const update = <E extends UpdateEvent>(
     method: E,
     p: unknown,
-    apply: (r: NetworkRecord, params: EventParamsOf<E>) => void,
+    apply: (r: MutableNetworkRecord, params: EventParamsOf<E>) => void,
   ): void => {
     const decoded = decodeEvent(method, p);
     if (!decoded.success) return;
@@ -80,6 +85,7 @@ export const createNetworkBuffer = (capacity = 500): NetworkBuffer => {
       const url = params?.request.url;
       const method = params?.request.method;
       if (!id || !url || !method) return;
+      // Delete before set: the store evicts by insertion order, so a request id that is re-sent (redirects reuse it) must move to the newest slot rather than keep its old age.
       records.delete(id);
       const postData = params.request.postData;
       records.set(id, {

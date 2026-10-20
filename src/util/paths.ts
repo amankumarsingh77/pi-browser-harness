@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // `relative` rather than a string prefix: it is separator-agnostic and carries each platform's
 // own case rules, so a Windows path is not rejected for its backslashes or its drive-letter case.
@@ -9,7 +9,8 @@ export const isPathWithin = (root: string, target: string): boolean => {
   const absTarget = resolve(target);
   if (absTarget === absRoot) return true;
   const rel = relative(absRoot, absTarget);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  // A bare ".." or a ".."-led segment escapes; a sibling merely named "..foo" does not.
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 };
 
 const NAMESPACE_RE = /^[a-zA-Z0-9_-]+$/;

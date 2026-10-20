@@ -4,11 +4,14 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  isLinuxBrowserComm,
+  parseProcCmdline,
   parseUserDataDirFlag,
   rankBrowserCandidate,
   resolveBrowserExecutable,
   spawnableExePath,
   stripDeletedSuffix,
+  userDataDirFromArgv,
 } from "../../src/profile/browser-process";
 
 describe("browser-process parsing and candidate ranking", () => {
@@ -33,6 +36,40 @@ describe("browser-process parsing and candidate ranking", () => {
 
   test("B1: empty value → undefined", () => {
     assert.equal(parseUserDataDirFlag("chrome --user-data-dir="), undefined);
+  });
+
+  test("B8: ps truncates comm to 15 chars, so chromium-browser matches as chromium-browse", () => {
+    assert.equal(isLinuxBrowserComm("chromium-browse"), true);
+    assert.equal(isLinuxBrowserComm("chromium-browser"), false);
+    assert.equal(isLinuxBrowserComm("chrome"), true);
+    assert.equal(isLinuxBrowserComm("Google-Chrome"), true);
+    assert.equal(isLinuxBrowserComm("brave-browser"), true);
+  });
+
+  test("B8: unrelated process names do not match", () => {
+    assert.equal(isLinuxBrowserComm("chrome_crashpad"), false);
+    assert.equal(isLinuxBrowserComm("node"), false);
+    assert.equal(isLinuxBrowserComm(""), false);
+  });
+
+  test("B9: a NUL-separated cmdline keeps a space inside argv[0]", () => {
+    const argv = parseProcCmdline("/opt/My Browser/chrome\0--user-data-dir=/home/u/my dir\0--flag\0");
+    assert.deepEqual([...argv], ["/opt/My Browser/chrome", "--user-data-dir=/home/u/my dir", "--flag"]);
+    assert.equal(userDataDirFromArgv(argv), "/home/u/my dir");
+  });
+
+  test("B9: a cmdline without NULs splits on whitespace", () => {
+    assert.deepEqual([...parseProcCmdline("/usr/bin/chrome  --foo\n")], ["/usr/bin/chrome", "--foo"]);
+  });
+
+  test("B9: an empty cmdline yields no argv", () => {
+    assert.deepEqual([...parseProcCmdline("")], []);
+    assert.deepEqual([...parseProcCmdline("\0")], []);
+  });
+
+  test("B9: an absent or empty --user-data-dir reads as undefined", () => {
+    assert.equal(userDataDirFromArgv(["/usr/bin/chrome"]), undefined);
+    assert.equal(userDataDirFromArgv(["/usr/bin/chrome", "--user-data-dir="]), undefined);
   });
 
   test("B2: exact user-data-dir match outranks a flagless process", () => {

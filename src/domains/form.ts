@@ -1,9 +1,46 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { detailsOf, isPageResult, type PageResult, resolveAndCall, runOnElement } from "./element-call";
-import { fillBody } from "./fill-engine";
+import { defineBrowserTool, type JsonObject, type ToolErr, type ToolOk } from "../util/tool";
+import { detailsOf, type ElementOutcome, isPageResult, resolveAndCall, runOnElement } from "./element-call";
+import { fillField, type FillOptions } from "./page/fill.page";
+import { type FocusResult, focusElement, type SelectOption, type SelectResult, type SelectWanted, selectOption, setChecked } from "./page/form.page";
+import { elementFunctionSource } from "./page/inject";
 import { interactiveDiff } from "./ref-resolve";
+
+type Target = { readonly ref?: string | undefined; readonly selector?: string | undefined };
+
+const targetLabel = (t: Target): string => t.ref ?? t.selector ?? "";
+
+// Only the locator the caller actually passed goes into details; an undefined key would not survive pi's JSON store.
+const targetDetails = (t: Target): JsonObject => ({
+  ...(t.ref !== undefined ? { ref: t.ref } : {}),
+  ...(t.selector !== undefined ? { selector: t.selector } : {}),
+});
+
+const noMatch = (t: Target): ToolErr => ({
+  kind: "invalid_state",
+  message: `No element matched: ${targetLabel(t)}`,
+  details: targetDetails(t),
+});
+
+// A page function that returned something the guard does not recognise is a harness bug, not a missing element.
+const badShape = (t: Target, what: string): ToolErr => ({
+  kind: "internal",
+  message: `unexpected page result shape from ${what}`,
+  details: targetDetails(t),
+});
+
+// Narrows an element outcome to the page's typed result, or returns the error to surface.
+const narrow = <T>(
+  outcome: ElementOutcome,
+  t: Target,
+  what: string,
+  guard: (v: unknown) => v is T,
+): Result<T, ToolErr> => {
+  if (!outcome.found) return err(noMatch(t));
+  if (!guard(outcome.value)) return err(badShape(t, what));
+  return ok(outcome.value);
+};
 
 const FillArgs = Type.Object({
   ref: Type.Optional(
@@ -16,9 +53,8 @@ const FillArgs = Type.Object({
   value: Type.String({ description: "Value to set in the field" }),
 });
 
-const FILL_BODY = `const value = arg;\n${fillBody({ rejectSelect: true, focusFirst: false })}`;
-
-const NOT_FOUND: PageResult = { ok: false, reason: "not_found" };
+const FILL_FN = elementFunctionSource(fillField);
+const FILL_OPTIONS: FillOptions = { rejectSelect: true, focusFirst: false };
 
 export const fillTool = defineBrowserTool({
   name: "browser_fill",
@@ -37,50 +73,29 @@ export const fillTool = defineBrowserTool({
   parameters: FillArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await runOnElement(client, {
-      ref: args.ref,
-      selector: args.selector,
-      fnBody: FILL_BODY,
-      arg: args.value,
-      notFound: NOT_FOUND,
-    });
+    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, functionDeclaration: FILL_FN, args: [args.value, FILL_OPTIONS] });
     if (!r.success) return r;
-    const res = isPageResult(r.data) ? r.data : undefined;
-    const target = args.ref ?? args.selector ?? "";
-    if (res === undefined || res.reason === "not_found") {
-      return err({
-        kind: "invalid_state",
-        message: `No element matched: ${target}`,
-        details: { ref: args.ref, selector: args.selector },
-      });
-    }
+    const narrowed = narrow(r.data, args, "browser_fill", isPageResult);
+    if (!narrowed.success) return narrowed;
+    const res = narrowed.data;
+    const target = targetLabel(args);
     if (!res.ok) {
       const details = { ref: args.ref, selector: args.selector, ...(res.tag !== undefined ? { tag: res.tag } : {}) };
-      if (res.kind === "select") {
+      if (res.code === "select_rejected") {
         return err({
           kind: "invalid_state",
           message: `Element <select> is not fillable (not an input, textarea, or contenteditable): ${target}. For <select> use browser_select_option.`,
           details,
         });
       }
-      return err({
-        kind: "invalid_state",
-        message: `Could not fill ${target}: ${res.reason ?? "unknown reason"}`,
-        details,
-      });
+      return err({ kind: "invalid_state", message: `Could not fill ${target}: ${res.reason}`, details });
     }
-    const shown = res.value !== undefined ? JSON.stringify(res.value) : `checked=${res.checked === true}`;
+    const verified = "checked" in res ? res.checked : res.value;
+    const shown = "checked" in res ? `checked=${res.checked}` : JSON.stringify(res.value);
     const diff = await interactiveDiff(client);
     return ok({
       text: `Filled ${target} = ${shown}${diff}`,
-      details: {
-        ref: args.ref,
-        selector: args.selector,
-        value: args.value,
-        verified: res.value ?? res.checked,
-        ...(res.tag !== undefined ? { tag: res.tag } : {}),
-        ...(res.kind !== undefined ? { kind: res.kind } : {}),
-      },
+      details: { ...targetDetails(args), value: args.value, verified, tag: res.tag, kind: res.kind },
     });
   },
 });
@@ -92,21 +107,13 @@ const FocusArgs = Type.Object({
   selector: Type.Optional(Type.String({ description: "CSS selector of the element to focus (fallback when no ref)" })),
 });
 
-type FocusResult = { status: "ok"; tag: string } | { status: "not_found" } | { status: "not_focusable"; tag: string };
-
 const isFocusResult = (v: unknown): v is FocusResult => {
   if (typeof v !== "object" || v === null || !("status" in v)) return false;
-  if (v.status === "not_found") return true;
   if (v.status === "ok" || v.status === "not_focusable") return "tag" in v && typeof v.tag === "string";
   return false;
 };
 
-const FOCUS_FN = `
-  const el = this;
-  if (typeof el.focus !== "function") return { status: "not_focusable", tag: el.tagName };
-  el.focus();
-  return document.activeElement === el ? { status: "ok", tag: el.tagName } : { status: "not_focusable", tag: el.tagName };
-`;
+const FOCUS_FN = elementFunctionSource(focusElement);
 
 export const focusTool = defineBrowserTool({
   name: "browser_focus",
@@ -120,17 +127,16 @@ export const focusTool = defineBrowserTool({
   parameters: FocusArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: FOCUS_FN, arg: "" });
+    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, functionDeclaration: FOCUS_FN, args: [] });
     if (!r.success) return r;
-    const res = isFocusResult(r.data) ? r.data : undefined;
-    const target = args.ref ?? args.selector ?? "";
-    if (res === undefined || res.status === "not_found") {
-      return err({ kind: "invalid_state", message: `No element matched: ${target}`, details: { ref: args.ref, selector: args.selector } });
-    }
+    const narrowed = narrow(r.data, args, "browser_focus", isFocusResult);
+    if (!narrowed.success) return narrowed;
+    const res = narrowed.data;
+    const target = targetLabel(args);
     if (res.status === "not_focusable") {
-      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> could not be focused: ${target}`, details: { ref: args.ref, selector: args.selector, tag: res.tag } });
+      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> could not be focused: ${target}`, details: { ...targetDetails(args), tag: res.tag } });
     }
-    return ok({ text: `Focused ${target}`, details: { ref: args.ref, selector: args.selector, tag: res.tag } });
+    return ok({ text: `Focused ${target}`, details: { ...targetDetails(args), tag: res.tag } });
   },
 });
 
@@ -144,20 +150,13 @@ const SelectOptionArgs = Type.Object({
   index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based option index to select" })),
 });
 
-type SelectResult =
-  | { status: "ok"; value: string; label: string }
-  | { status: "not_found" }
-  | { status: "not_select"; tag: string }
-  | { status: "no_match"; options: ReadonlyArray<{ value: string; label: string }> };
-
-const isSelectOption = (v: unknown): v is { value: string; label: string } =>
+const isSelectOption = (v: unknown): v is SelectOption =>
   typeof v === "object" && v !== null
   && "value" in v && typeof v.value === "string"
   && "label" in v && typeof v.label === "string";
 
 const isSelectResult = (v: unknown): v is SelectResult => {
   if (typeof v !== "object" || v === null || !("status" in v)) return false;
-  if (v.status === "not_found") return true;
   if (v.status === "not_select") return "tag" in v && typeof v.tag === "string";
   if (v.status === "ok") {
     return "value" in v && typeof v.value === "string" && "label" in v && typeof v.label === "string";
@@ -168,21 +167,7 @@ const isSelectResult = (v: unknown): v is SelectResult => {
   return false;
 };
 
-const SELECT_FN = `
-  const el = this;
-  if (el.tagName !== "SELECT") return { status: "not_select", tag: el.tagName };
-  const opts = Array.from(el.options);
-  const wv = arg.wv, wl = arg.wl, wi = arg.wi;
-  let opt = null;
-  if (wi !== null) opt = opts[wi] || null;
-  else if (wv !== null) opt = opts.find(o => o.value === wv) || null;
-  else if (wl !== null) opt = opts.find(o => o.text === wl) || null;
-  if (!opt) return { status: "no_match", options: opts.map(o => ({ value: o.value, label: o.text })) };
-  el.value = opt.value;
-  el.dispatchEvent(new Event("input", { bubbles: true }));
-  el.dispatchEvent(new Event("change", { bubbles: true }));
-  return { status: "ok", value: opt.value, label: opt.text };
-`;
+const SELECT_FN = elementFunctionSource(selectOption);
 
 export const selectOptionTool = defineBrowserTool({
   name: "browser_select_option",
@@ -198,51 +183,34 @@ export const selectOptionTool = defineBrowserTool({
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     if (args.value === undefined && args.label === undefined && args.index === undefined) {
-      return err({ kind: "invalid_state", message: "Provide one of value, label, or index." });
+      return err({ kind: "invalid_args", message: "Provide one of value, label, or index." });
     }
-    // null sentinels distinguish "not provided" from a real empty-string match.
-    const arg = { wv: args.value ?? null, wl: args.label ?? null, wi: args.index ?? null };
-    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, fnBody: SELECT_FN, arg });
+    const wanted: SelectWanted = { wv: args.value ?? null, wl: args.label ?? null, wi: args.index ?? null };
+    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, functionDeclaration: SELECT_FN, args: [wanted] });
     if (!r.success) return r;
-    const res = isSelectResult(r.data) ? r.data : undefined;
-    const target = args.ref ?? args.selector ?? "";
-    if (res === undefined || res.status === "not_found") {
-      return err({ kind: "invalid_state", message: `No element matched: ${target}`, details: { ref: args.ref, selector: args.selector } });
-    }
+    const narrowed = narrow(r.data, args, "browser_select_option", isSelectResult);
+    if (!narrowed.success) return narrowed;
+    const res = narrowed.data;
+    const target = targetLabel(args);
     if (res.status === "not_select") {
-      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> is not a <select>: ${target}`, details: { ref: args.ref, selector: args.selector, tag: res.tag } });
+      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> is not a <select>: ${target}`, details: { ...targetDetails(args), tag: res.tag } });
     }
     if (res.status === "no_match") {
       return err({
         kind: "invalid_state",
         message: `No matching option in ${target}. Available: ${res.options.map((o) => o.label).join(", ")}`,
-        details: { ref: args.ref, selector: args.selector, options: res.options },
+        details: { ...targetDetails(args), options: res.options },
       });
     }
     const diff = await interactiveDiff(client);
     return ok({
       text: `Selected "${res.label}" (value=${JSON.stringify(res.value)}) in ${target}${diff}`,
-      details: { ref: args.ref, selector: args.selector, value: res.value, label: res.label },
+      details: { ...targetDetails(args), value: res.value, label: res.label },
     });
   },
 });
 
-const CHECK_FN = `
-function(checked) {
-  const el = this;
-  const tag = (el.tagName || "").toLowerCase();
-  const type = (el.type || "").toLowerCase();
-  if (tag !== "input" || (type !== "checkbox" && type !== "radio")) return { ok: false, reason: "ref is not a checkbox or radio" };
-  if (el.disabled) return { ok: false, reason: "element is disabled" };
-  const want = checked === true;
-  let changed = false;
-  if (el.checked !== want) {
-    try { el.click(); } catch (e) {}
-    if (el.checked !== want) { el.checked = want; el.dispatchEvent(new Event("change", { bubbles: true })); }
-    changed = true;
-  }
-  return { ok: true, checked: el.checked, changed: changed };
-}`;
+const CHECK_FN = elementFunctionSource(setChecked);
 
 const SetCheckedArgs = Type.Object({
   ref: Type.String({ description: "Stable element ref of a checkbox or radio from browser_snapshot (e.g. 'e7')." }),
@@ -265,10 +233,13 @@ export const setCheckedTool = defineBrowserTool({
     if (!r.success) return r;
     const res = r.data;
     if (!res.ok) {
-      return err({ kind: "invalid_state", message: `Could not set checked on ref ${args.ref}: ${res.reason ?? "unknown reason"}`, details: detailsOf(args.ref, res) });
+      return err({ kind: "invalid_state", message: `Could not set checked on ref ${args.ref}: ${res.reason}`, details: detailsOf(args.ref, res) });
+    }
+    if (!("checked" in res)) {
+      return err({ kind: "internal", message: `unexpected page result shape from browser_set_checked (kind ${res.kind})`, details: { ref: args.ref } });
     }
     return ok({
-      text: `Set ref ${args.ref} checked=${res.checked}` + (res.changed === false ? " (already)" : ""),
+      text: `Set ref ${args.ref} checked=${res.checked}` + (res.changed ? "" : " (already)"),
       details: detailsOf(args.ref, res),
     });
   },

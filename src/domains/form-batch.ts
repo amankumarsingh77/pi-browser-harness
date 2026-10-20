@@ -1,10 +1,12 @@
 import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { fillDeclaration } from "./fill-engine";
+import { defineBrowserTool, type JsonObject, type ToolErr, type ToolOk } from "../util/tool";
 import { detailsOf, resolveAndCall } from "./element-call";
+import { fillField, type FillOptions } from "./page/fill.page";
+import { elementFunctionSource } from "./page/inject";
 
-const FILL_FN = fillDeclaration({ rejectSelect: false, focusFirst: true });
+const FILL_FN = elementFunctionSource(fillField);
+const FILL_OPTIONS: FillOptions = { rejectSelect: false, focusFirst: true };
 
 const FieldValue = Type.Union([Type.String(), Type.Boolean()], {
   description: "Value to set. String for text inputs / textareas / selects / contenteditable; boolean for checkboxes & radios.",
@@ -34,23 +36,24 @@ export const fillFormTool = defineBrowserTool({
   parameters: FillFormArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const results: Array<Readonly<Record<string, unknown>>> = [];
+    const results: JsonObject[] = [];
     let okCount = 0;
     const issues: string[] = [];
     for (const f of args.fields) {
-      const r = await resolveAndCall(client, f.ref, FILL_FN, [f.value]);
+      const r = await resolveAndCall(client, f.ref, FILL_FN, [f.value, FILL_OPTIONS]);
       if (!r.success) {
         results.push({ ref: f.ref, ok: false, error: r.error.message });
         issues.push(`ref ${f.ref} (${r.error.message})`);
         continue;
       }
       const res = r.data;
-      const wanted = typeof f.value === "boolean" ? undefined : String(f.value);
-      const got = res.value !== undefined ? String(res.value) : undefined;
-      const mismatch = wanted !== undefined && got !== undefined && got !== wanted && res.text !== wanted;
-      const fieldOk = res.ok === true && !mismatch;
+      const wanted = typeof f.value === "boolean" ? undefined : f.value;
+      const got = res.ok && "value" in res ? res.value : undefined;
+      const label = res.ok && res.kind === "select" ? res.text : undefined;
+      const mismatch = wanted !== undefined && got !== undefined && got !== wanted && label !== wanted;
+      const fieldOk = res.ok && !mismatch;
       if (fieldOk) okCount++;
-      else issues.push(`ref ${f.ref} (${res.ok === false ? (res.reason ?? "failed") : "value mismatch"})`);
+      else issues.push(`ref ${f.ref} (${res.ok ? "value mismatch" : res.reason})`);
       results.push({ ref: f.ref, ok: fieldOk, mismatch, ...detailsOf(f.ref, res) });
     }
     const text =

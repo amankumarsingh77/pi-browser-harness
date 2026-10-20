@@ -14,15 +14,21 @@ const server = createServer((conn) => {
   const rl = createInterface({ input: conn, crlfDelay: Infinity });
   rl.on("line", (line) => {
     const msg = deserialize(line);
-    if (msg?.type === "control" && msg.action === "register" && msg.clientId !== undefined) {
+    if (msg?.type === "control" && msg.action === "register") {
       conn.write(serialize({ type: "control", action: "registered", clientId: msg.clientId }) + "\n");
     }
   });
 });
 server.unref();
-server.listen(socketPath, async () => {
+const connect = async (): Promise<void> => {
   const transport = createDaemonTransport("fixture-client", socketPath);
   const r = await transport.connect("");
   console.log(r.success ? "connected" : `connect failed: ${r.error.message}`);
   // No explicit exit: if the transport socket holds the event loop, this process never ends.
+};
+server.listen(socketPath, () => {
+  connect().catch((e: unknown) => {
+    console.error(e);
+    process.exitCode = 1;
+  });
 });

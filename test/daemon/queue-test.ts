@@ -82,7 +82,7 @@ describe("pending request bookkeeping", () => {
     for (const id of [1, 2]) {
       pending.set(id, {
         resolve: (r) => settled.push(r.success ? "ok" : r.error.kind),
-        timer: setTimeout(() => {}, 10_000),
+        timer: setTimeout(() => undefined, 10_000),
         method: `M.m${id}`,
       });
     }
@@ -97,11 +97,9 @@ describe("pending request bookkeeping", () => {
       throw new Error("socket gone");
     });
     assert.equal(r.success, false);
-    if (!r.success) {
-      assert.equal(r.error.kind, "transport_closed");
-      assert.equal(r.error.message, "socket gone");
-      assert.equal(r.error.method, "M.m");
-    }
+    assert.equal(r.error.kind, "transport_closed");
+    assert.equal(r.error.message, "socket gone");
+    assert.equal(r.error.method, "M.m");
     assert.equal(pending.size, 0);
   });
 
@@ -120,17 +118,15 @@ describe("pending request bookkeeping", () => {
     }
     const r = await p;
     assert.equal(r.success, true);
-    if (r.success) assert.deepEqual(r.data, { hello: "world" });
+    assert.deepEqual(r.data, { hello: "world" });
   });
 
   test("sendWithTimeout resolves a timeout error and drops the pending entry", async () => {
     const pending = new Map<number, Pending>();
-    const r = await sendWithTimeout(pending, 11, "M.slow", 1, "Test", () => {});
+    const r = await sendWithTimeout(pending, 11, "M.slow", 1, "Test", () => undefined);
     assert.equal(r.success, false);
-    if (!r.success) {
-      assert.equal(r.error.kind, "timeout");
-      assert.match(r.error.message, /Test timeout after 1ms: M\.slow/);
-    }
+    assert.equal(r.error.kind, "timeout");
+    assert.match(r.error.message, /Test timeout after 1ms: M\.slow/);
     assert.equal(pending.size, 0);
   });
 });

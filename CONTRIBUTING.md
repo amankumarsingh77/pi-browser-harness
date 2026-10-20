@@ -33,7 +33,12 @@ npm run check
 npm pack --dry-run
 ```
 
-`npm run check` runs the typecheck, the type-safety boundary scan, and the test suite. All three must pass before a PR. `npm pack --dry-run` verifies that the package can be packed for publishing and shows which files will be included.
+`npm run check` runs four steps in order: `npm run typecheck`, `npm run boundaries`, `npm run lint`, and `npm test`. All four must pass before a PR. `npm pack --dry-run` verifies that the package can be packed for publishing and shows which files will be included.
+
+- `typecheck` runs `tsc` over `src/` and again over `src/`, `test/`, and `scripts/` with `tsconfig.test.json`.
+- `boundaries` runs `scripts/check-boundaries.ts`, which owns the project-specific layer rules: `raw-cdp-call` (a tool under `src/domains/` calling the CDP session directly instead of `domains/cdp-call.ts`), `raw-evaluate` (calling `client.evaluateJs` instead of `evalJs`), and `raw-js-template` (an interpolated template handed to an evaluate helper without `safeJs`).
+- `lint` runs ESLint with the type-aware config in `eslint.config.mjs`. ESLint owns the cast policy: no `any`, no `as` to object literals, no non-null assertions, no unsafe member access or type assertions, `type` aliases rather than interfaces, inline type imports.
+- `test` runs every `*-test.ts` under `test/{profile,domains,cdp,daemon,util}` with Node's test runner.
 
 ---
 
@@ -41,7 +46,8 @@ npm pack --dry-run
 
 Get the shape of the codebase from the source before making a non-trivial change:
 
-- `scripts/check-boundaries.ts` and `scripts/boundary-allowlist.ts` encode the layer rules — which directories a `domains/*` file may and may not import from. `npm run boundaries` enforces them.
+- `scripts/check-boundaries.ts` and `scripts/boundary-allowlist.ts` encode the layer rules — how a `domains/*` file may reach CDP and JavaScript evaluation. `npm run boundaries` enforces them; `eslint.config.mjs` enforces the cast policy.
+- `scripts/gen-skill.ts` regenerates the tool reference in `skills/pi-browser-harness/SKILL.md` from `ALL_TOOLS`. `npm run gen:skill` rewrites it; `test/util/skill-sync-test.ts` fails when it is stale.
 - `src/cdp/commands.ts` and `src/cdp/events.ts` are the typed, runtime-validated CDP boundary. Add a command by adding it to that table.
 - `src/util/tool.ts` defines `defineBrowserTool`, the contract every tool in `src/domains/` follows.
 - `src/domains/` holds one file per tool; read a neighbouring one before writing a new one.
@@ -84,10 +90,10 @@ Use the normal browser workflow when testing: screenshot → act → screenshot 
 
 - Write TypeScript and keep the project passing `npm run check`.
 - Keep `strict` TypeScript mode clean. Do not introduce implicit `any` values.
-- No unchecked casts. `npm run boundaries` fails the build on `as any`, `as {`, `as unknown as`, `@ts-ignore`, and non-null assertions in `src/`. A green `tsc` is not evidence of type safety.
+- No unchecked casts. `npm run lint` fails on `any`, `as` to object literals, `as unknown as`, `@ts-ignore`, and non-null assertions; `npm run boundaries` keeps a cheap textual backstop for the same spellings in `src/`. A green `tsc` is not evidence of type safety.
 - Prefer no comments. Explain a non-obvious convention in the commit message or PR description, not inline.
 - Prefer small, focused changes over broad rewrites.
-- Keep tool descriptions and parameter schemas clear and user-facing. Use prompt guidelines only for decisions and caveats not already covered there. Keep `src/prompt.ts` limited to cross-tool coordination; leave recipes in the README and skill.
+- Keep tool descriptions and parameter schemas clear and user-facing. Use prompt guidelines only for decisions and caveats not already covered there. Keep `src/prompt.ts` limited to cross-tool coordination; leave recipes in the README and skill. The lane lists in the prompt are derived from each tool's `concurrency`, so never hand-edit them.
 - Preserve the existing error-handling style: return useful, actionable messages to the agent instead of leaking low-level details when possible.
 - Avoid adding dependencies unless they are necessary for the browser-control experience.
 - Keep README and CHANGELOG updates in the same PR when behavior changes.
@@ -96,13 +102,16 @@ Use the normal browser workflow when testing: screenshot → act → screenshot 
 
 ## Adding a new browser tool
 
-One file under `src/domains/`, a typebox args schema at the top, a `defineBrowserTool` call carrying its own `concurrency`, an entry in `ALL_TOOLS` in `src/registry.ts`, and a test under `test/domains/` written against `createFakeClient`.
+One file under `src/domains/`, a typebox args schema at the top, a `defineBrowserTool` call carrying its own `concurrency`, an entry in `ALL_TOOLS` in `src/registry.ts`, and a test under `test/domains/` written against `createFakeClient` (use its `handlerContext` helper to call a handler directly).
+
+If the tool has a `renderResult`, give it a typebox `details` schema too and return `details` of that shape from the handler. The contract validates replayed details against the schema before calling `renderResult`, so the renderer reads `result.details` typed and never hand-rolls guards; a stored shape that no longer matches falls back to the tool's text. Keep details plain JSON (no `Map`s; omit optional keys instead of setting them to `undefined`), and if the schema mirrors a type from elsewhere (as `browser_network_requests` mirrors `NetworkRecord`), let the handler and renderer pass that type through so a drift fails to compile.
 
 Beyond that:
 
-1. Update prompt guidance in `src/prompt.ts` if the tool changes recommended workflows.
-2. Document the tool in `README.md` and note the change in `CHANGELOG.md`.
-3. Run:
+1. Run `npm run gen:skill` so the tool reference in `skills/pi-browser-harness/SKILL.md` picks up the new tool. The browser prompt's lane lists update on their own from `ALL_TOOLS`.
+2. Update prompt guidance in `src/prompt.ts` only if the tool changes a cross-tool rule.
+3. Document the tool in `README.md` and note the change in `CHANGELOG.md`.
+4. Run:
 
    ```bash
    npm run check
@@ -110,6 +119,8 @@ Beyond that:
    ```
 
 Keep tool behavior predictable. The agent should be able to verify actions with screenshots or page state after every interaction.
+
+A tool that lives in another pi extension does not need an `ALL_TOOLS` entry: define it with `defineBrowserTool` and pass it to `registerBrowserTools` exported from `src/index.ts`. See "Contributing tools from another pi extension" in the README.
 
 ---
 

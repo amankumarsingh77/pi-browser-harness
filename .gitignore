@@ -10,6 +10,22 @@ scripts/*
 !scripts/check-boundaries.ts
 !scripts/boundary-allowlist.ts
 !scripts/check-manifest.ts
+!scripts/gen-skill.ts
 data/
 .worktrees/
 .harness/
+# Per-developer agent tooling (Claude Code worktrees/skills, the `skills` CLI
+# install dir and its lockfile); nothing here is read by pi or the build.
+.claude/
+.agents/
+skills-lock.json
+
+# Stray research notes and one-off scripts kept locally at the repo root.
+captcha_bypass_research.md
+linkedin_fresher_jobs_india.md
+linkedin_scan.mjs
+yt_capture_innertube.js
+yt_dump_player.js
+yt_live_architecture_deepdive.md
+yt_live_architecture_report.md
+TODO.md

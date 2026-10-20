@@ -8,13 +8,6 @@ export type Exemption = {
 export const ALLOWLIST: ReadonlyArray<Exemption> = [
   {
     path: "src/util/sharp-shim.ts",
-    rule: "inline-object-cast",
-    count: 1,
-    reason:
-      "sharp is an optional dependency resolved by a dynamic import, so its shape is unknown at compile time; the cast only claims an optional .default and every value read off it is re-checked with typeof before use",
-  },
-  {
-    path: "src/util/sharp-shim.ts",
     rule: "named-cast",
     count: 1,
     reason:
@@ -33,13 +26,6 @@ export const ALLOWLIST: ReadonlyArray<Exemption> = [
     count: 1,
     reason:
       "the sanctioned CDP event decoder; same guarded Check and same generic-correlation limit as cdp/commands.ts",
-  },
-  {
-    path: "src/util/tool.ts",
-    rule: "function-cast",
-    count: 1,
-    reason:
-      "renderCall is stored under a per-tool Static<S> but invoked through the erased TSchema form; the generic-correlation limit makes this unavoidable and the value is the tool's own handler, created with the same S",
   },
   {
     path: "src/domains/cdp-call.ts",

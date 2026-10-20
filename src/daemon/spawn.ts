@@ -5,7 +5,9 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
-import { DAEMON_SOCKET_PATH, serialize, type WireControl } from "./protocol";
+import { createInterface } from "node:readline";
+import { DAEMON_SOCKET_PATH, deserialize, serialize, type WireControl } from "./protocol";
+import { destroyQuietly } from "./socket";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
@@ -16,7 +18,8 @@ const isWindows = process.platform === "win32";
 // No-op on Windows: a named pipe is not a filesystem entry and unlinking a pipe path throws.
 const cleanupStaleSocket = (): void => {
   if (isWindows) return;
-  unlink(DAEMON_SOCKET_PATH).catch(() => {});
+  // ENOENT is the normal case; anything else surfaces when listen() fails.
+  unlink(DAEMON_SOCKET_PATH).catch(() => undefined);
 };
 
 export const daemonSocketMayExist = async (
@@ -45,7 +48,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
 
     const sock = createConnection(DAEMON_SOCKET_PATH);
     const timer = setTimeout(() => {
-      sock.destroy();
+      destroyQuietly(sock);
       cleanupStaleSocket();
       done(false);
     }, timeoutMs);
@@ -55,20 +58,21 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
       sock.write(serialize(regMsg) + "\n");
     });
 
-    sock.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      if (text.includes('"registered"')) {
-        clearTimeout(timer);
-        const deregMsg: WireControl = { type: "control", action: "deregister", clientId: "_liveness_probe" };
-        try { sock.write(serialize(deregMsg) + "\n"); } catch {}
-        sock.destroy();
-        done(true);
-      }
+    // Line-framed like every other reader of this protocol: a chunk may hold a partial line.
+    const lines = createInterface({ input: sock, crlfDelay: Infinity });
+    lines.on("line", (line: string) => {
+      const msg = deserialize(line);
+      if (msg?.type !== "control" || msg.action !== "registered") return;
+      clearTimeout(timer);
+      const deregMsg: WireControl = { type: "control", action: "deregister", clientId: "_liveness_probe" };
+      // end() lets the deregister reach the daemon; destroy() would drop it unflushed.
+      try { sock.end(serialize(deregMsg) + "\n"); } catch { destroyQuietly(sock); }
+      done(true);
     });
 
     sock.on("error", () => {
       clearTimeout(timer);
-      sock.destroy();
+      destroyQuietly(sock);
       cleanupStaleSocket();
       done(false);
     });
@@ -84,9 +88,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
 // Walks upward like Node's own node_modules lookup. Exported with an injectable start so the
 // hoisted layout pi uses can be exercised against a fixture instead of this checkout.
 export const resolveTsxCliFromFilesystem = (startDir: string = moduleDir): string | null => {
-  let dir = startDir;
-
-  while (true) {
+  for (let dir = startDir; ; dir = dirname(dir)) {
     const candidate = join(dir, "node_modules", "tsx", "dist", "cli.mjs");
     try {
       accessSync(candidate);
@@ -96,10 +98,8 @@ export const resolveTsxCliFromFilesystem = (startDir: string = moduleDir): strin
       // without relying on createRequire().resolve(), which is broken for external modules
       // loaded through jiti/static inside a Bun-compiled executable such as pi.exe.
     }
-
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+    // dirname() of the filesystem root is the root itself.
+    if (dirname(dir) === dir) return null;
   }
 };
 
@@ -132,7 +132,7 @@ export const daemonNodeExecutable = (
 };
 
 export const daemonSpawnCommand = (): { readonly command: string; readonly args: ReadonlyArray<string> } | null => {
-  const daemonScript = join(moduleDir, "index.ts");
+  const daemonScript = join(moduleDir, "main.ts");
   const tsxCli = resolveTsxCli();
   if (!tsxCli) return null;
 
@@ -156,7 +156,7 @@ export const spawnDaemon = (): ChildProcess | null => {
   // `spawn` reports a missing executable (a bare `node` that is not on PATH under a Bun host)
   // asynchronously via `error`; without a listener that is an uncaught exception in pi.
   // ensureDaemon's poll loop reports the failure as a timeout, which is what the user sees.
-  child.on("error", () => {});
+  child.on("error", () => undefined);
 
   child.unref();
   return child;

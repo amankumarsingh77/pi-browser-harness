@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { createInterface, type Interface } from "node:readline";
 import { unlinkSync } from "node:fs";
+import { destroyQuietly } from "./socket";
 import {
   type WireMessage,
   type WireControl,
@@ -21,51 +22,86 @@ export type MessageHandler = (msg: WireMessage, client: ClientSocket) => void;
 
 export type ConnectionHandler = (client: ClientSocket) => void;
 
-export type IpcServer = {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  onMessage(handler: MessageHandler): void;
-  onConnect(handler: ConnectionHandler): void;
-  onDisconnect(handler: ConnectionHandler): void;
-  send(clientId: string, msg: WireMessage): void;
-  broadcast(msg: WireMessage): void;
-  clientCount(): number;
+export type Disposer = () => void;
+
+export type IpcServerOptions = {
+  readonly socketPath?: string;
+  readonly maxClients?: number;
 };
 
-export const createIpcServer = (): IpcServer => {
+export type IpcServer = {
+  readonly start: () => Promise<void>;
+  readonly stop: () => Promise<void>;
+  readonly onMessage: (handler: MessageHandler) => Disposer;
+  readonly onConnect: (handler: ConnectionHandler) => Disposer;
+  // Runs once per registered client when it goes away, whether its socket closed or it sent
+  // "deregister". Every registered handler runs; registering is additive, not a replacement.
+  readonly onDisconnect: (handler: ConnectionHandler) => Disposer;
+  readonly send: (clientId: string, msg: WireMessage) => void;
+  readonly broadcast: (msg: WireMessage) => void;
+  readonly clientCount: () => number;
+  // Every open socket, registered or not; the connection cap counts these.
+  readonly socketCount: () => number;
+};
+
+const listen = <H>(handlers: Set<H>) => (handler: H): Disposer => {
+  handlers.add(handler);
+  return () => { handlers.delete(handler); };
+};
+
+
+export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
+  const socketPath = options.socketPath ?? DAEMON_SOCKET_PATH;
+  const maxClients = options.maxClients ?? DAEMON_MAX_CLIENTS;
   let server: Server | null = null;
-  const sockets = new Map<string, ClientSocket>();
+  // Sockets that have not registered yet, by their temporary id.
+  const anonymous = new Map<string, ClientSocket>();
   const clients = new Map<string, ClientSocket>();
-  let messageHandler: MessageHandler | null = null;
-  let connectHandler: ConnectionHandler | null = null;
-  let disconnectHandler: ConnectionHandler | null = null;
+  const messageHandlers = new Set<MessageHandler>();
+  const connectHandlers = new Set<ConnectionHandler>();
+  const disconnectHandlers = new Set<ConnectionHandler>();
   let nextTempId = 1;
+
+  const unlinkSocketFile = (): void => {
+    if (process.platform === "win32") return;
+    try {
+      unlinkSync(socketPath);
+    } catch {
+      // Nothing to unlink, or no permission: listen() reports the real problem if there is one.
+    }
+  };
+
+  // A registered client leaves exactly once: either its socket closes or it deregisters first.
+  const forget = (client: ClientSocket): void => {
+    if (!client.registered) return;
+    client.registered = false;
+    clients.delete(client.id);
+    for (const h of disconnectHandlers) h(client);
+  };
 
   const start = (): Promise<void> =>
     new Promise((resolve, reject) => {
-      try {
-        unlinkSync(DAEMON_SOCKET_PATH);
-      } catch {}
+      unlinkSocketFile();
 
       server = createServer({ pauseOnConnect: false }, (socket: Socket) => {
-        if (clients.size >= DAEMON_MAX_CLIENTS) {
+        if (anonymous.size + clients.size >= maxClients) {
           socket.destroy();
           return;
         }
 
         const tempId = `anon-${nextTempId++}`;
         const rl = createInterface({ input: socket, crlfDelay: Infinity });
-        let currentClient: ClientSocket = { id: tempId, socket, rl, registered: false };
+        const client: ClientSocket = { id: tempId, socket, rl, registered: false };
 
-        sockets.set(tempId, currentClient);
+        anonymous.set(tempId, client);
 
         rl.on("line", (line: string) => {
           const msg = deserialize(line);
           if (!msg) return;
 
-          if (msg.type === "control" && msg.action === "register" && !currentClient.registered) {
+          if (msg.type === "control" && msg.action === "register") {
+            if (client.registered) return;
             const clientId = msg.clientId;
-            if (!clientId) return;
 
             if (clients.has(clientId)) {
               const reply: WireControl = {
@@ -73,40 +109,42 @@ export const createIpcServer = (): IpcServer => {
                 action: "shutdown",
                 reason: `clientId ${clientId} is already connected`,
               };
-              socket.write(serialize(reply) + "\n");
-              socket.destroy();
+              // end() flushes the reply before closing; destroy() would race it.
+              socket.end(serialize(reply) + "\n");
               return;
             }
 
             // Mutate in place so the already-captured closure sees the promoted client.
-            sockets.delete(tempId);
-            currentClient.id = clientId;
-            currentClient.registered = true;
-            clients.set(clientId, currentClient);
+            anonymous.delete(tempId);
+            client.id = clientId;
+            client.registered = true;
+            clients.set(clientId, client);
 
             const ack: WireControl = { type: "control", action: "registered", clientId };
             socket.write(serialize(ack) + "\n");
 
-            connectHandler?.(currentClient);
+            for (const h of connectHandlers) h(client);
             return;
           }
 
-          if (!currentClient.registered) return;
+          if (!client.registered) return;
 
-          messageHandler?.(msg, currentClient);
+          if (msg.type === "control" && msg.action === "deregister") {
+            if (msg.clientId !== client.id) return;
+            forget(client);
+            socket.end();
+            return;
+          }
+
+          for (const h of messageHandlers) h(msg, client);
         });
 
-        socket.on("error", () => {});
+        // A client socket error is always followed by "close", which does the cleanup.
+        socket.on("error", () => undefined);
 
         socket.on("close", () => {
-          const found = clients.get(currentClient.id) ?? sockets.get(tempId);
-          if (found) {
-            clients.delete(found.id);
-            sockets.delete(tempId);
-            if (found.registered) {
-              disconnectHandler?.(found);
-            }
-          }
+          anonymous.delete(tempId);
+          forget(client);
           rl.close();
         });
       });
@@ -115,25 +153,27 @@ export const createIpcServer = (): IpcServer => {
         reject(err);
       });
 
-      server.listen(DAEMON_SOCKET_PATH, () => {
+      server.listen(socketPath, () => {
         resolve();
       });
     });
 
   const stop = (): Promise<void> =>
     new Promise((resolve) => {
+      // Stopping is not a client leaving: no disconnect handler runs for sockets torn down here.
       for (const [, client] of clients) {
-        try { client.socket.destroy(); } catch {}
+        client.registered = false;
+        destroyQuietly(client.socket);
       }
-      for (const [, client] of sockets) {
-        try { client.socket.destroy(); } catch {}
+      for (const [, client] of anonymous) {
+        destroyQuietly(client.socket);
       }
       clients.clear();
-      sockets.clear();
+      anonymous.clear();
 
       if (server) {
         server.close(() => {
-          try { unlinkSync(DAEMON_SOCKET_PATH); } catch {}
+          unlinkSocketFile();
           resolve();
         });
       } else {
@@ -146,25 +186,22 @@ export const createIpcServer = (): IpcServer => {
     if (!client) return;
     try {
       client.socket.write(serialize(msg) + "\n");
-    } catch {}
+    } catch {
+      // The client went away mid-write; its "close" handler forgets it.
+    }
   };
 
   return {
     start,
     stop,
-    onMessage(handler) {
-      messageHandler = handler;
-    },
-    onConnect(handler) {
-      connectHandler = handler;
-    },
-    onDisconnect(handler) {
-      disconnectHandler = handler;
-    },
+    onMessage: listen(messageHandlers),
+    onConnect: listen(connectHandlers),
+    onDisconnect: listen(disconnectHandlers),
     send,
-    broadcast(msg) {
+    broadcast: (msg) => {
       for (const [clientId] of clients) send(clientId, msg);
     },
-    clientCount: (): number => clients.size,
+    clientCount: () => clients.size,
+    socketCount: () => anonymous.size + clients.size,
   };
 };

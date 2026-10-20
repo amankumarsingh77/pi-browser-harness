@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { asArrayOf, asBoolean, asNumber, asRecord, asString, errnoCode, isRecord } from "../../src/util/guards";
+import { asArrayOf, asBoolean, asNonEmptyString, asNumber, asRecord, asString, errnoCode, isRecord } from "../../src/util/guards";
 
 describe("isRecord", () => {
   test("accepts plain objects", () => {
@@ -20,6 +20,13 @@ describe("isRecord", () => {
 });
 
 describe("scalar readers", () => {
+  test("asNonEmptyString rejects the empty string as well as non-strings", () => {
+    assert.equal(asNonEmptyString("x"), "x");
+    assert.equal(asNonEmptyString(""), undefined);
+    assert.equal(asNonEmptyString(1), undefined);
+    assert.equal(asNonEmptyString(undefined), undefined);
+  });
+
   test("asString accepts only strings", () => {
     assert.equal(asString(""), "");
     assert.equal(asString("x"), "x");

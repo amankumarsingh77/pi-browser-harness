@@ -1,4 +1,6 @@
-import type { TSchema, Static } from "typebox";
+import { isRecord } from "./guards";
+import { Type, type TSchema, type Static } from "typebox";
+import { Compile } from "typebox/compile";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -7,14 +9,44 @@ import type {
   ToolDefinition,
   ToolRenderResultOptions,
 } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
+import { type Component, Text } from "@mariozechner/pi-tui";
 import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
-import type { Result } from "./result";
+import { type Result, err } from "./result";
 
-export type ToolOk = {
+// Details are stored by pi as JSON and handed back on replay, so a renderer only ever reads them.
+export type DeepReadonly<T> = T extends ReadonlyArray<infer U>
+  ? ReadonlyArray<DeepReadonly<U>>
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T;
+
+// pi serializes details to JSON, so a Map, a function or an undefined-valued key would be silently lost or
+// mangled on replay; the untyped contract admits only what survives the round trip.
+export type JsonValue = string | number | boolean | null | ReadonlyArray<JsonValue> | JsonObject;
+export type JsonObject = { readonly [key: string]: JsonValue };
+
+const isJsonValue = (v: unknown): v is JsonValue => {
+  if (v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean") return true;
+  if (Array.isArray(v)) return v.every(isJsonValue);
+  if (typeof v !== "object" || Object.getPrototypeOf(v) !== Object.prototype) return false;
+  return Object.values(v).every(isJsonValue);
+};
+
+export const isJsonObject = (v: unknown): v is JsonObject => isRecord(v) && isJsonValue(v);
+
+// A tool that declares no `details` schema may still attach any JSON object for logs; its renderer (if any)
+// sees that object untyped, or undefined when the handler attached nothing.
+export const UntypedDetailsSchema = Type.Union([Type.Record(Type.String(), Type.Unknown()), Type.Undefined()]);
+export type UntypedDetailsSchema = typeof UntypedDetailsSchema;
+export type UntypedDetails = JsonObject | undefined;
+
+// The value type a details schema describes, as the handler produces it and the renderer reads it back.
+export type DetailsOf<D extends TSchema> = D extends UntypedDetailsSchema ? UntypedDetails : DeepReadonly<Static<D>>;
+
+export type ToolOk<T = UntypedDetails> = {
   readonly text: string;
-  readonly details?: Readonly<Record<string, unknown>>;
+  readonly details?: T;
 };
 
 export type ToolErrKind =
@@ -22,6 +54,7 @@ export type ToolErrKind =
   | "cdp_error"
   | "timeout"
   | "invalid_state"
+  | "invalid_args"
   | "io_error"
   | "internal";
 
@@ -31,80 +64,131 @@ export type ToolErr = {
   readonly details?: Readonly<Record<string, unknown>>;
 };
 
-export type HandlerContext = {
+export type HandlerContext<T = UntypedDetails> = {
   readonly client: BrowserClient;
   readonly signal: AbortSignal | undefined;
-  readonly onUpdate: (update: ToolOk) => void;
+  readonly onUpdate: (update: ToolOk<T>) => void;
   readonly extensionCtx: ExtensionContext;
 };
 
-export type ToolHandler<S extends TSchema> = (
+export type ToolHandler<S extends TSchema, T = UntypedDetails> = (
   args: Static<S>,
-  ctx: HandlerContext,
-) => Promise<Result<ToolOk, ToolErr>>;
+  ctx: HandlerContext<T>,
+) => Promise<Result<ToolOk<T>, ToolErr>>;
 
-export type BrowserToolDefinition<S extends TSchema> = {
+export type ToolConcurrency = "serialized" | "parallel";
+
+// S types the arguments, D the structured details the handler attaches to a successful result. pi persists
+// details and hands them back to renderResult on replay; declaring D lets the tool read them back typed, after
+// the contract has validated them against the schema. A tool with no details leaves D at its default.
+export type BrowserToolDefinition<S extends TSchema, D extends TSchema = UntypedDetailsSchema> = {
   readonly name: string;
   readonly label: string;
   readonly description: string;
   readonly promptSnippet: string;
   readonly promptGuidelines: ReadonlyArray<string>;
   readonly parameters: S;
-  readonly handler: ToolHandler<S>;
+  readonly details?: D;
+  readonly handler: ToolHandler<S, DetailsOf<D>>;
   readonly renderCall?: (args: Static<S>, theme: Theme) => Component;
-  readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
-  readonly concurrency: "serialized" | "parallel";
+  readonly renderResult?: (result: AgentToolResult<DetailsOf<D>>, expanded: boolean, theme: Theme) => Component;
+  readonly concurrency: ToolConcurrency;
   readonly ensureAlive?: boolean;
 };
 
-// renderCall accepts `never` so any concrete args type satisfies it via function-parameter contravariance.
-export type AnyBrowserToolDefinition = Omit<BrowserToolDefinition<TSchema>, "renderCall" | "renderResult"> & {
-  readonly renderCall?: (args: never, theme: Theme) => Component;
-  readonly renderResult?: (result: AgentToolResult<unknown>, expanded: boolean, theme: Theme) => Component;
+// The schema-erased view of a tool. Everything that depends on S or D (handler, renderers, the details
+// validator) stays closed over inside `register`, which was built while they were still bound, so no cast is
+// needed to hold tools of different schemas in one list.
+export type BrowserTool = Pick<
+  BrowserToolDefinition<TSchema>,
+  "name" | "label" | "description" | "promptSnippet" | "promptGuidelines" | "concurrency" | "ensureAlive"
+> & {
+  readonly register: (pi: Pick<ExtensionAPI, "registerTool">, client: BrowserClient) => void;
 };
 
-export const defineBrowserTool = <S extends TSchema>(
-  def: BrowserToolDefinition<S>,
-): BrowserToolDefinition<S> => def;
+// A defined tool is both: tests reach the typed handler and parameters, the registry sees BrowserTool.
+export type DefinedBrowserTool<S extends TSchema, D extends TSchema = UntypedDetailsSchema> =
+  BrowserToolDefinition<S, D> & BrowserTool;
 
-type OkDetails = { readonly ok: true } & Readonly<Record<string, unknown>>;
-type ErrDetails = { readonly ok: false; readonly kind: ToolErrKind; readonly message: string } & Readonly<Record<string, unknown>>;
+// pi does not export ToolRenderContext from its index, so it is read off the renderer signature.
+type RenderResultContext<S extends TSchema> = Parameters<NonNullable<ToolDefinition<S>["renderResult"]>>[3];
 
-type ErrorFlagged<D> = AgentToolResult<D> & { readonly isError?: boolean };
+export const renderToolError = (toolName: string, e: ToolErr): string =>
+  `${toolName} failed (${e.kind}): ${e.message}`;
 
-const toToolResult = (
-  r: Result<ToolOk, ToolErr>,
-  toolName: string,
-): ErrorFlagged<OkDetails | ErrDetails> => {
-  if (r.success) {
-    const details: OkDetails = { ok: true, ...(r.data.details ?? {}) };
-    return {
-      content: [{ type: "text", text: r.data.text }],
-      details,
-    };
-  }
-  const details: ErrDetails = {
-    ok: false,
-    kind: r.error.kind,
-    message: r.error.message,
-    ...(r.error.details ?? {}),
-  };
-  return {
-    isError: true,
-    content: [{ type: "text", text: `${toolName} failed (${r.error.kind}): ${r.error.message}` }],
-    details,
-  };
+// Stored details are whatever the handler attached; the schema (not a marker) is what tells a renderer they
+// are usable on replay.
+const okResult = <T>(u: ToolOk<T>): AgentToolResult<unknown> => ({
+  content: [{ type: "text", text: u.text }],
+  details: u.details,
+});
+
+const storedText = (result: AgentToolResult<unknown>, fallback: string): string => {
+  const first = result.content[0];
+  return first?.type === "text" ? first.text : fallback;
 };
 
-export const registerBrowserTool = (
-  pi: ExtensionAPI,
+// Readonly-ness is a compile-time view, so a value the compiled schema accepts is a DetailsOf<D> value. This
+// is the one place the predicate is asserted; tools get their details typed through it.
+// Compiled once: most tools declare no schema, and compiling the shared fallback per tool is wasted codegen.
+const UNTYPED_DETAILS_VALIDATOR = Compile(UntypedDetailsSchema);
+
+const detailsGuard = <D extends TSchema>(schema: D | undefined): ((v: unknown) => v is DetailsOf<D>) => {
+  const validator = schema ? Compile(schema) : UNTYPED_DETAILS_VALIDATOR;
+  return (v: unknown): v is DetailsOf<D> => validator.Check(v);
+};
+
+const notConnected = (message: string): Result<never, ToolErr> =>
+  err({ kind: "not_connected", message });
+
+const runHandler = async <S extends TSchema, D extends TSchema>(
+  def: BrowserToolDefinition<S, D>,
   client: BrowserClient,
-  def: AnyBrowserToolDefinition,
-): void => {
-  type S = TSchema;
+  args: Static<S>,
+  signal: AbortSignal | undefined,
+  onUpdate: ((partial: AgentToolResult<unknown>) => void) | undefined,
+  extensionCtx: ExtensionContext,
+): Promise<Result<ToolOk<DetailsOf<D>>, ToolErr>> => {
+  if (def.ensureAlive !== false) {
+    if (!(await daemonSocketMayExist())) {
+      return notConnected("Browser harness not initialized. Run /browser-setup first");
+    }
+    const alive = await client.ensureAlive();
+    if (!alive.success) return notConnected(alive.error.message);
+  }
+  let release: (() => void) | undefined;
+  if (def.concurrency !== "parallel") {
+    release = await client.mutationMutex().acquire();
+    if (signal?.aborted) {
+      release();
+      return err({ kind: "invalid_state", message: "Tool execution aborted before entering serialized lane" });
+    }
+  }
+  try {
+    return await def.handler(args, {
+      client,
+      signal,
+      onUpdate: (u) => onUpdate?.(okResult(u)),
+      extensionCtx,
+    });
+  } catch (e) {
+    // A throw is a bug in the handler, not a tool outcome; it still has to reach the model as an error.
+    return err({ kind: "internal", message: e instanceof Error ? e.message : String(e) });
+  } finally {
+    release?.();
+  }
+};
+
+// pi has no error field on a resolved tool result: the agent loop marks a result isError only when
+// execute rejects, and then stores the thrown message as the result text. So a failed handler throws.
+const toPiTool = <S extends TSchema, D extends TSchema>(
+  def: BrowserToolDefinition<S, D>,
+  client: BrowserClient,
+): ToolDefinition<S> => {
   const defRenderCall = def.renderCall;
   const defRenderResult = def.renderResult;
-  const td: ToolDefinition<S> = {
+  const isDetails = detailsGuard(def.details);
+  return {
     name: def.name,
     label: def.label,
     description: def.description,
@@ -112,11 +196,7 @@ export const registerBrowserTool = (
     promptGuidelines: [...def.promptGuidelines],
     parameters: def.parameters,
     ...(defRenderCall
-      ? {
-          renderCall: (args: Static<S>, theme: Theme, _ctx: Parameters<NonNullable<ToolDefinition<S>["renderCall"]>>[2]) =>
-            // Sanctioned cast: at runtime args is always the concrete Static<S> value the tool was defined with.
-            (defRenderCall as (args: unknown, theme: Theme) => Component)(args, theme),
-        }
+      ? { renderCall: (args: Static<S>, theme: Theme) => defRenderCall(args, theme) }
       : {}),
     ...(defRenderResult
       ? {
@@ -124,64 +204,33 @@ export const registerBrowserTool = (
             result: AgentToolResult<unknown>,
             options: ToolRenderResultOptions,
             theme: Theme,
-            _ctx: Parameters<NonNullable<ToolDefinition<S>["renderResult"]>>[3],
-          ) => defRenderResult(result, options.expanded ?? false, theme),
+            ctx: RenderResultContext<S>,
+          ) => {
+            // A replayed error carries only the thrown text (details are empty), so the tool's own renderer never sees it.
+            if (ctx.isError) {
+              const text = storedText(result, `${def.name} failed (internal): unknown error`);
+              return new Text(theme.fg("error", text), 0, 0);
+            }
+            // Replayed details may predate the schema (older session, changed shape); then the stored text stands in.
+            const details: unknown = result.details;
+            if (!isDetails(details)) return new Text(storedText(result, ""), 0, 0);
+            return defRenderResult({ ...result, details }, options.expanded, theme);
+          },
         }
       : {}),
     async execute(_toolCallId, args, signal, onUpdate, extensionCtx) {
-      if (def.ensureAlive !== false) {
-        if (!(await daemonSocketMayExist())) {
-          return toToolResult(
-            {
-              success: false,
-              error: {
-                kind: "not_connected",
-                message: "Browser harness not initialized. Run /browser-setup first",
-              },
-            },
-            def.name,
-          );
-        }
-        const alive = await client.ensureAlive();
-        if (!alive.success) {
-          return toToolResult(
-            { success: false, error: { kind: "not_connected", message: alive.error.message } },
-            def.name,
-          );
-        }
-      }
-      let release: (() => void) | undefined;
-      if (def.concurrency !== "parallel") {
-        const acquire = await client.mutationMutex().acquire();
-        release = acquire;
-        if (signal?.aborted) {
-          release();
-          return toToolResult(
-            { success: false, error: { kind: "invalid_state", message: "Tool execution aborted before entering serialized lane" } },
-            def.name,
-          );
-        }
-      }
-      try {
-        const result = await def.handler(args, {
-          client,
-          signal,
-          onUpdate: (u) => {
-            if (onUpdate) {
-              const update: AgentToolResult<OkDetails> = {
-                content: [{ type: "text", text: u.text }],
-                details: { ok: true, ...(u.details ?? {}) },
-              };
-              onUpdate(update);
-            }
-          },
-          extensionCtx,
-        });
-        return toToolResult(result, def.name);
-      } finally {
-        release?.();
-      }
+      const result = await runHandler(def, client, args, signal, onUpdate, extensionCtx);
+      if (!result.success) throw new Error(renderToolError(def.name, result.error));
+      return okResult(result.data);
     },
   };
-  pi.registerTool(td);
 };
+
+export const defineBrowserTool = <S extends TSchema, D extends TSchema = UntypedDetailsSchema>(
+  def: BrowserToolDefinition<S, D>,
+): DefinedBrowserTool<S, D> => ({
+  ...def,
+  register: (pi, client) => {
+    pi.registerTool(toPiTool(def, client));
+  },
+});

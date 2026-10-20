@@ -6,6 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
 import { asString, errnoCode, isRecord } from "../util/guards";
+import { sleep } from "../util/sleep";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
@@ -40,24 +41,57 @@ const probePort = (port: number): Promise<Result<void, CdpError>> =>
       sock.destroy();
       resolve(r);
     };
-    sock.setTimeout(1000, () => finish(err(cdpError("discovery_failed", "probe timeout"))));
-    sock.once("error", (e) => finish(err(cdpError("discovery_failed", e.message))));
-    sock.once("connect", () => finish(ok(undefined)));
+    sock.setTimeout(1000, () => { finish(err(cdpError("discovery_failed", "probe timeout"))); });
+    sock.once("error", (e) => { finish(err(cdpError("discovery_failed", e.message))); });
+    sock.once("connect", () => { finish(ok(undefined)); });
   });
 
-const waitForPort = async (port: number): Promise<Result<void, CdpError>> => {
-  const end = Date.now() + PORT_PROBE_DEADLINE_MS;
-  let lastMessage = "unknown";
-  while (Date.now() < end) {
-    const probe = await probePort(port);
-    if (probe.success) return probe;
-    lastMessage = probe.error.message;
-    await new Promise((r) => setTimeout(r, PORT_PROBE_INTERVAL_MS));
+export type PortProbe = (port: number) => Promise<Result<void, CdpError>>;
+
+export type PortRaceOptions = {
+  readonly probe?: PortProbe;
+  readonly deadlineMs?: number;
+  readonly intervalMs?: number;
+};
+
+// Polls every candidate port at once under ONE deadline and settles on the first that answers; a stale DevToolsActivePort can no longer hold discovery for its own full deadline before the next candidate is tried.
+export const firstReadyPort = async <C extends { readonly port: number }>(
+  candidates: ReadonlyArray<C>,
+  opts: PortRaceOptions = {},
+): Promise<Result<C, CdpError>> => {
+  const probe = opts.probe ?? probePort;
+  const deadlineMs = opts.deadlineMs ?? PORT_PROBE_DEADLINE_MS;
+  const intervalMs = opts.intervalMs ?? PORT_PROBE_INTERVAL_MS;
+  if (candidates.length === 0) return err(cdpError("discovery_failed", "no DevTools port candidates to probe"));
+
+  // One controller ends every loser the moment a winner appears (or the deadline passes).
+  const stop = new AbortController();
+  const deadline = setTimeout(() => { stop.abort(); }, deadlineMs);
+  const lastMessages = new Map<number, string>();
+
+  const poll = async (c: C): Promise<C> => {
+    while (!stop.signal.aborted) {
+      const r = await probe(c.port);
+      if (r.success) return c;
+      lastMessages.set(c.port, r.error.message);
+      await sleep(intervalMs, stop.signal);
+    }
+    throw new Error(lastMessages.get(c.port) ?? "aborted");
+  };
+
+  try {
+    return ok(await Promise.any(candidates.map(poll)));
+  } catch {
+    const ports = candidates.map((k) => `127.0.0.1:${k.port}`).join(", ");
+    const detail = [...lastMessages.entries()].map(([port, m]) => `${port}: ${m}`).join("; ") || "unknown";
+    return err(cdpError(
+      "discovery_failed",
+      `Chrome's remote-debugging page is open, but DevTools is not live yet on ${ports} — if Chrome opened a profile picker, choose your normal profile first, then tick the checkbox and click Allow if shown (last error: ${detail})`,
+    ));
+  } finally {
+    clearTimeout(deadline);
+    stop.abort();
   }
-  return err(cdpError(
-    "discovery_failed",
-    `Chrome's remote-debugging page is open, but DevTools is not live yet on 127.0.0.1:${port} — if Chrome opened a profile picker, choose your normal profile first, then tick the checkbox and click Allow if shown (last error: ${lastMessage})`,
-  ));
 };
 
 const isPortLive = async (port: number): Promise<boolean> => (await probePort(port)).success;
@@ -81,7 +115,7 @@ const queryLiveWsUrl = (port: number, timeoutMs = 1_500): Promise<string | null>
       },
     );
     req.on("timeout", () => { req.destroy(); resolve(null); });
-    req.on("error", () => resolve(null));
+    req.on("error", () => { resolve(null); });
     req.end();
   });
 
@@ -126,7 +160,9 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
       raw = await readFile(portFile, "utf8");
       try {
         mtimeMs = (await stat(portFile)).mtimeMs;
-      } catch {}
+      } catch {
+        // The file was readable a moment ago; without an mtime it is simply treated as fresh.
+      }
     } catch (e) {
       // EPERM/EACCES is common under sandboxes; remember it and fall back to network probing rather than failing the whole discovery.
       const code = errnoCode(e);
@@ -175,13 +211,9 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   const ordered = liveCandidates.length > 0 ? liveCandidates : unique;
 
   // Some browsers disable the /json/version endpoint when remote debugging is toggled via chrome://inspect rather than a launch flag, hence the DevToolsActivePort fallback.
-  let lastErr: Result<CdpEndpoint, CdpError> | null = null;
-  for (const c of ordered) {
-    const ready = await waitForPort(c.port);
-    if (!ready.success) {
-      lastErr = err(ready.error);
-      continue;
-    }
+  const ready = await firstReadyPort(ordered);
+  if (ready.success) {
+    const c = ready.data;
     const liveUrl = await queryLiveWsUrl(c.port);
     return ok({ wsUrl: liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`, userDataDir: c.userDataDir });
   }
@@ -192,7 +224,7 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     if (liveUrl) return ok({ wsUrl: liveUrl });
   }
 
-  return lastErr ?? err(cdpError("discovery_failed", "no live DevTools endpoint among discovered candidates"));
+  return err(ready.error);
 };
 
 export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {

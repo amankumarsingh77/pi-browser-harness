@@ -10,13 +10,13 @@ describe("parseJson", () => {
   test("parses and validates a well-formed document", () => {
     const r = parseJson('{"userDataDir":"/d","profileDir":"P1"}', Pin);
     assert.equal(r.success, true);
-    if (r.success) assert.equal(r.data.profileDir, "P1");
+    assert.equal(r.data.profileDir, "P1");
   });
 
   test("a syntax error becomes an error result, not a throw", () => {
     const r = parseJson("{not json", Pin);
     assert.equal(r.success, false);
-    if (!r.success) assert.match(r.error, /JSON/);
+    assert.match(r.error, /JSON/);
   });
 
   test("a schema mismatch becomes an error result", () => {
@@ -34,6 +34,6 @@ describe("parseJson", () => {
   test("an error result carries a non-empty message for a schema mismatch", () => {
     const r = parseJson("null", Pin);
     assert.equal(r.success, false);
-    if (!r.success) assert.ok(r.error.length > 0);
+    assert.ok(r.error.length > 0);
   });
 });

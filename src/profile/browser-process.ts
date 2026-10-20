@@ -23,6 +23,31 @@ const LINUX_COMMS: ReadonlyArray<string> = [
   "chrome", "chromium", "chromium-browser", "msedge", "microsoft-edge",
   "google-chrome", "brave", "brave-browser",
 ];
+
+// The kernel stores a process name in TASK_COMM_LEN (16) bytes, so `ps -o comm=` prints at most 15
+// characters: "chromium-browser" shows up as "chromium-browse" and would never match in full.
+const LINUX_COMM_MAX = 15;
+
+export const isLinuxBrowserComm = (comm: string): boolean => {
+  const lower = comm.toLowerCase();
+  return LINUX_COMMS.some((name) => name.slice(0, LINUX_COMM_MAX) === lower);
+};
+
+// /proc/<pid>/cmdline separates arguments with NUL, which keeps a space inside argv[0] or a
+// --user-data-dir value intact. A string without NULs (a test fixture, or a zombie's empty
+// cmdline) falls back to whitespace splitting.
+export const parseProcCmdline = (raw: string): ReadonlyArray<string> => {
+  const argv = raw.includes("\0") ? raw.split("\0") : raw.trim().split(/\s+/);
+  return argv.filter((arg) => arg.length > 0);
+};
+
+const USER_DATA_DIR_FLAG = "--user-data-dir=";
+
+export const userDataDirFromArgv = (argv: ReadonlyArray<string>): string | undefined => {
+  const flag = argv.find((arg) => arg.startsWith(USER_DATA_DIR_FLAG));
+  const value = flag?.slice(USER_DATA_DIR_FLAG.length);
+  return value !== undefined && value.length > 0 ? value : undefined;
+};
 const MAC_BROWSER_NAMES: ReadonlyArray<string> = [
   "google chrome", "chromium", "microsoft edge", "brave browser",
 ];
@@ -116,7 +141,7 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
       .flatMap((line) => {
         const [pid, comm] = line.split(/\s+/, 2);
         if (!pid || !comm) return [];
-        return LINUX_COMMS.includes(comm.toLowerCase()) ? [pid] : [];
+        return isLinuxBrowserComm(comm) ? [pid] : [];
       });
   } catch {
     return [];
@@ -124,22 +149,25 @@ const collectLinux = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
 
   const candidates: BrowserCandidate[] = [];
   for (const pid of pids) {
-    let cmdline: string;
+    let argv: ReadonlyArray<string>;
     try {
-      cmdline = (await readFile(`/proc/${pid}/cmdline`, "utf8")).replace(/\0/g, " ").trim();
+      argv = parseProcCmdline(await readFile(`/proc/${pid}/cmdline`, "utf8"));
     } catch {
       continue;
     }
-    if (!cmdline || hasChildProcessType(cmdline)) continue;
+    const argv0 = argv[0];
+    if (argv0 === undefined || hasChildProcessType(argv.join(" "))) continue;
     let link: string | undefined;
     try {
       link = await readlink(`/proc/${pid}/exe`);
-    } catch {}
+    } catch {
+      // /proc/<pid>/exe is unreadable for processes owned by another user; argv[0] is used instead.
+    }
     // Chrome rewrites its argv to the bare executable path, so argv[0] is the live install location when /proc/<pid>/exe is unreadable or stale.
     const exePath =
       (link ? await spawnableExePath(link) : undefined) ??
-      (await spawnableExePath(cmdline.split(" ")[0] ?? ""));
-    const explicit = parseUserDataDirFlag(cmdline);
+      (await spawnableExePath(argv0));
+    const explicit = userDataDirFromArgv(argv);
     candidates.push({
       ...(exePath ? { exePath } : {}),
       ...(explicit ? { explicitUserDataDir: explicit } : {}),
@@ -172,7 +200,9 @@ const collectDarwin = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
     try {
       const { stdout } = await run("ps", ["-ww", "-o", "args=", "-p", pid], { timeout: EXEC_TIMEOUT_MS });
       args = stdout.trim();
-    } catch {}
+    } catch {
+      // ps can fail for a process that exited meanwhile; the pid is still reported, without args.
+    }
     if (args && hasChildProcessType(args)) continue;
     const explicit = args ? parseUserDataDirFlag(args) : undefined;
     candidates.push({
@@ -227,13 +257,17 @@ const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
         if (candidates.length > 0) return candidates;
       }
     }
-  } catch {}
+  } catch {
+    // PowerShell is missing or restricted: fall back to tasklist below.
+  }
 
   try {
     const { stdout } = await run("tasklist.exe", [], { timeout: EXEC_TIMEOUT_MS, windowsHide: true });
     const lower = stdout.toLowerCase();
     if (WIN_IMAGE_NAMES.some((n) => lower.includes(n))) return [{}];
-  } catch {}
+  } catch {
+    // tasklist unavailable too: report no running browser rather than failing detection.
+  }
   return [];
 };
 
@@ -266,7 +300,9 @@ const winRegistryExecutable = async (): Promise<string | undefined> => {
         const match = /REG_[A-Z_]+\s+(.+)$/m.exec(stdout.trim());
         const path = match?.[1]?.trim();
         if (path) return path;
-      } catch {}
+      } catch {
+        // Key absent or reg.exe failed: try the next registry location.
+      }
     }
   }
   return undefined;
@@ -314,7 +350,9 @@ export const resolveBrowserExecutable = async (running?: RunningBrowser): Promis
     try {
       await access(candidate);
       return candidate;
-    } catch {}
+    } catch {
+      // Not installed at this location: try the next one.
+    }
   }
   return undefined;
 };

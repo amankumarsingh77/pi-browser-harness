@@ -1,10 +1,15 @@
+import { borrowSession } from "../../cdp/target-factory";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../../schemas/parse";
 import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
-import { cdpCallBrowser, evalJs } from "../cdp-call";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
+import type { BrowserClient } from "../../client";
+import { evalJs, fromClient } from "../cdp-call";
+import { pageCallExpression } from "../page/inject";
+import { capturePage } from "../page/read-page.page";
+import type * as captured from "../page/read-page.page";
 import {
   closeIsolatedTab,
   evalInIsolatedTab,
@@ -14,7 +19,7 @@ import {
   openIsolatedTab,
   waitForIsolatedLoad,
 } from "../isolated-tab";
-import { renderExpandableText } from "../render";
+import { ExpandableTextSchema, renderExpandableText } from "../render";
 import { extractReadable, type PageCapture, type ReadablePage } from "./readability";
 
 const LOAD_TIMEOUT_MS = 15_000;
@@ -48,42 +53,28 @@ const PageCaptureSchema = Type.Object({
 
 const pageCaptureValidator = Compile(PageCaptureSchema);
 
+const ReadPageDetailsSchema = Type.Object({
+  title: Type.String(),
+  url: Type.String(),
+  wordCount: Type.Number(),
+  render: ExpandableTextSchema,
+  fullOutputPath: Type.Optional(Type.String()),
+});
+
+export type ReadPageDetails = DetailsOf<typeof ReadPageDetailsSchema>;
+
 const BODY_TEXT_LIMIT = 20_000;
 
-const buildPageCaptureExpr = (): string => `
-  (() => {
-    const BOILERPLATE = new Set(['NAV', 'HEADER', 'FOOTER', 'ASIDE']);
-    const inBoilerplate = (el) => {
-      for (let n = el; n; n = n.parentElement) {
-        if (BOILERPLATE.has(n.tagName)) return true;
-        const role = n.getAttribute && n.getAttribute('role');
-        if (role === 'navigation' || role === 'banner' || role === 'contentinfo') return true;
-      }
-      return false;
-    };
-    const kindOf = (tag) => {
-      if (/^H[1-6]$/.test(tag)) return 'heading';
-      if (tag === 'LI') return 'listitem';
-      if (tag === 'BLOCKQUOTE') return 'blockquote';
-      if (tag === 'P') return 'paragraph';
-      return 'other';
-    };
-    const selector = 'p, h1, h2, h3, h4, h5, h6, li, blockquote';
-    const root = document.querySelector('article, main, [role=main]') || document.body;
-    const blocks = [];
-    for (const el of root.querySelectorAll(selector)) {
-      const text = (el.innerText || '').replace(/\\s+/g, ' ').trim();
-      if (!text) continue;
-      let linkTextLength = 0;
-      for (const a of el.querySelectorAll('a')) linkTextLength += (a.innerText || '').length;
-      blocks.push({ kind: kindOf(el.tagName), text, linkTextLength, inBoilerplate: inBoilerplate(el) });
-    }
-    const bodyText = (document.body.innerText || '').replace(/\\n{3,}/g, '\\n\\n').slice(0, ${BODY_TEXT_LIMIT});
-    return JSON.stringify({ url: location.href, title: document.title, blocks, bodyText });
-  })()
-`;
+// The page function declares the capture shape it produces; this pins it to the shape the readability pass consumes,
+// so the two cannot drift apart silently (the runtime validator above still guards the actual wire value).
+type Pinned<T extends PageCapture> = T;
+export type CaptureFromPage = Pinned<captured.PageCapture>;
 
-const toPageCapture = (raw: unknown): PageCapture | undefined => {
+// Built once: stringifying the page function per call was the only cost of the thunk.
+const PAGE_CAPTURE_EXPR = pageCallExpression(capturePage, BODY_TEXT_LIMIT);
+
+// Accepts the capture either as JSON text (isolated tab) or as the already-decoded value (owned tab).
+export const toPageCapture = (raw: unknown): PageCapture | undefined => {
   if (typeof raw === "string") {
     const parsed = parseJson(raw, pageCaptureValidator);
     return parsed.success ? parsed.data : undefined;
@@ -91,7 +82,7 @@ const toPageCapture = (raw: unknown): PageCapture | undefined => {
   return pageCaptureValidator.Check(raw) ? raw : undefined;
 };
 
-const captureToResult = async (raw: unknown): Promise<Result<ToolOk, ToolErr>> => {
+const captureToResult = async (raw: unknown): Promise<Result<ToolOk<ReadPageDetails>, ToolErr>> => {
   const parsed = toPageCapture(raw);
   if (parsed === undefined) return err({ kind: "internal", message: "page capture returned an unexpected shape" });
   const page: ReadablePage = extractReadable(parsed);
@@ -115,10 +106,10 @@ const captureToResult = async (raw: unknown): Promise<Result<ToolOk, ToolErr>> =
 };
 
 const readOpenedUrl = async (
-  client: Parameters<typeof openIsolatedTab>[0],
+  client: BrowserClient,
   url: string,
   signal: AbortSignal | undefined,
-): Promise<Result<ToolOk, ToolErr>> => {
+): Promise<Result<ToolOk<ReadPageDetails>, ToolErr>> => {
   const opened = await openIsolatedTab(client);
   if (!opened.success) return err(opened.error);
   const tab: IsolatedTab = opened.data;
@@ -127,27 +118,30 @@ const readOpenedUrl = async (
     if (!navigated.success) return err(navigated.error);
     const loaded = await waitForIsolatedLoad(client, tab, LOAD_TIMEOUT_MS, signal);
     if (!loaded.success) return err(loaded.error);
-    const captured = await evalInIsolatedTab(client, tab, buildPageCaptureExpr(), isJsonText);
+    const captured = await evalInIsolatedTab(client, tab, PAGE_CAPTURE_EXPR, isJsonText);
     if (!captured.success) return err(captured.error);
-    return captureToResult(captured.data);
+    return await captureToResult(captured.data);
   } finally {
     await closeIsolatedTab(client, tab);
   }
 };
 
 const readOwnedTab = async (
-  client: Parameters<typeof openIsolatedTab>[0],
+  client: BrowserClient,
   targetId: string,
-): Promise<Result<ToolOk, ToolErr>> => {
+): Promise<Result<ToolOk<ReadPageDetails>, ToolErr>> => {
   if (!client.owns(targetId)) {
     return err({ kind: "invalid_state", message: `Tab ${targetId} is not owned by this session.` });
   }
-  const attached = await cdpCallBrowser(client, "Target.attachToTarget", { targetId, flatten: true });
-  if (!attached.success) return attached;
-  const sessionId = attached.data.sessionId;
-  const captured = await evalJs(client, buildPageCaptureExpr(), sessionId);
-  if (!captured.success) return captured;
-  return captureToResult(captured.data);
+  const borrowed = await borrowSession(client, targetId);
+  if (!borrowed.success) return fromClient(borrowed, "Target.attachToTarget");
+  try {
+    const captured = await evalJs(client, PAGE_CAPTURE_EXPR, borrowed.data.sessionId);
+    if (!captured.success) return captured;
+    return await captureToResult(captured.data);
+  } finally {
+    await borrowed.data.release();
+  }
 };
 
 export const readPageTool = defineBrowserTool({
@@ -161,13 +155,14 @@ export const readPageTool = defineBrowserTool({
     "Boilerplate-heavy or structure-less pages fall back to bounded body text rather than erroring.",
   ],
   parameters: ReadPageArgs,
+  details: ReadPageDetailsSchema,
   concurrency: "parallel",
-  async handler(args, { client, signal }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, signal }): Promise<Result<ToolOk<ReadPageDetails>, ToolErr>> {
     if (args.url !== undefined && args.url.length > 0) return readOpenedUrl(client, args.url, signal);
     if (args.targetId !== undefined && args.targetId.length > 0) return readOwnedTab(client, args.targetId);
-    return err({ kind: "invalid_state", message: "provide either url or targetId" });
+    return err({ kind: "invalid_args", message: "provide either url or targetId" });
   },
-  renderResult(result, expanded, theme) {
-    return renderExpandableText("read_page", result, expanded, theme);
+  renderResult(result, expanded) {
+    return renderExpandableText(result.details.render, expanded);
   },
 });

@@ -41,6 +41,61 @@ Pass `@(x,y)` from `browser_snapshot` straight to `browser_click`. No screenshot
 
 `browser_web_search` and `browser_read_page` each run in their own isolated tab and never touch the user's current tab. Pair them for a research question: search for candidate URLs, then read the promising ones.
 
+## Tool reference
+
+Every tool, its concurrency lane, and a one-line summary. `serialized` tools queue through one
+shared mutation lane; `parallel` tools may run alongside them. The decision tree above says which
+to reach for first; the tool descriptions and parameter schemas carry per-tool detail.
+
+<!-- tools:start -->
+Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
+
+| Tool | Lane | Summary |
+|---|---|---|
+| `browser_clear_headers` | serialized | Clear extra request headers from the current owned tab |
+| `browser_click` | serialized | Click an element by ref (preferred) or pixel coordinates |
+| `browser_close_tab` | serialized | Close an owned tab |
+| `browser_console` | parallel | Read JS errors / console output on the current tab |
+| `browser_current_tab` | parallel | Get current tab info |
+| `browser_dispatch_key` | serialized | Dispatch a DOM KeyboardEvent on an element by ref (preferred) or selector |
+| `browser_download` | serialized | Configure download directory |
+| `browser_drag_and_drop` | serialized | Drag and drop between two coordinates |
+| `browser_execute_js` | parallel | Execute JS in the page — surgical DOM reads (preferred over screenshot) |
+| `browser_fill` | serialized | Fill a form field by ref (preferred) or selector (works with React/Vue controlled inputs) |
+| `browser_fill_form` | serialized | Fill many form fields at once by ref — React-safe, self-confirming |
+| `browser_focus` | serialized | Focus an element by ref (preferred) or selector |
+| `browser_go_back` | serialized | Go back one page |
+| `browser_go_forward` | serialized | Go forward one page |
+| `browser_handle_dialog` | serialized | Accept or dismiss a JS dialog |
+| `browser_http_get` | parallel | HTTP GET (outside browser; for APIs/static pages) |
+| `browser_list_tabs` | parallel | List browser tabs |
+| `browser_navigate` | serialized | Navigate to a URL |
+| `browser_network_requests` | parallel | Inspect recent network requests on the current page |
+| `browser_new_tab` | serialized | Open a new tab |
+| `browser_open_urls` | serialized | Open multiple URLs in new tabs (parallel) |
+| `browser_page_info` | parallel | Get current page URL, title, viewport, and scroll position |
+| `browser_press_key` | serialized | Press a key (Enter, Tab, Escape, arrows, or any character) |
+| `browser_print_to_pdf` | serialized | Print the current page to PDF |
+| `browser_read_page` | parallel | Read a page's main content as clean text |
+| `browser_reload` | serialized | Reload the page |
+| `browser_run_script` | parallel | Run a temporary script with daemon + Node access (security-bounded) |
+| `browser_screenshot` | parallel | Capture a screenshot — visual verification only |
+| `browser_scroll` | serialized | Scroll the page (deltaY positive=down, negative=up) |
+| `browser_select_option` | serialized | Select an option in a native <select> by ref (preferred) or selector |
+| `browser_set_checked` | serialized | Set a checkbox/radio checked state by ref |
+| `browser_set_headers` | serialized | Set extra request headers on the current owned tab |
+| `browser_setup` | parallel | Initialize browser connection |
+| `browser_snapshot` | parallel | Get accessibility-tree snapshot with stable element refs (default for page inspection) |
+| `browser_switch_tab` | serialized | Switch tabs |
+| `browser_type` | serialized | Type text into the focused element |
+| `browser_upload_file` | serialized | Upload a file to a file input by ref (preferred) or selector |
+| `browser_viewport_resize` | serialized | Resize the viewport (responsive testing) |
+| `browser_wait` | parallel | Wait N seconds |
+| `browser_wait_for` | parallel | Wait for an element or text to appear (or an element to disappear) |
+| `browser_wait_for_load` | serialized | Wait for the page to finish loading |
+| `browser_web_search` | serialized | Search the web for a query |
+<!-- tools:end -->
+
 ## Connection Setup
 
 Browser control is **on-demand** — the daemon does NOT start automatically.
@@ -111,11 +166,11 @@ When a workflow repeats 3+ times or needs Node.js APIs, write a script to disk a
 
 ## Troubleshooting: "Could not start the browser daemon"
 
-`browser_setup` spawns the daemon as `node <tsx cli> <pkg>/src/daemon/index.ts` with `stdio: "ignore"` (tsx is resolved from the package directory upward, so in pi's hoisted install it sits beside the package rather than inside it). A crash before the socket binds is completely silent and all you see is `Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock.`
+`browser_setup` spawns the daemon as `node <tsx cli> <pkg>/src/daemon/main.ts` with `stdio: "ignore"` (tsx is resolved from the package directory upward, so in pi's hoisted install it sits beside the package rather than inside it). A crash before the socket binds is completely silent and all you see is `Could not start the browser daemon. Check /tmp/pi-browser-daemon.sock.`
 
 Run it in the foreground to see the real error (it prints whether it reached Chrome):
 
-    cd <pkg> && node "$(node -p "require.resolve('tsx/cli')")" src/daemon/index.ts
+    cd <pkg> && node "$(node -p "require.resolve('tsx/cli')")" src/daemon/main.ts
 
 Known cause (package 0.11.1): `Error: Cannot find module 'typebox'` at `src/cdp/discovery.ts`. The package declares `typebox` in `peerDependencies` and `devDependencies`, and pi installs packages with dev and peer dependencies omitted, so the tree has no physical copy. It still resolves inside the pi extension host, which maps `typebox` to pi's bundled copy, but not in the spawned daemon process, which resolves modules from the package directory upward. The daemon dies, no socket appears, and every browser tool reports `not_connected`.
 

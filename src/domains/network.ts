@@ -1,13 +1,14 @@
 import { Type } from "typebox";
-import { Markdown, Text } from "@mariozechner/pi-tui";
+import { Markdown } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { formatBytes } from "../util/truncate";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall } from "./cdp-call";
+import { deadlineSignal, runLimited } from "./concurrency";
 import { applyTruncation } from "../util/truncate";
-import { asArrayOf, asBoolean, asNumber, asRecord, asString } from "../util/guards";
-import type { NetworkRecord } from "../cdp/network-buffer";
+import { type NetworkRecord, NetworkRecordSchema } from "../cdp/network-buffer";
+import type { BrowserClient } from "../client";
 
 const HttpGetArgs = Type.Object({
   url: Type.String({ description: "URL to GET" }),
@@ -31,7 +32,7 @@ export const httpGetTool = defineBrowserTool({
   ensureAlive: false,
   async handler(args): Promise<Result<ToolOk, ToolErr>> {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), (args.timeout ?? 20) * 1000);
+    const timer = setTimeout(() => { ac.abort(); }, (args.timeout ?? 20) * 1000);
     try {
       const fetchInit: RequestInit = { signal: ac.signal };
       if (args.headers !== undefined) fetchInit.headers = args.headers;
@@ -86,6 +87,7 @@ const NetworkRequestsArgs = Type.Object({
 });
 
 const BODY_BUDGET_MS = 5_000;
+const BODY_CONCURRENCY = 6;
 const PER_BODY_CAP = 50_000;
 
 const renderNetworkMarkdown = (
@@ -97,7 +99,7 @@ const renderNetworkMarkdown = (
     return "_No matching requests captured yet._";
   }
 
-  const failed = records.filter((r) => r.failed || (r.status !== undefined && r.status >= 500)).length;
+  const failed = records.filter((r) => r.failed === true || (r.status !== undefined && r.status >= 500)).length;
   const totalBytes = records.reduce((s, r) => s + (r.responseBodySize ?? 0), 0);
   const showWindow = (() => {
     const finished = records.filter((r) => r.durationMs !== undefined);
@@ -113,8 +115,8 @@ const renderNetworkMarkdown = (
   if (opts.total > records.length) headerLines.push(`(${records.length} of ${opts.total} matches shown — increase \`limit\` for more)`);
 
   const compactRows = (records.length > 5 && !opts.expanded ? records.slice(0, 5) : records).map((r) => {
-    const status = r.failed ? "ERR" : r.status !== undefined ? String(r.status) : "—";
-    const warn = r.failed || (r.status !== undefined && r.status >= 500) ? " ⚠" : "";
+    const status = r.failed === true ? "ERR" : r.status !== undefined ? String(r.status) : "—";
+    const warn = r.failed === true || (r.status !== undefined && r.status >= 500) ? " ⚠" : "";
     const ms = r.durationMs !== undefined ? `${r.durationMs} ms` : "—";
     const url = r.url.length > 60 ? r.url.slice(0, 57) + "…" : r.url;
     return `\`${r.method.padEnd(4)} ${status.padStart(3)}\`  ${url}  _${ms}_${warn}`;
@@ -154,65 +156,38 @@ const renderNetworkMarkdown = (
   return [headerLines.join("\n"), "", tableHeader, tableRows, bodySections].filter((s) => s !== "").join("\n");
 };
 
-type NetworkDetails = {
-  total: number;
-  returned: number;
-  bufferOverflowed: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-  requests: ReadonlyArray<NetworkRecord>;
-  includeBodies: boolean;
-};
+const NetworkDetailsSchema = Type.Object({
+  total: Type.Number(),
+  returned: Type.Number(),
+  bufferOverflowed: Type.Boolean(),
+  truncated: Type.Boolean(),
+  fullOutputPath: Type.Optional(Type.String()),
+  requests: Type.Array(NetworkRecordSchema),
+  includeBodies: Type.Boolean(),
+});
 
-const asNetworkRecord = (v: unknown): NetworkRecord | undefined => {
-  const o = asRecord(v);
-  if (o === undefined) return undefined;
-  const method = asString(o["method"]);
-  const url = asString(o["url"]);
-  const type = asString(o["type"]);
-  if (method === undefined || url === undefined || type === undefined) return undefined;
-  const status = asNumber(o["status"]);
-  const statusText = asString(o["statusText"]);
-  const mimeType = asString(o["mimeType"]);
-  const durationMs = asNumber(o["durationMs"]);
-  const responseBodySize = asNumber(o["responseBodySize"]);
-  const failed = asBoolean(o["failed"]);
-  const errorText = asString(o["errorText"]);
-  const bodyRaw = o["body"];
-  const body = typeof bodyRaw === "string" || bodyRaw === null ? bodyRaw : undefined;
-  return {
-    requestId: asString(o["requestId"]) ?? "",
-    method,
-    url,
-    type,
-    requestStartedMs: asNumber(o["requestStartedMs"]) ?? 0,
-    requestBodySize: asNumber(o["requestBodySize"]) ?? 0,
-    ...(status !== undefined ? { status } : {}),
-    ...(statusText !== undefined ? { statusText } : {}),
-    ...(mimeType !== undefined ? { mimeType } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
-    ...(responseBodySize !== undefined ? { responseBodySize } : {}),
-    ...(failed !== undefined ? { failed } : {}),
-    ...(errorText !== undefined ? { errorText } : {}),
-    ...(body !== undefined ? { body } : {}),
-  };
-};
+export type NetworkDetails = DetailsOf<typeof NetworkDetailsSchema>;
 
-const asNetworkDetails = (v: unknown): NetworkDetails | undefined => {
-  const o = asRecord(v);
-  if (o === undefined) return undefined;
-  const requests = asArrayOf(o["requests"], asNetworkRecord);
-  if (requests === undefined) return undefined;
-  const fullOutputPath = asString(o["fullOutputPath"]);
-  return {
-    total: asNumber(o["total"]) ?? requests.length,
-    returned: asNumber(o["returned"]) ?? requests.length,
-    bufferOverflowed: asBoolean(o["bufferOverflowed"]) ?? false,
-    truncated: asBoolean(o["truncated"]) ?? false,
-    requests,
-    includeBodies: asBoolean(o["includeBodies"]) ?? false,
-    ...(fullOutputPath !== undefined ? { fullOutputPath } : {}),
-  };
+// Copies each drained record with its response body attached (null when Chrome no longer has it). Bounded by
+// BODY_BUDGET_MS in total; records whose fetch did not finish in time are returned without a body.
+const withBodies = async (
+  client: BrowserClient,
+  records: ReadonlyArray<NetworkRecord>,
+  signal: AbortSignal | undefined,
+): Promise<ReadonlyArray<NetworkRecord>> => {
+  const deadline = deadlineSignal(BODY_BUDGET_MS, signal);
+  const bodies = await runLimited(records, { limit: BODY_CONCURRENCY, signal: deadline.signal }, async (r): Promise<string | null> => {
+    const bodyRes = await cdpCall(client, "Network.getResponseBody", { requestId: r.requestId });
+    if (!bodyRes.success) return null;
+    const b = bodyRes.data;
+    const body = b.base64Encoded ? Buffer.from(b.body, "base64").toString("utf8") : b.body;
+    return body.length > PER_BODY_CAP ? body.slice(0, PER_BODY_CAP) + "…" : body;
+  });
+  deadline.clear();
+  return records.map((r, i) => {
+    const body = bodies[i];
+    return body === undefined ? { ...r } : { ...r, body };
+  });
 };
 
 export const networkRequestsTool = defineBrowserTool({
@@ -227,9 +202,10 @@ export const networkRequestsTool = defineBrowserTool({
     "If bufferOverflowed:true in the result, older events were dropped (capacity 500 records/tab).",
   ],
   parameters: NetworkRequestsArgs,
+  details: NetworkDetailsSchema,
   concurrency: "parallel",
 
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client, signal }): Promise<Result<ToolOk<NetworkDetails>, ToolErr>> {
     const session = client.session();
     const drained = session.drainNetworkBuffer({
       ...(args.urlPattern !== undefined ? { urlPattern: args.urlPattern } : {}),
@@ -240,27 +216,13 @@ export const networkRequestsTool = defineBrowserTool({
       limit: args.limit ?? 50,
     });
 
-    if (args.includeResponseBodies) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), BODY_BUDGET_MS);
-      const fills = drained.records.map(async (r) => {
-        if (ac.signal.aborted) return;
-        const bodyRes = await cdpCall(client, "Network.getResponseBody", { requestId: r.requestId });
-        if (!bodyRes.success) {
-          r.body = null;
-          return;
-        }
-        const b = bodyRes.data;
-        let body = b.base64Encoded ? Buffer.from(b.body, "base64").toString("utf8") : b.body;
-        if (body.length > PER_BODY_CAP) body = body.slice(0, PER_BODY_CAP) + "…";
-        r.body = body;
-      });
-      await Promise.allSettled(fills);
-      clearTimeout(timer);
-    }
+    const includeBodies = args.includeResponseBodies ?? false;
+    const records: ReadonlyArray<NetworkRecord> = includeBodies
+      ? await withBodies(client, drained.records, signal)
+      : drained.records;
 
-    const text = renderNetworkMarkdown(drained.records, {
-      includeBodies: args.includeResponseBodies ?? false,
+    const text = renderNetworkMarkdown(records, {
+      includeBodies,
       total: drained.total,
       bufferOverflowed: drained.bufferOverflowed,
       expanded: true,
@@ -269,21 +231,19 @@ export const networkRequestsTool = defineBrowserTool({
 
     const details: NetworkDetails = {
       total: drained.total,
-      returned: drained.records.length,
+      returned: records.length,
       bufferOverflowed: drained.bufferOverflowed,
       truncated: trunc.wasTruncated,
-      requests: drained.records,
-      includeBodies: args.includeResponseBodies ?? false,
+      requests: records,
+      includeBodies,
+      ...(trunc.fullOutputPath !== undefined ? { fullOutputPath: trunc.fullOutputPath } : {}),
     };
-    if (trunc.fullOutputPath !== undefined) details.fullOutputPath = trunc.fullOutputPath;
 
     return ok({ text: trunc.text, details });
   },
 
-  renderResult(result, expanded, theme) {
-    const details = asNetworkDetails(result.details);
-    if (!details) return new Text(theme.fg("error", "network: no details"), 0, 0);
-
+  renderResult(result, expanded) {
+    const details = result.details;
     const md = renderNetworkMarkdown(details.requests, {
       includeBodies: details.includeBodies && expanded,
       total: details.total,
@@ -291,7 +251,7 @@ export const networkRequestsTool = defineBrowserTool({
       expanded,
     });
     const tail = expanded
-      ? `\n\n${keyHint("app.tools.expand", "to collapse")}${details.fullOutputPath ? ` · full payload at \`${details.fullOutputPath}\`` : ""}`
+      ? `\n\n${keyHint("app.tools.expand", "to collapse")}${details.fullOutputPath !== undefined ? ` · full payload at \`${details.fullOutputPath}\`` : ""}`
       : `\n\n${keyHint("app.tools.expand", "to expand")}`;
 
     return new Markdown(md + tail, 0, 0, getMarkdownTheme());

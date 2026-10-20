@@ -38,6 +38,16 @@ describe("path containment", () => {
     assert.equal(isPathWithin(root, `${root}-sibling${sep}script.js`), false);
   });
 
+  test("a child whose name starts with '..' is contained", () => {
+    assert.equal(isPathWithin(root, join(root, "..foo")), true);
+    assert.equal(isPathWithin(root, join(root, "..foo", "script.js")), true);
+    assert.equal(isPathWithin(root, join(root, "...")), true);
+  });
+
+  test("a sibling whose name starts with '..' is still rejected", () => {
+    assert.equal(isPathWithin(root, join(root, "..", "..foo")), false);
+  });
+
   test("the root's own parent is rejected", () => {
     assert.equal(isPathWithin(root, join(root, "..")), false);
   });

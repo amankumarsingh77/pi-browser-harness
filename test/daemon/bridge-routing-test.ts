@@ -4,15 +4,16 @@ import { createEventRouter, createIdMultiplexer, type InFlight } from "../../src
 import type { SendToClient } from "../../src/daemon/bridge";
 import type { WireEvent } from "../../src/daemon/protocol";
 
-const noSend: SendToClient = () => {};
+const noSend: SendToClient = () => undefined;
 const entry = (clientId: string, localId: number): Omit<InFlight, "timer"> => ({
   clientId,
   localId,
   send: noSend,
   isAttach: false,
+  generation: 1,
 });
 
-const inertTimer = (): ReturnType<typeof setTimeout> => setTimeout(() => {}, 60_000);
+const inertTimer = (): ReturnType<typeof setTimeout> => setTimeout(() => undefined, 60_000);
 
 describe("daemon id multiplexer", () => {
   test("two clients using the same local id get distinct daemon ids", () => {
@@ -29,7 +30,7 @@ describe("daemon id multiplexer", () => {
     assert.equal(mux.take(b)?.clientId, "client-b");
     const takenA = mux.take(a);
     assert.equal(takenA?.clientId, "client-a");
-    assert.equal(takenA?.localId, 7);
+    assert.equal(takenA.localId, 7);
   });
 
   test("taking the same daemon id twice yields nothing the second time", () => {
@@ -44,32 +45,33 @@ describe("daemon id multiplexer", () => {
     assert.equal(mux.take(999), undefined);
   });
 
-  test("clearClient drops only that client's in-flight requests", () => {
+  test("takeWhere drops only the matching in-flight requests and returns them", () => {
     const mux = createIdMultiplexer();
     const a = mux.allocate(entry("client-a", 1), inertTimer);
     const b = mux.allocate(entry("client-b", 1), inertTimer);
-    mux.clearClient("client-a");
+    const taken = mux.takeWhere((e) => e.clientId === "client-a");
+    assert.deepEqual(taken.map((e) => e.clientId), ["client-a"]);
     assert.equal(mux.take(a), undefined);
     assert.equal(mux.take(b)?.clientId, "client-b");
   });
 
-  test("clearClient cancels the pending timeout so a gone client is never answered", () => {
+  test("takeWhere cancels the pending timeout so a gone client is never answered", () => {
     const mux = createIdMultiplexer();
     let fired = false;
     mux.allocate(entry("client-a", 1), () => setTimeout(() => { fired = true; }, 1));
-    mux.clearClient("client-a");
+    mux.takeWhere((e) => e.clientId === "client-a");
     return new Promise<void>((resolve) => setTimeout(() => {
       assert.equal(fired, false);
       resolve();
     }, 30));
   });
 
-  test("takeAll drains every in-flight request exactly once", () => {
+  test("takeWhere with an always-true predicate drains every in-flight request exactly once", () => {
     const mux = createIdMultiplexer();
     mux.allocate(entry("client-a", 1), inertTimer);
     mux.allocate(entry("client-b", 2), inertTimer);
-    assert.equal(mux.takeAll().length, 2);
-    assert.equal(mux.takeAll().length, 0);
+    assert.equal(mux.takeWhere(() => true).length, 2);
+    assert.equal(mux.takeWhere(() => true).length, 0);
   });
 });
 

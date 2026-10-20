@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { findHostProvidedDependencies } from "../../scripts/check-manifest";
+import { isRecord } from "../../src/util/guards";
 
 describe("host-provided manifest contract", () => {
   test("flags host-provided packages listed in dependencies", () => {
@@ -41,9 +42,8 @@ describe("host-provided manifest contract", () => {
   });
 
   test("this package declares no host-provided dependencies", () => {
-    const manifest = JSON.parse(
-      readFileSync(new URL("../../package.json", import.meta.url), "utf8")
-    );
+    const manifest: unknown = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
+    assert.ok(isRecord(manifest));
     assert.deepEqual(findHostProvidedDependencies(manifest), []);
   });
 });

@@ -23,7 +23,7 @@ const currentOwnedTarget = (
   client: BrowserClient,
 ): Result<{ readonly targetId: string }, ToolErr> => {
   const current = client.current();
-  if (current === undefined || current === null) {
+  if (current === null) {
     return err({ kind: "invalid_state", message: "No tab attached." });
   }
   if (!client.owns(current.targetId)) {
@@ -54,7 +54,7 @@ export const setHeadersTool = defineBrowserTool({
     if (!target.success) return target;
     const invalidName = Object.keys(args.headers).find((name) => !HEADER_NAME.test(name));
     if (invalidName !== undefined) {
-      return err({ kind: "invalid_state", message: `Invalid HTTP header name: ${JSON.stringify(invalidName)}` });
+      return err({ kind: "invalid_args", message: `Invalid HTTP header name: ${JSON.stringify(invalidName)}` });
     }
     const result = await cdpCall(client, "Network.setExtraHTTPHeaders", { headers: args.headers });
     if (!result.success) return result;

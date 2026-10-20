@@ -26,11 +26,11 @@ const makeStubTransport = (
       return Promise.resolve(responses[method] ?? ok({}));
     },
     // No real events ever arrive, so the session's background consumer awaits forever — with no timers involved, it does not keep the process alive.
-    events: (): AsyncIterable<CdpEvent> => (async function* (): AsyncGenerator<CdpEvent> {
-      await new Promise<never>(() => {});
-    })(),
+    events: (): AsyncIterable<CdpEvent> => ({
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => undefined) }),
+    }),
     state: () => "open",
-    onClose: () => () => {},
+    onClose: () => () => undefined,
   };
   return { transport, calls };
 };
@@ -52,10 +52,8 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
     const session = createCdpSession(transport);
     const r = await session.call("Target.getTargetInfo", {});
     assert.equal(r.success, true);
-    if (r.success) {
-      const targetId: string = r.data.targetInfo.targetId;
-      assert.equal(targetId, "t1");
-    }
+    const targetId: string = r.data.targetInfo.targetId;
+    assert.equal(targetId, "t1");
   });
 
   test("(b) a garbage stub payload becomes invalid_response, without throwing", async () => {
@@ -65,7 +63,7 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
     const session = createCdpSession(transport);
     const r = await session.call("Target.getTargetInfo", {});
     assert.equal(r.success, false);
-    if (!r.success) assert.equal(r.error.kind, "invalid_response");
+    assert.equal(r.error.kind, "invalid_response");
   });
 
   test("(c) a transport-level error passes through with its original kind", async () => {
@@ -75,10 +73,8 @@ describe("CdpSession.call / callOnTarget / callBrowser", () => {
     const session = createCdpSession(transport);
     const r = await session.call("Target.getTargetInfo", {});
     assert.equal(r.success, false);
-    if (!r.success) {
-      assert.equal(r.error.kind, "timeout");
-      assert.equal(r.error.message, "socket dead");
-    }
+    assert.equal(r.error.kind, "timeout");
+    assert.equal(r.error.message, "socket dead");
   });
 
   test("(d) call/callOnTarget/callBrowser route the session id correctly", async () => {

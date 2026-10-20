@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { createFakeClient, axNode } from "./fake-client";
 import { interactiveDiff } from "../../src/domains/ref-resolve";
 import { ok } from "../../src/util/result";
+import type { RefSignature } from "../../src/domains/ref-signature";
+
+const sig = (role: string, name: string): RefSignature => ({ role, name, value: "", state: "" });
 
 const SEEDED = [
-  { ref: "e1", backendId: 101, sig: "textbox|Email||" },
-  { ref: "e2", backendId: 102, sig: "textbox|Name||" },
-  { ref: "e3", backendId: 103, sig: "button|Go||" },
+  { ref: "e1", backendId: 101, sig: sig("textbox", "Email") },
+  { ref: "e2", backendId: 102, sig: sig("textbox", "Name") },
+  { ref: "e3", backendId: 103, sig: sig("button", "Go") },
 ];
 
 const treeWithNewButtonFirst = ok({

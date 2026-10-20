@@ -8,7 +8,8 @@ export type OwnershipRegistry = {
   harnessWindow(): string | undefined;
   setHarnessWindowId(windowId: number | undefined): void;
   harnessWindowId(): number | undefined;
-  onChange(cb: () => void): void;
+  // Subscribe; the returned function unsubscribes. Several subscribers may be registered at once.
+  onChange(cb: () => void): () => void;
 };
 
 export const createOwnershipRegistry = (
@@ -21,10 +22,11 @@ export const createOwnershipRegistry = (
   const owned = new Set<string>(initial?.ownedTargetIds ?? []);
   let harnessWindow: string | undefined = initial?.harnessWindowTargetId;
   let harnessWindowId: number | undefined = initial?.harnessWindowId;
-  let listener: (() => void) | null = null;
+  const listeners = new Set<() => void>();
 
   const notify = (): void => {
-    if (listener) listener();
+    // Snapshot so a listener that unsubscribes (or subscribes) mid-notify does not disturb the iteration.
+    for (const cb of [...listeners]) cb();
   };
 
   return {
@@ -67,7 +69,23 @@ export const createOwnershipRegistry = (
       return harnessWindowId;
     },
     onChange(cb) {
-      listener = cb;
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
     },
   };
+};
+
+// Drops owned targets (and the harness window) that no longer exist in the browser. Returns the owned ids that survived.
+export const reconcileOwnership = (
+  ownership: OwnershipRegistry,
+  liveTargetIds: ReadonlySet<string>,
+): ReadonlyArray<string> => {
+  const owned = ownership.list();
+  const survivors = owned.filter((id) => liveTargetIds.has(id));
+  if (survivors.length !== owned.length) ownership.replaceAll(survivors);
+  const hw = ownership.harnessWindow();
+  if (hw !== undefined && !liveTargetIds.has(hw)) ownership.setHarnessWindow(undefined);
+  return survivors;
 };

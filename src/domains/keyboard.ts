@@ -1,14 +1,22 @@
 import { Type } from "typebox";
+import type { ParamsOf } from "../cdp/commands";
 import { safeJs } from "../util/js-template";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall, evalJs } from "./cdp-call";
-import { resolveRefToObjectId } from "./ref-resolve";
+import { runOnElement } from "./element-call";
+import { elementFunctionSource } from "./page/inject";
+import { dispatchKeyEvent, type KeyEventSpec } from "./page/keyboard.page";
+
+const DISPATCH_KEY_FN = elementFunctionSource(dispatchKeyEvent);
 
 const VIRTUAL_KEY_CODES: Readonly<Record<string, number>> = {
   Enter: 13, Tab: 9, Backspace: 8, Escape: 27, Delete: 46, " ": 32,
   ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
   Home: 36, End: 35, PageUp: 33, PageDown: 34,
+  Insert: 45, Shift: 16, Control: 17, Alt: 18, Meta: 91, CapsLock: 20, ContextMenu: 93,
+  F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117,
+  F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
 };
 
 const virtualKeyCode = (key: string): number =>
@@ -92,7 +100,7 @@ export const pressKeyTool = defineBrowserTool({
     const code = virtualKeyCode(k);
     const modifiers = args.modifiers ?? 0;
     const isChar = k.length === 1;
-    const downParams: Record<string, unknown> = {
+    const downParams: ParamsOf<"Input.dispatchKeyEvent"> = {
       type: "keyDown",
       key: k,
       code: k,
@@ -147,14 +155,9 @@ export const dispatchKeyTool = defineBrowserTool({
     // Legacy handlers branch on e.keyCode/e.which rather than e.key, so populate both.
     const code = virtualKeyCode(args.key);
     if (args.ref !== undefined) {
-      const objectId = await resolveRefToObjectId(client, args.ref);
-      if (!objectId.success) return objectId;
-      const r = await cdpCall(client, "Runtime.callFunctionOn", {
-        objectId: objectId.data,
-        functionDeclaration: `function (type, key, keyCode) { this.dispatchEvent(new KeyboardEvent(type, { key, keyCode, which: keyCode, bubbles: true, cancelable: true })); return 1; }`,
-        arguments: [{ value: eventType }, { value: args.key }, { value: code }],
-        returnByValue: true,
-      });
+      // Through runOnElement so the resolved RemoteObject is released after the call.
+      const spec: KeyEventSpec = { type: eventType, key: args.key, code };
+      const r = await runOnElement(client, { ref: args.ref, functionDeclaration: DISPATCH_KEY_FN, args: [spec] });
       if (!r.success) return r;
       return ok({
         text: `Dispatched ${eventType}('${args.key}') on ${target}`,
@@ -162,7 +165,7 @@ export const dispatchKeyTool = defineBrowserTool({
       });
     }
     if (args.selector === undefined) {
-      return err({ kind: "invalid_state", message: "Provide either `ref` or `selector`." });
+      return err({ kind: "invalid_args", message: "Provide either `ref` or `selector`." });
     }
     const expr = safeJs`
       (() => {

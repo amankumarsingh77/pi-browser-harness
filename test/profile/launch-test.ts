@@ -89,27 +89,21 @@ describe("openProfileWindow's failure reporting", () => {
 
     test("L4: the sentinel page exists before the browser is polled", () => {
       assert.ok(r.success);
-      if (r.success) {
-        const sentinel = fileURLToPath(r.data.sentinelUrl);
-        assert.ok(existsSync(sentinel));
-      }
+      const sentinel = fileURLToPath(r.data.sentinelUrl);
+      assert.ok(existsSync(sentinel));
     });
 
     test("L4: cleanup removes the sentinel page", async () => {
       assert.ok(r.success);
-      if (r.success) {
-        const sentinel = fileURLToPath(r.data.sentinelUrl);
-        await r.data.cleanup();
-        assert.ok(!existsSync(sentinel));
-      }
+      const sentinel = fileURLToPath(r.data.sentinelUrl);
+      await r.data.cleanup();
+      assert.ok(!existsSync(sentinel));
     });
 
     test("L4: kill is safe to call twice", () => {
       assert.ok(r.success);
-      if (r.success) {
-        r.data.kill();
-        r.data.kill();
-      }
+      r.data.kill();
+      r.data.kill();
     });
   });
 });

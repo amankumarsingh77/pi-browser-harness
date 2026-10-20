@@ -2,8 +2,7 @@ import { readFileSync } from "node:fs";
 import { Type } from "typebox";
 import { Image, type ImageTheme, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { type Result, ok } from "../util/result";
-import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
-import { asRecord, asString } from "../util/guards";
+import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { captureBase, resizeIfNeeded } from "./screenshot-capture";
 
 const ScreenshotArgs = Type.Object({
@@ -12,6 +11,14 @@ const ScreenshotArgs = Type.Object({
   quality: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, default: 80, description: "JPEG quality 1-100" })),
   maxDim: Type.Optional(Type.Integer({ minimum: 100, maximum: 8000, description: "If max(w,h) exceeds this, resize via sharp." })),
 });
+
+const ScreenshotDetailsSchema = Type.Object({
+  path: Type.String(),
+  format: Type.Union([Type.Literal("png"), Type.Literal("jpeg")]),
+  attached: Type.Boolean(),
+});
+
+export type ScreenshotDetails = DetailsOf<typeof ScreenshotDetailsSchema>;
 
 export const screenshotTool = defineBrowserTool({
   name: "browser_screenshot",
@@ -23,8 +30,9 @@ export const screenshotTool = defineBrowserTool({
     "format='jpeg' with quality 60-90 keeps screenshots small for photo-heavy pages. Use maxDim if the page is huge.",
   ],
   parameters: ScreenshotArgs,
+  details: ScreenshotDetailsSchema,
   concurrency: "parallel",
-  async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
+  async handler(args, { client }): Promise<Result<ToolOk<ScreenshotDetails>, ToolErr>> {
     const cap = await captureBase(client, args);
     if (!cap.success) return cap;
     let note = "";
@@ -39,12 +47,7 @@ export const screenshotTool = defineBrowserTool({
   },
 
   renderResult(result, _expanded, theme) {
-    const raw = asRecord(result.details);
-    const filePath = raw === undefined ? undefined : asString(raw["path"]);
-    if (!filePath) {
-      return new Text(theme.fg("error", "Screenshot path missing"), 0, 0);
-    }
-    const format = raw === undefined ? undefined : asString(raw["format"]);
+    const { path: filePath, format } = result.details;
     try {
       const buf = readFileSync(filePath);
       const b64 = buf.toString("base64");
@@ -59,7 +62,7 @@ export const screenshotTool = defineBrowserTool({
       });
       // Image's text fallback does not respect the rendered width, so an unwrapped long path can blow past the terminal width and crash the host TUI.
       return {
-        invalidate: () => image.invalidate(),
+        invalidate: () => { image.invalidate(); },
         render: (width: number) =>
           image.render(width).map((line) =>
             visibleWidth(line) > width ? truncateToWidth(line, width) : line,

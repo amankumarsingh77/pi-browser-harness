@@ -74,7 +74,8 @@ const writePinFile = async (profile: ProfilePin | null): Promise<Result<void, st
     await rename(tmp, target);
     return ok(undefined);
   } catch (e) {
-    await unlink(tmp).catch(() => {});
+    // The temp file may never have been created; the write error below is the one that matters.
+    await unlink(tmp).catch(() => undefined);
     return err(`could not save profile selection to ${target}: ${e instanceof Error ? e.message : String(e)}`);
   }
 };

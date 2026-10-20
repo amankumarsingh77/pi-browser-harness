@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifySerp, parseGoogleSerp, type SerpExtraction } from "../../src/domains/search/google-serp";
+import { parseSerpExtraction } from "../../src/domains/search/web-search";
 
-const fixture = (name: string): SerpExtraction =>
-  JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", name), "utf8")) as SerpExtraction;
+const fixture = (name: string): SerpExtraction => {
+  const parsed = parseSerpExtraction(readFileSync(join(import.meta.dirname, "fixtures", name), "utf8"));
+  if (!parsed.success) throw new Error(`fixture ${name} is not a SERP extraction: ${parsed.error}`);
+  return parsed.data;
+};
 
 const ok = fixture("google-serp-ok.json");
 const captcha = fixture("google-serp-captcha.json");

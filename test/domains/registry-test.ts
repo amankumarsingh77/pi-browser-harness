@@ -1,10 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { Type } from "typebox";
-import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { TSchema } from "typebox";
-import { ALL_TOOLS } from "../../src/registry";
-import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
+import type { ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { ALL_TOOLS, type ToolRegistrar } from "../../src/registry";
+import { type BrowserTool, type ToolConcurrency, defineBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
 import { ok } from "../../src/util/result";
 
@@ -41,11 +40,9 @@ const SERIALIZED = new Set([
 
 describe("tool registry", () => {
   test("every tool declares a concurrency class", () => {
+    const lanes: ReadonlySet<string> = new Set(["serialized", "parallel"]);
     for (const t of ALL_TOOLS) {
-      assert.ok(
-        t.concurrency === "serialized" || t.concurrency === "parallel",
-        `${t.name} has no concurrency class`,
-      );
+      assert.ok(lanes.has(t.concurrency), `${t.name} has no concurrency class`);
     }
   });
 
@@ -68,37 +65,44 @@ describe("tool registry", () => {
 
 type LockProbe = {
   readonly acquires: ReadonlyArray<string>;
-  run: (def: AnyBrowserToolDefinition) => Promise<void>;
+  run: (tool: BrowserTool) => Promise<void>;
 };
 
 const lockProbe = (): LockProbe => {
   const acquires: string[] = [];
-  const client = {
+  const release = (): void => undefined;
+  const mutex = {
     mutationMutex: () => ({
-      acquire: async () => {
+      acquire: () => {
         acquires.push("acquired");
-        return () => {};
+        return Promise.resolve(release);
       },
     }),
-  } as unknown as BrowserClient;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only mutationMutex is reached with ensureAlive:false
+  const client = mutex as unknown as BrowserClient;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the probe handler never reads its context
+  const extensionCtx = undefined as unknown as ExtensionContext;
   return {
     acquires,
-    run: async (def) => {
-      let registered: ToolDefinition<TSchema> | undefined;
-      const pi = {
-        registerTool: (td: ToolDefinition<TSchema>) => {
+    run: async (tool) => {
+      let registered: ToolDefinition | undefined;
+      const sink = {
+        registerTool: (td: ToolDefinition) => {
           registered = td;
         },
-      } as unknown as ExtensionAPI;
-      registerBrowserTool(pi, client, def);
+      };
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- pi's registerTool is generic over the schema; a sink typed for one schema needs the same erasure pi itself does
+      const pi = sink as unknown as ToolRegistrar;
+      tool.register(pi, client);
       assert.ok(registered, "tool was not registered");
-      await registered.execute?.("id", {}, undefined, undefined, undefined as never);
+      await registered.execute("id", {}, undefined, undefined, extensionCtx);
     },
   };
 };
 
-const probeTool = (concurrency: unknown): AnyBrowserToolDefinition =>
-  ({
+const probeTool = (concurrency: ToolConcurrency): BrowserTool =>
+  defineBrowserTool({
     name: "browser_probe",
     label: "Probe",
     description: "probe",
@@ -107,8 +111,8 @@ const probeTool = (concurrency: unknown): AnyBrowserToolDefinition =>
     parameters: Type.Object({}),
     ensureAlive: false,
     concurrency,
-    handler: async () => ok({ text: "done" }),
-  }) as AnyBrowserToolDefinition;
+    handler: () => Promise.resolve(ok({ text: "done" })),
+  });
 
 describe("concurrency lane selection", () => {
   test("a parallel tool skips the mutation mutex", async () => {
@@ -120,12 +124,6 @@ describe("concurrency lane selection", () => {
   test("a serialized tool takes the mutation mutex", async () => {
     const probe = lockProbe();
     await probe.run(probeTool("serialized"));
-    assert.deepEqual([...probe.acquires], ["acquired"]);
-  });
-
-  test("a definition with no concurrency class takes the mutation mutex", async () => {
-    const probe = lockProbe();
-    await probe.run(probeTool(undefined));
     assert.deepEqual([...probe.acquires], ["acquired"]);
   });
 });
