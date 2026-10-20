@@ -7,7 +7,7 @@ import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "..
 import { cdpCall } from "./cdp-call";
 import { deadlineSignal, runLimited } from "./concurrency";
 import { applyTruncation } from "../util/truncate";
-import type { NetworkRecord } from "../cdp/network-buffer";
+import { type NetworkRecord, NetworkRecordSchema } from "../cdp/network-buffer";
 import type { BrowserClient } from "../client";
 
 const HttpGetArgs = Type.Object({
@@ -155,25 +155,6 @@ const renderNetworkMarkdown = (
 
   return [headerLines.join("\n"), "", tableHeader, tableRows, bodySections].filter((s) => s !== "").join("\n");
 };
-
-// Mirrors NetworkRecord from the buffer: the handler's records must fit it and the renderer reads records out of
-// it, so a drift in either direction fails to compile.
-const NetworkRecordSchema = Type.Object({
-  requestId: Type.String(),
-  method: Type.String(),
-  url: Type.String(),
-  status: Type.Optional(Type.Number()),
-  statusText: Type.Optional(Type.String()),
-  type: Type.String(),
-  mimeType: Type.Optional(Type.String()),
-  requestStartedMs: Type.Number(),
-  durationMs: Type.Optional(Type.Number()),
-  requestBodySize: Type.Number(),
-  responseBodySize: Type.Optional(Type.Number()),
-  failed: Type.Optional(Type.Boolean()),
-  errorText: Type.Optional(Type.String()),
-  body: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-});
 
 const NetworkDetailsSchema = Type.Object({
   total: Type.Number(),

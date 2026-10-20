@@ -85,6 +85,9 @@ export type ToolRegistry = {
   // Append one tool. Rejects a name already present so a contributor cannot shadow a built-in
   // (or another contributor) silently; the first registration wins.
   readonly add: (tool: BrowserTool) => Result<void, RegistryError>;
+  // Append a batch atomically: a name clash anywhere in it (with the registry or within the batch)
+  // rejects the whole call and leaves the registry untouched.
+  readonly addAll: (tools: ReadonlyArray<BrowserTool>) => Result<void, RegistryError>;
   // Register every tool that has not been registered with pi yet. Safe to call on every
   // session_start: tools added after an earlier call land on the next one.
   readonly register: (pi: ToolRegistrar, client: BrowserClient) => void;
@@ -100,12 +103,17 @@ export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOO
   const names = new Set<string>();
   const registered = new Set<string>();
 
-  const add = (tool: BrowserTool): Result<void, RegistryError> => {
-    if (names.has(tool.name)) return err(duplicateName(tool.name));
-    names.add(tool.name);
-    tools.push(tool);
+  const addAll = (batch: ReadonlyArray<BrowserTool>): Result<void, RegistryError> => {
+    const seen = new Set<string>();
+    const clash = batch.find((t) => names.has(t.name) || seen.has(t.name) || (seen.add(t.name), false));
+    if (clash) return err(duplicateName(clash.name));
+    for (const tool of batch) {
+      names.add(tool.name);
+      tools.push(tool);
+    }
     return ok(undefined);
   };
+  const add = (tool: BrowserTool): Result<void, RegistryError> => addAll([tool]);
 
   for (const tool of initial) {
     const added = add(tool);
@@ -115,6 +123,7 @@ export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOO
   return {
     tools: () => [...tools],
     add,
+    addAll,
     register: (pi, client) => {
       for (const tool of tools) {
         if (registered.has(tool.name)) continue;
@@ -123,8 +132,4 @@ export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOO
       }
     },
   };
-};
-
-export const registerAllTools = (pi: ToolRegistrar, client: BrowserClient): void => {
-  createToolRegistry(ALL_TOOLS).register(pi, client);
 };

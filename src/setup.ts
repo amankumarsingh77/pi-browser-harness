@@ -76,11 +76,11 @@ export async function performSetup(
   }
 
   const info = await client.pageInfo();
-  if (info.success && "dialog" in info.data) {
+  if (info.success && info.data.kind === "dialog") {
     await client.session().call("Page.handleJavaScriptDialog", { accept: true });
   }
 
-  const pageUrl = info.success && !("dialog" in info.data) ? info.data.url : "github.com";
+  const pageUrl = info.success && info.data.kind === "page" ? info.data.url : "github.com";
   const lines = ["Browser connected ✓", `Navigated to: ${pageUrl}`];
   if (profileNote) lines.push(profileNote);
   return ok(lines.join("\n"));

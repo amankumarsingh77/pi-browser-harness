@@ -1,8 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as tick } from "node:timers/promises";
 import { createMutex } from "../../src/util/mutex";
-
-const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 // Resolves to true only if the promise settles within a few macrotask turns.
 const settles = async (p: Promise<unknown>): Promise<boolean> => {

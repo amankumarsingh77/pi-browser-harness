@@ -1,8 +1,7 @@
 import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { type Canned, createFakeClient, type FakeClient, handlerContext } from "./fake-client";
-import { installTheme, renderedText, testTheme, withClient } from "./client-overrides";
-import type { Component } from "@mariozechner/pi-tui";
+import { type Canned, createFakeClient, evaluated, type FakeClient, handlerContext } from "./fake-client";
+import { installTheme, renderWith, renderedText, withClient } from "./client-overrides";
 import { parseSerpExtraction, webSearchTool } from "../../src/domains/search/web-search";
 import type { SerpExtraction } from "../../src/domains/search/google-serp";
 import { cdpError } from "../../src/cdp/errors";
@@ -19,8 +18,6 @@ const EXTRACTION: SerpExtraction = {
   pageText: "results",
 };
 
-const evaluated = (value: unknown) => ok({ result: { type: typeof value, value } });
-
 const searching = (canned: Canned = {}): Promise<FakeClient> =>
   createFakeClient({
     canned: {
@@ -33,10 +30,7 @@ const searching = (canned: Canned = {}): Promise<FakeClient> =>
     evaluate: (expression) => ok(expression.includes("readyState") ? true : undefined),
   });
 
-const render = (result: Parameters<NonNullable<typeof webSearchTool.renderResult>>[0], expanded: boolean): Component => {
-  assert.ok(webSearchTool.renderResult);
-  return webSearchTool.renderResult(result, expanded, testTheme);
-};
+const render = renderWith(webSearchTool);
 
 const closing = (fake: FakeClient): { client: ReturnType<typeof withClient>; closed: string[] } => {
   const closed: string[] = [];

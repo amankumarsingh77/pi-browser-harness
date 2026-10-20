@@ -5,30 +5,21 @@ import { createInterface } from "node:readline";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDaemon, isDaemonEntry, type Daemon, type DaemonLog } from "../../src/daemon/index";
+import { setTimeout as sleep } from "node:timers/promises";
+import { createDaemon, type Daemon } from "../../src/daemon/index";
 import { createIpcServer, type IpcServer } from "../../src/daemon/server";
 import { createCdpBridge, type CdpBridge } from "../../src/daemon/bridge";
 import { cdpError } from "../../src/cdp/errors";
 import { err } from "../../src/util/result";
 import { deserialize, serialize, type WireMessage } from "../../src/daemon/protocol";
+import { waitFor } from "../helpers/wait";
 
-// src/daemon/index.ts only runs main() when it is the script Node was started with, so it can be
-// imported here and its real composition (createDaemon) driven over a temp socket. Chrome is never
+// src/daemon/index.ts only exports the composition (the process entry is main.ts), so it can be
+// imported here and createDaemon driven over a temp socket. Chrome is never
 // reachable: the bridge's discovery is stubbed to fail fast, so every forwarded request is answered
 // with the bridge's "Chrome not connected" error instead of a socket attempt.
 
 const SKIP = process.platform === "win32" ? "the fixture server listens on a temp socket file" : false;
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const waitFor = async (predicate: () => boolean, timeoutMs = 1_000): Promise<boolean> => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await sleep(2);
-  }
-  return predicate();
-};
 
 type Harness = {
   readonly daemon: Daemon;
@@ -60,16 +51,12 @@ const startDaemon = async (idleTimeoutMs: number): Promise<Harness> => {
   };
   const exits: number[] = [];
   const logged: string[] = [];
-  const log: DaemonLog = {
-    info: (m) => { logged.push(m); },
-    error: (m) => { logged.push(m); },
-  };
   const daemon = createDaemon({
     ipcServer,
     cdpBridge: spiedBridge,
     idleTimeoutMs,
     exit: (code) => { exits.push(code); },
-    log,
+    log: (line) => { logged.push(line); },
   });
   await daemon.start();
   return {
@@ -254,7 +241,7 @@ describe("createDaemon (ipc server + cdp bridge)", { skip: SKIP }, () => {
       ipcServer: createIpcServer({ socketPath: join(dir, "missing", "d.sock") }),
       cdpBridge: spiedBridge,
       exit: (code) => { exits.push(code); },
-      log: { info: (m) => { logged.push(m); }, error: (m) => { logged.push(m); } },
+      log: (line) => { logged.push(line); },
     });
     try {
       await daemon.start();
@@ -266,21 +253,5 @@ describe("createDaemon (ipc server + cdp bridge)", { skip: SKIP }, () => {
       await bridge.stop();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("isDaemonEntry", () => {
-  const moduleUrl = "file:///opt/pi/src/daemon/index.ts";
-
-  test("is true only when argv[1] is this module's own path", () => {
-    assert.equal(isDaemonEntry(["node", "/opt/pi/src/daemon/index.ts"], moduleUrl), true);
-    assert.equal(isDaemonEntry(["node", "/opt/pi/src/daemon/../daemon/index.ts"], moduleUrl), true);
-    assert.equal(isDaemonEntry(["node", "/opt/pi/test/daemon/index-test.ts"], moduleUrl), false);
-    assert.equal(isDaemonEntry(["node"], moduleUrl), false);
-    assert.equal(isDaemonEntry(["node", ""], moduleUrl), false);
-  });
-
-  test("importing the module from the test runner does not count as the entry", () => {
-    assert.equal(isDaemonEntry(), false);
   });
 });

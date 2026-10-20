@@ -1,9 +1,8 @@
 import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { type Canned, createFakeClient, type FakeClient, handlerContext } from "./fake-client";
-import { installTheme, renderedText, testTheme, withClient } from "./client-overrides";
+import { type Canned, createFakeClient, evaluated, type FakeClient, handlerContext } from "./fake-client";
+import { installTheme, renderWith, renderedText, withClient } from "./client-overrides";
 import { type ReadPageDetails, readPageTool, toPageCapture } from "../../src/domains/readpage/read-page";
-import type { Component } from "@mariozechner/pi-tui";
 import type { PageCapture } from "../../src/domains/readpage/readability";
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
@@ -21,8 +20,6 @@ const CAPTURE: PageCapture = {
   ],
   bodyText: "fallback body",
 };
-
-const evaluated = (value: unknown) => ok({ result: { type: typeof value, value } });
 
 // The fake attaches t1 as s1; the isolated tab t2 receives the second attach result.
 const reading = (canned: Canned = {}, readyState = true): Promise<FakeClient> =>
@@ -42,10 +39,7 @@ const details = (d: ReadPageDetails | undefined): ReadPageDetails => {
   return d;
 };
 
-const render = (result: Parameters<NonNullable<typeof readPageTool.renderResult>>[0], expanded: boolean): Component => {
-  assert.ok(readPageTool.renderResult);
-  return readPageTool.renderResult(result, expanded, testTheme);
-};
+const render = renderWith(readPageTool);
 
 const closing = (fake: FakeClient): { client: ReturnType<typeof withClient>; closed: string[] } => {
   const closed: string[] = [];
@@ -166,10 +160,14 @@ describe("browser_read_page by url", () => {
 });
 
 describe("browser_read_page by targetId", () => {
-  test("attaches a flat session to the owned tab, evaluates there, and detaches", async () => {
+  test("borrows a session for a non-current owned tab, evaluates there, and releases it", async () => {
     const fake = await createFakeClient({
-      canned: { "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-read" })] },
+      canned: { "Target.getTargets": ok({ targetInfos: [
+          { targetId: "t1", type: "page", title: "Fake", url: "https://example.test/" },
+          { targetId: "t2", type: "page", title: "Other", url: "https://example.test/other" },
+        ] }), "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-read" })] },
       evaluate: () => ok(CAPTURE),
+      ownedTargetIds: ["t1", "t2"],
     });
     const seen: Array<string | undefined> = [];
     const client = withClient(fake.client, {
@@ -178,10 +176,10 @@ describe("browser_read_page by targetId", () => {
         return fake.client.evaluateJs(expression, sessionId);
       },
     });
-    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(client));
+    const r = await readPageTool.handler({ targetId: "t2" }, handlerContext(client));
     assert.equal(r.success, true);
     assert.deepEqual(fake.calls.map((c) => [c.method, c.params, c.sessionId]), [
-      ["Target.attachToTarget", { targetId: "t1", flatten: true }, null],
+      ["Target.attachToTarget", { targetId: "t2", flatten: true }, null],
       ["Target.detachFromTarget", { sessionId: "s-read" }, null],
     ]);
     assert.deepEqual(seen, ["s-read"]);
@@ -198,11 +196,23 @@ describe("browser_read_page by targetId", () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  test("the current tab's tracked session is reused without attaching", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(CAPTURE) });
+    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(fake.callsTo("Target.attachToTarget").length, 0);
+    assert.equal(fake.callsTo("Target.detachFromTarget").length, 0);
+  });
+
   test("an attach failure is a cdp_error naming Target.attachToTarget", async () => {
     const fake = await createFakeClient({
-      canned: { "Target.attachToTarget": [ok({ sessionId: "s1" }), err(cdpError("timeout", "no attach"))] },
+      canned: { "Target.getTargets": ok({ targetInfos: [
+          { targetId: "t1", type: "page", title: "Fake", url: "https://example.test/" },
+          { targetId: "t2", type: "page", title: "Other", url: "https://example.test/other" },
+        ] }), "Target.attachToTarget": [ok({ sessionId: "s1" }), err(cdpError("timeout", "no attach"))] },
+      ownedTargetIds: ["t1", "t2"],
     });
-    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+    const r = await readPageTool.handler({ targetId: "t2" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "timeout");
     assert.deepEqual(r.error.details, { method: "Target.attachToTarget" });
@@ -211,10 +221,14 @@ describe("browser_read_page by targetId", () => {
 
   test("a decoded capture of the wrong shape is an internal error and still detaches", async () => {
     const fake = await createFakeClient({
-      canned: { "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-read" })] },
+      canned: { "Target.getTargets": ok({ targetInfos: [
+          { targetId: "t1", type: "page", title: "Fake", url: "https://example.test/" },
+          { targetId: "t2", type: "page", title: "Other", url: "https://example.test/other" },
+        ] }), "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-read" })] },
       evaluate: () => ok({ nope: true }),
+      ownedTargetIds: ["t1", "t2"],
     });
-    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+    const r = await readPageTool.handler({ targetId: "t2" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "internal");
     assert.equal(fake.callsTo("Target.detachFromTarget").length, 1);

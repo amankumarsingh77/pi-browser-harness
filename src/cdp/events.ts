@@ -39,6 +39,11 @@ const ConsoleArg = Type.Object(
 
 export const EVENTS = {
   "Inspector.detached": ev(Anything),
+  // Browser-level notice that a session ended; carries the session id in params rather than on the envelope.
+  "Target.detachedFromTarget": ev(
+    Type.Object({ sessionId: Type.String(), targetId: Type.Optional(Type.String()) }, open),
+  ),
+  "Page.javascriptDialogClosed": ev(Anything),
 
   "Page.javascriptDialogOpening": ev(
     Type.Object(

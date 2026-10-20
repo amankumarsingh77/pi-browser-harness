@@ -56,7 +56,7 @@ describe("daemon spawn command", () => {
 
   test("the daemon entrypoint is passed to tsx", () => {
     const script = daemonSpawnCommand()?.args[1];
-    assert.match(String(script), /[\\/]daemon[\\/]index\.ts$/);
+    assert.match(String(script), /[\\/]daemon[\\/]main\.ts$/);
     assert.equal(existsSync(String(script)), true);
   });
 });

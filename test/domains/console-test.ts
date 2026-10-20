@@ -1,23 +1,14 @@
 import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
-import { initTheme, Theme } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { createFakeClient, type FakeClient, handlerContext } from "./fake-client";
+import { createFakeClient, type FakeClient, flush, handlerContext } from "./fake-client";
+import { installTheme, renderedText, testTheme } from "./client-overrides";
 import { type ConsoleDetails, consoleTool } from "../../src/domains/console";
 import type { ConsoleRecord } from "../../src/cdp/console-buffer";
 
-const ANSI_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-const rendered = (component: Component): string =>
-  component.render(400).map((l) => l.replace(ANSI_SEQUENCE, "").trimEnd()).join("\n");
 
-before(() => { initTheme("dark"); });
-const anyTheme = (): Theme => Theme.prototype;
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
+before(() => {
+  installTheme();
+});
 
 type ConsoleType = "log" | "info" | "warning" | "error" | "debug";
 
@@ -249,7 +240,7 @@ describe("browser_console renderResult", () => {
 
   test("collapsed shows the last five rows, the count of earlier ones and the expand hint", () => {
     assert.ok(render);
-    const out = rendered(render(result(details(seven)), false, anyTheme()));
+    const out = renderedText(render(result(details(seven)), false, testTheme), 400);
     assert.match(out, /1 error · 6 logs/);
     assert.doesNotMatch(out, /line 1\b/);
     assert.doesNotMatch(out, /line 2\b/);
@@ -262,7 +253,7 @@ describe("browser_console renderResult", () => {
 
   test("expanded shows every row with stack traces, the cursor and the collapse hint", () => {
     assert.ok(render);
-    const out = rendered(render(result(details(seven, { fullOutputPath: "/tmp/console.txt" })), true, anyTheme()));
+    const out = renderedText(render(result(details(seven, { fullOutputPath: "/tmp/console.txt" })), true, testTheme), 400);
     assert.match(out, /line 1/);
     assert.match(out, /at f \(x:1\)/);
     assert.match(out, /nextCursor=7/);
@@ -273,8 +264,8 @@ describe("browser_console renderResult", () => {
   test("collapsed rows are cut at 80 characters, expanded rows at 200", () => {
     assert.ok(render);
     const long = record(1, "log", "x".repeat(300));
-    const collapsed = rendered(render(result(details([long])), false, anyTheme()));
-    const expanded = rendered(render(result(details([long])), true, anyTheme()));
+    const collapsed = renderedText(render(result(details([long])), false, testTheme), 400);
+    const expanded = renderedText(render(result(details([long])), true, testTheme), 400);
     assert.match(collapsed, /x{79}…/);
     assert.doesNotMatch(collapsed, /x{80}/);
     assert.match(expanded, /x{199}…/);
@@ -282,7 +273,7 @@ describe("browser_console renderResult", () => {
 
   test("no records renders the empty message", () => {
     assert.ok(render);
-    const out = rendered(render(result(details([])), false, anyTheme()));
+    const out = renderedText(render(result(details([])), false, testTheme), 400);
     assert.match(out, /No matching console records captured yet/);
   });
 });

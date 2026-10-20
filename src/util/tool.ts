@@ -1,3 +1,4 @@
+import { isRecord } from "./guards";
 import { Type, type TSchema, type Static } from "typebox";
 import { Compile } from "typebox/compile";
 import type {
@@ -32,8 +33,7 @@ const isJsonValue = (v: unknown): v is JsonValue => {
   return Object.values(v).every(isJsonValue);
 };
 
-export const isJsonObject = (v: unknown): v is JsonObject =>
-  typeof v === "object" && v !== null && !Array.isArray(v) && isJsonValue(v);
+export const isJsonObject = (v: unknown): v is JsonObject => isRecord(v) && isJsonValue(v);
 
 // A tool that declares no `details` schema may still attach any JSON object for logs; its renderer (if any)
 // sees that object untyped, or undefined when the handler attached nothing.
@@ -99,14 +99,10 @@ export type BrowserToolDefinition<S extends TSchema, D extends TSchema = Untyped
 // The schema-erased view of a tool. Everything that depends on S or D (handler, renderers, the details
 // validator) stays closed over inside `register`, which was built while they were still bound, so no cast is
 // needed to hold tools of different schemas in one list.
-export type BrowserTool = {
-  readonly name: string;
-  readonly label: string;
-  readonly description: string;
-  readonly promptSnippet: string;
-  readonly promptGuidelines: ReadonlyArray<string>;
-  readonly concurrency: ToolConcurrency;
-  readonly ensureAlive?: boolean;
+export type BrowserTool = Pick<
+  BrowserToolDefinition<TSchema>,
+  "name" | "label" | "description" | "promptSnippet" | "promptGuidelines" | "concurrency" | "ensureAlive"
+> & {
   readonly register: (pi: Pick<ExtensionAPI, "registerTool">, client: BrowserClient) => void;
 };
 
@@ -134,8 +130,11 @@ const storedText = (result: AgentToolResult<unknown>, fallback: string): string 
 
 // Readonly-ness is a compile-time view, so a value the compiled schema accepts is a DetailsOf<D> value. This
 // is the one place the predicate is asserted; tools get their details typed through it.
+// Compiled once: most tools declare no schema, and compiling the shared fallback per tool is wasted codegen.
+const UNTYPED_DETAILS_VALIDATOR = Compile(UntypedDetailsSchema);
+
 const detailsGuard = <D extends TSchema>(schema: D | undefined): ((v: unknown) => v is DetailsOf<D>) => {
-  const validator = Compile(schema ?? UntypedDetailsSchema);
+  const validator = schema ? Compile(schema) : UNTYPED_DETAILS_VALIDATOR;
   return (v: unknown): v is DetailsOf<D> => validator.Check(v);
 };
 
@@ -209,7 +208,7 @@ const toPiTool = <S extends TSchema, D extends TSchema>(
           ) => {
             // A replayed error carries only the thrown text (details are empty), so the tool's own renderer never sees it.
             if (ctx.isError) {
-              const text = storedText(result, renderToolError(def.name, { kind: "internal", message: "unknown error" }));
+              const text = storedText(result, `${def.name} failed (internal): unknown error`);
               return new Text(theme.fg("error", text), 0, 0);
             }
             // Replayed details may predate the schema (older session, changed shape); then the stored text stands in.

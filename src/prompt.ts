@@ -17,13 +17,10 @@ const TOOL_PREFIX = "browser_";
 export const shortToolName = (name: string): string =>
   name.startsWith(TOOL_PREFIX) ? name.slice(TOOL_PREFIX.length) : name;
 
-const namesInLane = (tools: ReadonlyArray<PromptTool>, lane: ToolConcurrency): ReadonlyArray<string> =>
-  tools.filter((t) => t.concurrency === lane).map((t) => t.name);
-
-export const laneNames = (tools: ReadonlyArray<PromptTool>): LaneNames => ({
-  serialized: namesInLane(tools, "serialized"),
-  parallel: namesInLane(tools, "parallel"),
-});
+export const laneNames = (tools: ReadonlyArray<PromptTool>): LaneNames => {
+  const lane = (c: ToolConcurrency): ReadonlyArray<string> => tools.filter((t) => t.concurrency === c).map((t) => t.name);
+  return { serialized: lane("serialized"), parallel: lane("parallel") };
+};
 
 const joinShort = (names: ReadonlyArray<string>): string => names.map(shortToolName).join(", ");
 

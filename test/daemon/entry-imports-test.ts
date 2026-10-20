@@ -41,7 +41,7 @@ const externalImportsReachableFrom = (entry: string): ReadonlyMap<string, string
 
 describe("daemon entrypoint imports", () => {
   test("the daemon only reaches runtime dependencies, never host-provided or dev packages", () => {
-    const external = externalImportsReachableFrom(join(srcRoot, "daemon", "index.ts"));
+    const external = externalImportsReachableFrom(join(srcRoot, "daemon", "main.ts"));
     const offenders = [...external].filter(([spec]) => !RUNTIME_DEPENDENCIES.has(spec.split("/")[0] ?? spec));
     assert.deepEqual(
       offenders,

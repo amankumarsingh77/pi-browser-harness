@@ -20,14 +20,14 @@ const targetDetails = (t: Target): JsonObject => ({
 const noMatch = (t: Target): ToolErr => ({
   kind: "invalid_state",
   message: `No element matched: ${targetLabel(t)}`,
-  details: { ref: t.ref, selector: t.selector },
+  details: targetDetails(t),
 });
 
 // A page function that returned something the guard does not recognise is a harness bug, not a missing element.
 const badShape = (t: Target, what: string): ToolErr => ({
   kind: "internal",
   message: `unexpected page result shape from ${what}`,
-  details: { ref: t.ref, selector: t.selector },
+  details: targetDetails(t),
 });
 
 // Narrows an element outcome to the page's typed result, or returns the error to surface.
@@ -134,7 +134,7 @@ export const focusTool = defineBrowserTool({
     const res = narrowed.data;
     const target = targetLabel(args);
     if (res.status === "not_focusable") {
-      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> could not be focused: ${target}`, details: { ref: args.ref, selector: args.selector, tag: res.tag } });
+      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> could not be focused: ${target}`, details: { ...targetDetails(args), tag: res.tag } });
     }
     return ok({ text: `Focused ${target}`, details: { ...targetDetails(args), tag: res.tag } });
   },
@@ -193,13 +193,13 @@ export const selectOptionTool = defineBrowserTool({
     const res = narrowed.data;
     const target = targetLabel(args);
     if (res.status === "not_select") {
-      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> is not a <select>: ${target}`, details: { ref: args.ref, selector: args.selector, tag: res.tag } });
+      return err({ kind: "invalid_state", message: `Element <${res.tag.toLowerCase()}> is not a <select>: ${target}`, details: { ...targetDetails(args), tag: res.tag } });
     }
     if (res.status === "no_match") {
       return err({
         kind: "invalid_state",
         message: `No matching option in ${target}. Available: ${res.options.map((o) => o.label).join(", ")}`,
-        details: { ref: args.ref, selector: args.selector, options: res.options },
+        details: { ...targetDetails(args), options: res.options },
       });
     }
     const diff = await interactiveDiff(client);

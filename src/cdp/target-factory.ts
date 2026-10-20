@@ -54,16 +54,20 @@ const spawnTabViaOpener = async (
 
   const token = `pi-${randomUUID()}`;
   // userGesture: true is what gets this past the popup blocker.
-  const opened = await client.session().callOnTarget(
-    "Runtime.evaluate",
-    {
-      expression: safeJs`!!window.open(${`about:blank#${token}`}, '_blank')`,
-      returnByValue: true,
-      userGesture: true,
-    },
-    borrowed.data.sessionId,
-  );
-  await borrowed.data.release();
+  let opened;
+  try {
+    opened = await client.session().callOnTarget(
+      "Runtime.evaluate",
+      {
+        expression: safeJs`!!window.open(${`about:blank#${token}`}, '_blank')`,
+        returnByValue: true,
+        userGesture: true,
+      },
+      borrowed.data.sessionId,
+    );
+  } finally {
+    await borrowed.data.release();
+  }
   if (!opened.success) return opened;
   if (opened.data.result.value !== true) {
     return err(cdpError(

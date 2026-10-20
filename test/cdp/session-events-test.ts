@@ -1,15 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
 import { createCdpSession } from "../../src/cdp/session";
 import { createOwnershipRegistry } from "../../src/cdp/ownership";
-import { createStubTransport } from "../domains/fake-client";
+import { createStubTransport, flush } from "../domains/fake-client";
 import { ok } from "../../src/util/result";
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
 
 const twoTabSession = async () => {
   const stub = createStubTransport({

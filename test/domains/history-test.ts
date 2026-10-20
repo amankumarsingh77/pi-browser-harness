@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeClient, handlerContext } from "./fake-client";
+import { PAGE as EXAMPLE_PAGE } from "./client-overrides";
 import { goBackTool, goForwardTool, reloadTool } from "../../src/domains/history";
 import type { BrowserClient } from "../../src/client";
 import type { PageInfoResult } from "../../src/cdp/types";
@@ -37,9 +38,7 @@ const withPageInfo = (
   };
 };
 
-const PAGE: PageInfoResult = {
-  kind: "page", url: "https://a.test/", title: "A", width: 800, height: 600, scrollX: 0, scrollY: 0, pageWidth: 800, pageHeight: 600,
-};
+const PAGE: PageInfoResult = { kind: "page", ...EXAMPLE_PAGE, url: "https://a.test/", title: "A" };
 
 describe("browser_go_back", () => {
   test("navigates to the previous entry by id and reports its url", async () => {

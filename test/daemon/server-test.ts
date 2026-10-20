@@ -5,21 +5,12 @@ import { createInterface } from "node:readline";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createIpcServer, type IpcServer } from "../../src/daemon/server";
 import { deserialize, serialize, type WireControl, type WireMessage } from "../../src/daemon/protocol";
+import { waitFor } from "../helpers/wait";
 
 const SKIP = process.platform === "win32" ? "the fixture server listens on a temp socket file" : false;
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const waitFor = async (predicate: () => boolean, timeoutMs = 500): Promise<boolean> => {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await sleep(2);
-  }
-  return predicate();
-};
 
 type Harness = {
   readonly server: IpcServer;

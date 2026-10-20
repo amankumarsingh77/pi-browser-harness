@@ -1,3 +1,4 @@
+import { setImmediate as tick } from "node:timers/promises";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { createCdpSession, type CdpSession } from "../../src/cdp/session";
 import { createOwnershipRegistry, type OwnershipRegistry } from "../../src/cdp/ownership";
@@ -119,7 +120,7 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
   const ownership = createOwnershipRegistry({ ownedTargetIds: opts.ownedTargetIds ?? ["t1"] });
   const session = createCdpSession(stub.transport, ownership);
   const mutex = createMutex();
-  const evaluated: string[] = [];
+  const expressions: string[] = [];
 
   const attached = await session.attachFirstPage();
   if (!attached.success) throw new Error(`fake client could not attach: ${attached.error.message}`);
@@ -144,7 +145,7 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     detach: () => Promise.resolve(),
     closeOwnedTabs: () => Promise.resolve(),
     evaluateJs: (expression, sessionId) => {
-      evaluated.push(expression);
+      expressions.push(expression);
       const run = opts.evaluate;
       if (run === undefined) return Promise.resolve(notConfigured<unknown>("evaluateJs"));
       return Promise.resolve(sessionId === undefined ? run(expression) : run(expression, sessionId));
@@ -176,7 +177,7 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
     calls: stub.calls,
     emit: stub.emit,
     callsTo: (method) => stub.calls.filter((c) => c.method === method),
-    evaluated,
+    evaluated: expressions,
   };
 };
 
@@ -185,6 +186,15 @@ export const createFakeClient = async (opts: FakeClientOptions = {}): Promise<Fa
 // here rather than in every test that builds a HandlerContext.
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- pi's host context cannot be constructed outside pi
 const absentExtensionContext: ExtensionContext = undefined as never;
+
+// Two microtask turns let a session's event loop deliver an emitted event and run its handlers.
+export const flush = async (): Promise<void> => {
+  await tick();
+  await tick();
+};
+
+// A canned Runtime.evaluate result carrying `value` as a page-side JS value.
+export const evaluated = (value: unknown): CannedResult => ok({ result: { type: typeof value, value } });
 
 export const handlerContext = (client: BrowserClient, signal?: AbortSignal): HandlerContext => ({
   client,

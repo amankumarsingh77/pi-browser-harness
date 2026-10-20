@@ -37,9 +37,11 @@ describe("cdp events", () => {
       "Network.requestWillBeSent",
       "Network.responseReceived",
       "Page.frameNavigated",
+      "Page.javascriptDialogClosed",
       "Page.javascriptDialogOpening",
       "Page.loadEventFired",
       "Runtime.consoleAPICalled",
+      "Target.detachedFromTarget",
       "Target.targetCreated",
       "Target.targetDestroyed",
     ]);

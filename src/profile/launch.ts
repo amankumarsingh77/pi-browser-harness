@@ -41,11 +41,13 @@ export const openProfileWindow = async (
   if (req.explicitUserDataDir) args.push(`--user-data-dir=${req.explicitUserDataDir}`);
   args.push(`--profile-directory=${req.profileDir}`, "--new-window", sentinelUrl);
 
+  const discardSentinel = (): Promise<void> => rm(file, { force: true }).catch(() => undefined);
+
   let child: ChildProcess;
   try {
     child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
   } catch (e) {
-    await rm(file, { force: true }).catch(() => undefined);
+    await discardSentinel();
     return err(`could not launch ${req.exePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
@@ -59,7 +61,7 @@ export const openProfileWindow = async (
   child.unref();
 
   if (spawnFailure) {
-    await rm(file, { force: true }).catch(() => undefined);
+    await discardSentinel();
     return err(`could not launch ${req.exePath}: ${spawnFailure}`);
   }
 
@@ -67,9 +69,7 @@ export const openProfileWindow = async (
 
   return ok({
     sentinelUrl,
-    cleanup: async () => {
-      await rm(file, { force: true }).catch(() => undefined);
-    },
+    cleanup: discardSentinel,
     kill: () => {
       if (live) {
         try {

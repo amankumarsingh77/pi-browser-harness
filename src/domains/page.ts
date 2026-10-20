@@ -19,7 +19,7 @@ export const pageInfoTool = defineBrowserTool({
   async handler(_args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const r = fromClient(await client.pageInfo(), "pageInfo");
     if (!r.success) return r;
-    if ("dialog" in r.data) {
+    if (r.data.kind === "dialog") {
       const d = r.data.dialog;
       return ok({
         text: `⚠️  DIALOG OPEN: ${d.type}\nMessage: ${d.message}${d.defaultPrompt ? `\nDefault: ${d.defaultPrompt}` : ""}\n\nUse browser_handle_dialog to accept or dismiss.`,

@@ -17,7 +17,7 @@ async function main() {
     console.log('  "Browser harness not initialized. Run /browser-setup first"');
   }
 
-  const daemonEntry = join(dirname(fileURLToPath(import.meta.url)), "../../src/daemon/index.ts");
+  const daemonEntry = join(dirname(fileURLToPath(import.meta.url)), "../../src/daemon/main.ts");
   const proc = spawn("npx", ["tsx", daemonEntry], { detached: true, stdio: "ignore" });
   proc.unref();
   await sleep(2000);

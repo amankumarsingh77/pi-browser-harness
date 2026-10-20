@@ -50,7 +50,7 @@ export type PageInfo = {
   readonly pageHeight: number;
 };
 
-// Discriminated so callers can switch on `kind`; the dialog variant keeps a `dialog` property so older `"dialog" in` narrowing still works.
+// Discriminated on `kind`.
 export type PageInfoResult =
   | ({ readonly kind: "page" } & PageInfo)
   | { readonly kind: "dialog"; readonly dialog: DialogInfo };

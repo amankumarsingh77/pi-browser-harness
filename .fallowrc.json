@@ -1,7 +1,7 @@
 {
   "entry": [
     "src/index.ts",
-    "src/daemon/index.ts",
+    "src/daemon/main.ts",
     "scripts/check-boundaries.ts",
     "test/**/*-test.ts",
     "test/manual/*.ts"

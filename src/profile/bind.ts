@@ -3,6 +3,7 @@ import type { ResultOf } from "../cdp/commands";
 import { type CdpError, cdpError } from "../cdp/errors";
 import { borrowSession } from "../cdp/target-factory";
 import { type Result, err, map, ok, unwrapOr } from "../util/result";
+import { sleep as sleepMs } from "../util/sleep";
 import { detectRunningBrowser, resolveBrowserExecutable, type RunningBrowser } from "./browser-process";
 import { openProfileWindow, type ProfileWindowHandle, type ProfileWindowRequest } from "./launch";
 import type { ProfilePin } from "./store";
@@ -22,7 +23,6 @@ export type SeedDeps = {
   readonly pollMs?: number;
 };
 
-const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 type PageTarget = ResultOf<"Target.getTargets">["targetInfos"][number];
 
@@ -46,7 +46,7 @@ export const seedProfileWindow = async (
   const detect = deps.detectRunningBrowser ?? detectRunningBrowser;
   const resolveExe = deps.resolveBrowserExecutable ?? resolveBrowserExecutable;
   const launch = deps.openProfileWindow ?? openProfileWindow;
-  const sleep = deps.sleep ?? realSleep;
+  const sleep = deps.sleep ?? sleepMs;
   const now = deps.now ?? Date.now;
   const deadlineMs = deps.deadlineMs ?? SEED_DEADLINE_MS;
   const pollMs = deps.pollMs ?? SEED_POLL_MS;

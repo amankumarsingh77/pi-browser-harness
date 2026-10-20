@@ -1,16 +1,10 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
 import { createCdpSession } from "../../src/cdp/session";
 import { createOwnershipRegistry, type OwnershipRegistry } from "../../src/cdp/ownership";
-import { createStubTransport, type Canned } from "../domains/fake-client";
+import { createStubTransport, flush, type Canned } from "../domains/fake-client";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
 
 const TWO_PAGES: Canned = {
   "Target.setDiscoverTargets": ok({}),

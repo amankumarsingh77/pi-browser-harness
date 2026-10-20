@@ -1,24 +1,28 @@
+import { Type, type Static } from "typebox";
 import { decodeEvent, type EventParamsOf } from "./events";
 import { createRecordStore, type DrainPage } from "./record-store";
 
 // Only the buffer itself may update a record in place as follow-up events arrive; everything it hands out is readonly.
-type MutableNetworkRecord = {
-  requestId: string;
-  method: string;
-  url: string;
-  status?: number;
-  statusText?: string;
-  type: string;
-  mimeType?: string;
-  requestStartedMs: number;
-  durationMs?: number;
-  requestBodySize: number;
-  responseBodySize?: number;
-  failed?: boolean;
-  errorText?: string;
-  body?: string | null;
-};
+// The one declaration of a network record: the buffer produces it and browser_network_requests validates
+// replayed details against it, so the two cannot drift.
+export const NetworkRecordSchema = Type.Object({
+  requestId: Type.String(),
+  method: Type.String(),
+  url: Type.String(),
+  status: Type.Optional(Type.Number()),
+  statusText: Type.Optional(Type.String()),
+  type: Type.String(),
+  mimeType: Type.Optional(Type.String()),
+  requestStartedMs: Type.Number(),
+  durationMs: Type.Optional(Type.Number()),
+  requestBodySize: Type.Number(),
+  responseBodySize: Type.Optional(Type.Number()),
+  failed: Type.Optional(Type.Boolean()),
+  errorText: Type.Optional(Type.String()),
+  body: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+});
 
+type MutableNetworkRecord = Static<typeof NetworkRecordSchema>;
 export type NetworkRecord = Readonly<MutableNetworkRecord>;
 
 export type NetworkFilter = {

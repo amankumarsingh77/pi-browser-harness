@@ -67,10 +67,14 @@ describe("browser_dispatch_key by ref", () => {
 describe("browser_read_page on an owned tab", () => {
   test("detaches from the target after reading, even when the read fails", async () => {
     const fake = await createFakeClient({
-      canned: { "Target.attachToTarget": ok({ sessionId: "s-read" }) },
+      canned: { "Target.getTargets": ok({ targetInfos: [
+          { targetId: "t1", type: "page", title: "Fake", url: "https://example.test/" },
+          { targetId: "t2", type: "page", title: "Other", url: "https://example.test/other" },
+        ] }), "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-read" })] },
       evaluate: () => ({ success: false, error: { kind: "remote_error", message: "nope" } }),
+      ownedTargetIds: ["t1", "t2"],
     });
-    const r = await readPageTool.handler({ targetId: "t1" }, handlerContext(fake.client));
+    const r = await readPageTool.handler({ targetId: "t2" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     const detached = fake.callsTo("Target.detachFromTarget");
     assert.equal(detached.length, 1);

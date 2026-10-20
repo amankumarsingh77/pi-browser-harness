@@ -6,6 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { userDataDirCandidates } from "../profile/paths";
 import { type CdpError, cdpError } from "./errors";
 import { asString, errnoCode, isRecord } from "../util/guards";
+import { sleep } from "../util/sleep";
 
 const PORT_PROBE_DEADLINE_MS = 30_000;
 const PORT_PROBE_INTERVAL_MS = 1_000;
@@ -54,79 +55,43 @@ export type PortRaceOptions = {
 };
 
 // Polls every candidate port at once under ONE deadline and settles on the first that answers; a stale DevToolsActivePort can no longer hold discovery for its own full deadline before the next candidate is tried.
-export const firstReadyPort = <C extends { readonly port: number }>(
+export const firstReadyPort = async <C extends { readonly port: number }>(
   candidates: ReadonlyArray<C>,
   opts: PortRaceOptions = {},
 ): Promise<Result<C, CdpError>> => {
   const probe = opts.probe ?? probePort;
   const deadlineMs = opts.deadlineMs ?? PORT_PROBE_DEADLINE_MS;
   const intervalMs = opts.intervalMs ?? PORT_PROBE_INTERVAL_MS;
-  if (candidates.length === 0) {
-    return Promise.resolve(err(cdpError("discovery_failed", "no DevTools port candidates to probe")));
-  }
-  const end = Date.now() + deadlineMs;
+  if (candidates.length === 0) return err(cdpError("discovery_failed", "no DevTools port candidates to probe"));
+
+  // One controller ends every loser the moment a winner appears (or the deadline passes).
+  const stop = new AbortController();
+  const deadline = setTimeout(() => { stop.abort(); }, deadlineMs);
   const lastMessages = new Map<number, string>();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  let winner: C | undefined;
-  let settled = false;
 
-  const pause = (ms: number): Promise<void> =>
-    new Promise((resolve) => {
-      const t = setTimeout(() => {
-        timers.delete(t);
-        resolve();
-      }, ms);
-      timers.add(t);
-    });
-
-  // Losers still sleeping are abandoned, not awaited: their timers are cleared so nothing keeps running after a winner.
-  const stopAll = (): void => {
-    for (const t of timers) clearTimeout(t);
-    timers.clear();
-  };
-
-  // Read through a call: the awaits in attempt() let another candidate set `winner`, which
-  // flow narrowing inside the function cannot see.
-  const raceWon = (): boolean => winner !== undefined;
-
-  const attempt = async (c: C): Promise<void> => {
-    while (winner === undefined && Date.now() < end) {
+  const poll = async (c: C): Promise<C> => {
+    while (!stop.signal.aborted) {
       const r = await probe(c.port);
-      if (r.success) {
-        winner ??= c;
-        return;
-      }
+      if (r.success) return c;
       lastMessages.set(c.port, r.error.message);
-      if (raceWon()) return;
-      await pause(Math.min(intervalMs, Math.max(0, end - Date.now())));
+      await sleep(intervalMs, stop.signal);
     }
+    throw new Error(lastMessages.get(c.port) ?? "aborted");
   };
 
-  return new Promise((resolve) => {
-    let remaining = candidates.length;
-    const finish = (r: Result<C, CdpError>): void => {
-      if (settled) return;
-      settled = true;
-      stopAll();
-      resolve(r);
-    };
-    for (const c of candidates) {
-      void attempt(c).then(() => {
-        if (winner !== undefined) {
-          finish(ok(winner));
-          return;
-        }
-        remaining -= 1;
-        if (remaining > 0) return;
-        const ports = candidates.map((k) => `127.0.0.1:${k.port}`).join(", ");
-        const detail = [...lastMessages.entries()].map(([port, m]) => `${port}: ${m}`).join("; ") || "unknown";
-        finish(err(cdpError(
-          "discovery_failed",
-          `Chrome's remote-debugging page is open, but DevTools is not live yet on ${ports} — if Chrome opened a profile picker, choose your normal profile first, then tick the checkbox and click Allow if shown (last error: ${detail})`,
-        )));
-      });
-    }
-  });
+  try {
+    return ok(await Promise.any(candidates.map(poll)));
+  } catch {
+    const ports = candidates.map((k) => `127.0.0.1:${k.port}`).join(", ");
+    const detail = [...lastMessages.entries()].map(([port, m]) => `${port}: ${m}`).join("; ") || "unknown";
+    return err(cdpError(
+      "discovery_failed",
+      `Chrome's remote-debugging page is open, but DevTools is not live yet on ${ports} — if Chrome opened a profile picker, choose your normal profile first, then tick the checkbox and click Allow if shown (last error: ${detail})`,
+    ));
+  } finally {
+    clearTimeout(deadline);
+    stop.abort();
+  }
 };
 
 const isPortLive = async (port: number): Promise<boolean> => (await probePort(port)).success;

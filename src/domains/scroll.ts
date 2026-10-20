@@ -27,7 +27,7 @@ export const scrollTool = defineBrowserTool({
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const info = fromClient(await client.pageInfo(), "pageInfo");
     if (!info.success) return info;
-    if ("dialog" in info.data) {
+    if (info.data.kind === "dialog") {
       return err({
         kind: "invalid_state",
         message: `Dialog open: ${info.data.dialog.type} — ${info.data.dialog.message}`,

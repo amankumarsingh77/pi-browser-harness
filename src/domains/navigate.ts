@@ -47,7 +47,7 @@ export const navigateTool = defineBrowserTool({
     }
     const info = fromClient(await client.pageInfo(), "pageInfo");
     if (!info.success) return info;
-    if ("dialog" in info.data) {
+    if (info.data.kind === "dialog") {
       return ok({
         text: `Navigated to ${args.url}\nTarget: ${outcome.targetId}\n⚠️  Dialog open: ${info.data.dialog.type} — "${info.data.dialog.message}"\nUse browser_handle_dialog.`,
         details: { outcome, dialog: info.data.dialog },
@@ -97,8 +97,11 @@ const createTabs = async (client: BrowserClient, urls: ReadonlyArray<string>): P
   return ok(created);
 };
 
+// Cosmetic, and polled per tab in parallel: a slow interval keeps N tabs from hammering the daemon socket.
+const TITLE_MARK_POLL_MS = 250;
+
 const markTitle = async (client: BrowserClient, sessionId: string, signal: AbortSignal | undefined): Promise<Result<void, ToolErr>> => {
-  const loaded = await pollUntil(client, READY_STATE_COMPLETE, { timeoutMs: TITLE_MARK_TIMEOUT_MS, signal, sessionId, what: "page load" });
+  const loaded = await pollUntil(client, READY_STATE_COMPLETE, { timeoutMs: TITLE_MARK_TIMEOUT_MS, intervalMs: TITLE_MARK_POLL_MS, signal, sessionId, what: "page load" });
   if (!loaded.success) return loaded;
   const marked = await evalJs(client, safeJs`if(!document.title.startsWith('🟢'))document.title='🟢 '+document.title`, sessionId);
   if (!marked.success) return marked;

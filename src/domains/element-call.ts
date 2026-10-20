@@ -1,3 +1,4 @@
+import { isRecord } from "../util/guards";
 import type { BrowserClient } from "../client";
 import { safeJs } from "../util/js-template";
 import { type Result, err, ok } from "../util/result";
@@ -49,9 +50,9 @@ export type ElementOutcome =
   | { readonly found: true; readonly value: unknown };
 
 const isElementOutcome = (v: unknown): v is ElementOutcome => {
-  if (typeof v !== "object" || v === null || !("found" in v)) return false;
-  if (v.found === false) return true;
-  return v.found === true && "value" in v;
+  if (!isRecord(v)) return false;
+  if (v["found"] === false) return true;
+  return v["found"] === true && "value" in v;
 };
 
 const callOnObject = async (

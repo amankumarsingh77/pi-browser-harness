@@ -1,18 +1,29 @@
+import { Type, type Static } from "typebox";
 import { decodeEvent } from "./events";
 import { createRecordStore, type DrainPage } from "./record-store";
 
 export type ConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
 
-export type ConsoleRecord = {
-  readonly seq: number;
-  readonly timestampMs: number;
-  readonly level: ConsoleLevel;
-  readonly text: string;
-  readonly source: "console-api" | "log-entry";
-  readonly url?: string;
-  readonly lineNumber?: number;
-  readonly stackTrace?: string;
-};
+// The one declaration of a console record: the buffer produces it and browser_console validates replayed
+// details against it, so the two cannot drift.
+export const ConsoleRecordSchema = Type.Object({
+  seq: Type.Number(),
+  timestampMs: Type.Number(),
+  level: Type.Union([
+    Type.Literal("log"),
+    Type.Literal("info"),
+    Type.Literal("warn"),
+    Type.Literal("error"),
+    Type.Literal("debug"),
+  ]),
+  text: Type.String(),
+  source: Type.Union([Type.Literal("console-api"), Type.Literal("log-entry")]),
+  url: Type.Optional(Type.String()),
+  lineNumber: Type.Optional(Type.Number()),
+  stackTrace: Type.Optional(Type.String()),
+});
+
+export type ConsoleRecord = Readonly<Static<typeof ConsoleRecordSchema>>;
 
 export type ConsoleFilter = {
   readonly levels?: ReadonlyArray<ConsoleLevel>;

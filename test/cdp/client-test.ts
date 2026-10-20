@@ -1,14 +1,8 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
 import { createBrowserClient } from "../../src/client";
-import { createStubTransport, type Canned } from "../domains/fake-client";
+import { createStubTransport, flush, type Canned } from "../domains/fake-client";
 import { ok } from "../../src/util/result";
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
 
 const PAGE_JSON = JSON.stringify({ url: "https://one.test/", title: "One", w: 1, h: 2, sx: 0, sy: 0, pw: 3, ph: 4 });
 

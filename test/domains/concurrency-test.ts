@@ -1,8 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { setImmediate as tick } from "node:timers/promises";
 import { deadlineSignal, runLimited } from "../../src/domains/concurrency";
-
-const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("runLimited", () => {
   test("never has more than `limit` tasks in flight", async () => {

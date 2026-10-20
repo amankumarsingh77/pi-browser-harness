@@ -1,13 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { setImmediate as tick } from "node:timers/promises";
-import { createFakeClient, handlerContext } from "./fake-client";
+import { createFakeClient, flush, handlerContext } from "./fake-client";
 import { handleDialogTool } from "../../src/domains/dialog";
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
 
 describe("browser_handle_dialog", () => {
   test("accept sends accept:true without a promptText key", async () => {
@@ -66,13 +60,16 @@ describe("browser_handle_dialog", () => {
     assert.equal(r.error.kind, "timeout");
   });
 
-  test("handling a dialog clears the pending dialog the session recorded", async () => {
-    // Otherwise the next browser_page_info would report the already-handled dialog as still open.
+  test("the session drops the recorded dialog once Chrome reports it closed", async () => {
+    // The tool only talks to Chrome; Chrome's javascriptDialogClosed is what clears the record, so a
+    // handled (or navigated-away) dialog is never reported as still open by the next browser_page_info.
     const fake = await createFakeClient();
     fake.emit({ method: "Page.javascriptDialogOpening", sessionId: "s1", params: { type: "prompt", message: "name?", defaultPrompt: "x" } });
     await flush();
     const r = await handleDialogTool.handler({ accept: true, promptText: "y" }, handlerContext(fake.client));
     assert.equal(r.success, true);
+    fake.emit({ method: "Page.javascriptDialogClosed", sessionId: "s1", params: { result: true, userInput: "y" } });
+    await flush();
     assert.equal(fake.client.takeDialog(), null);
   });
 

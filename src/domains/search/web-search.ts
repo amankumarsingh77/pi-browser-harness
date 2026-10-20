@@ -31,9 +31,11 @@ const PAGE_TEXT_LIMIT = 4000;
 
 // The page function declares the extraction shape it produces; this pins it to the shape the SERP parser consumes,
 // so the two cannot drift apart silently (the runtime validator below still guards the actual wire value).
-export const asSerpExtraction = (e: extracted.SerpExtraction): SerpExtraction => e;
+type Pinned<T extends SerpExtraction> = T;
+export type ExtractionFromPage = Pinned<extracted.SerpExtraction>;
 
-const buildSerpExtractionExpr = (): string => pageCallExpression(extractSerp, PAGE_TEXT_LIMIT);
+// Built once: stringifying the page function per call was the only cost of the thunk.
+const SERP_EXTRACTION_EXPR = pageCallExpression(extractSerp, PAGE_TEXT_LIMIT);
 
 const buildSerpUrl = (query: string, limit: number): string =>
   `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${limit}&hl=en`;
@@ -101,7 +103,7 @@ export const webSearchTool = defineBrowserTool({
       const loaded = await waitForIsolatedLoad(client, tab, LOAD_TIMEOUT_MS, signal);
       if (!loaded.success) return err(loaded.error);
 
-      const extracted = await evalInIsolatedTab(client, tab, buildSerpExtractionExpr(), isJsonText);
+      const extracted = await evalInIsolatedTab(client, tab, SERP_EXTRACTION_EXPR, isJsonText);
       if (!extracted.success) return err(extracted.error);
 
       const parsedJson = parseSerpExtraction(extracted.data);

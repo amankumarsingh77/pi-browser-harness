@@ -11,8 +11,6 @@ import { focusElement, selectOption, setChecked } from "../../src/domains/page/f
 import { liveValue } from "../../src/domains/page/live-value.page";
 import { capturePage } from "../../src/domains/page/read-page.page";
 import { extractSerp } from "../../src/domains/page/serp.page";
-import { asReadabilityCapture } from "../../src/domains/readpage/read-page";
-import { asSerpExtraction } from "../../src/domains/search/web-search";
 import { asRecord } from "../../src/util/guards";
 import { callPage, materialise } from "./page-harness";
 
@@ -284,9 +282,6 @@ describe("capturePage", () => {
     assert.deepEqual(parsed?.["blocks"], [{ kind: "listitem", text: "Home", linkTextLength: 0, inBoilerplate: true }]);
   });
 
-  test("declares the same shape the readability pass consumes", () => {
-    assert.equal(typeof asReadabilityCapture, "function");
-  });
 });
 
 describe("extractSerp", () => {
@@ -308,7 +303,4 @@ describe("extractSerp", () => {
     });
   });
 
-  test("declares the same shape the SERP parser consumes", () => {
-    assert.equal(typeof asSerpExtraction, "function");
-  });
 });

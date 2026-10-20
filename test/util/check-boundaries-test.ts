@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { checkSource, unusedExemptions, type Exemption } from "../../scripts/check-boundaries";
+import { checkSource, stripLiterals, unusedExemptions, type Exemption } from "../../scripts/check-boundaries";
 
 const noExemptions: ReadonlyArray<Exemption> = [];
 
@@ -216,5 +216,47 @@ describe("boundary check exemptions", () => {
   test("unusedExemptions is empty when every exemption is consumed", () => {
     const used = unusedExemptions([{ path: "a.ts", text: "const m = mod as { default?: unknown };" }], exemptions);
     assert.deepEqual(used, []);
+  });
+});
+
+describe("stripLiterals", () => {
+  const onlyBlanks = (out: string, from: number, to: number): boolean => /^ *$/.test(out.slice(from, to));
+
+  test("a regex literal containing quotes and a comment opener is one blanked literal", () => {
+    const src = 'const re = /"\'\\/\\//g; const x = 1;';
+    const out = stripLiterals(src);
+    assert.equal(out.length, src.length);
+    assert.ok(out.startsWith("const re = /"));
+    assert.ok(out.endsWith("/g; const x = 1;"));
+    assert.ok(onlyBlanks(out, "const re = /".length, src.indexOf("/g;")));
+  });
+
+  test("division after a parenthesised expression is kept as code", () => {
+    const src = "const r = (a + b) / 2 / c; // note\nconst s = 'x';";
+    const out = stripLiterals(src);
+    assert.ok(out.startsWith("const r = (a + b) / 2 / c; "));
+    assert.ok(!out.includes("note"));
+    assert.ok(out.includes("\nconst s = ' ';"));
+  });
+
+  test("a template nested inside an interpolation does not end the outer template", () => {
+    const src = "f(`a ${`b ${c}`} d`); as any";
+    const out = stripLiterals(src);
+    assert.ok(out.startsWith("f(`${}"), out);
+    assert.ok(out.endsWith("`); as any"), out);
+    assert.equal(out.indexOf("`", "f(`${}".length + 1), src.indexOf("`); as any") + 3);
+  });
+
+  test("a string holding a block-comment opener does not swallow the rest of the file", () => {
+    const src = 'const s = "/* not a comment"; const t = x as any;';
+    const out = stripLiterals(src);
+    assert.ok(out.includes("const t = x as any;"));
+    assert.ok(!out.includes("not a comment"));
+  });
+
+  test("safeJs-tagged templates leave no interpolation marker", () => {
+    assert.ok(!stripLiterals("evalJs(safeJs`a ${b}`)").includes("${}"));
+    assert.ok(stripLiterals("evalJs(other`a ${b}`)").includes("${}"));
+    assert.ok(!stripLiterals("evalJs(`no interpolation`)").includes("${}"));
   });
 });

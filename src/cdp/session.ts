@@ -1,5 +1,4 @@
 import { map, type Result, err, ok } from "../util/result";
-import { asString, isRecord } from "../util/guards";
 import { type CdpError, cdpError } from "./errors";
 import type { CdpEvent, DialogInfo, RefSignature } from "./types";
 import { type OwnershipRegistry, reconcileOwnership } from "./ownership";
@@ -86,6 +85,10 @@ export const createCdpSession = (
     sessionId = null;
     targetId = null;
   };
+  const setCurrent = (tid: string, sid: string): void => {
+    sessionId = sid;
+    targetId = tid;
+  };
 
   const freshTab = (tid: string, sid: string, pageInfoDirty: boolean): TabSession => ({
     sessionId: sid,
@@ -137,11 +140,10 @@ export const createCdpSession = (
     return tid ? tabs.get(tid) : undefined;
   };
 
-  const isTargetLifecycleEvent = (method: string): boolean =>
-    method === "Target.targetDestroyed" || method === "Target.detachedFromTarget";
-
   const handleEvent = (ev: CdpEvent): void => {
-    if (!isTargetLifecycleEvent(ev.method) && ev.sessionId && !sessionIdToTargetId.has(ev.sessionId)) return;
+    // Lifecycle notices about a session we no longer track are exactly the ones that must still be handled.
+    const lifecycle = ev.method === "Target.targetDestroyed" || ev.method === "Target.detachedFromTarget";
+    if (!lifecycle && ev.sessionId && !sessionIdToTargetId.has(ev.sessionId)) return;
     switch (ev.method) {
       case "Page.javascriptDialogOpening": {
         const tab = resolveTab(ev.sessionId);
@@ -158,7 +160,12 @@ export const createCdpSession = (
           : { type: "alert", message: "" };
         break;
       }
-      // Intentionally NOT cleared on javascriptDialogClosed: a fast dismiss would otherwise drop a dialog the agent was about to read.
+      // Chrome is the authority on whether a dialog is still blocking the page: handled, navigated away or dismissed by the user, it is gone.
+      case "Page.javascriptDialogClosed": {
+        const tab = resolveTab(ev.sessionId);
+        if (tab) tab.dialog = null;
+        break;
+      }
       case "Page.frameNavigated":
       case "Page.loadEventFired": {
         const tab = resolveTab(ev.sessionId);
@@ -183,10 +190,9 @@ export const createCdpSession = (
         forgetTarget(destroyed);
         break;
       }
-      // Browser-level notice that a session ended; carries the session id in params rather than on the envelope.
       case "Target.detachedFromTarget": {
-        const sid = isRecord(ev.params) ? asString(ev.params["sessionId"]) : undefined;
-        if (sid !== undefined) forgetSession(sid);
+        const decoded = decodeEvent(ev.method, ev.params);
+        if (decoded.success) forgetSession(decoded.data.sessionId);
         break;
       }
       case "Inspector.detached": {
@@ -255,12 +261,10 @@ export const createCdpSession = (
   });
 
   // Not in the typed command table (only Page.enable is), so the raw transport is used and only success is checked.
+  // The enables are independent, so they go out together; the first failure wins.
   const enableDomains = async (sid: string): Promise<Result<void, CdpError>> => {
-    for (const d of ENABLED_DOMAINS) {
-      const r = await transport.request(`${d}.enable`, {}, { sessionId: sid });
-      if (!r.success) return r;
-    }
-    return ok(undefined);
+    const results = await Promise.all(ENABLED_DOMAINS.map((d) => transport.request(`${d}.enable`, {}, { sessionId: sid })));
+    return results.find((r) => !r.success) ?? ok(undefined);
   };
 
   const req = async <M extends CdpMethod>(
@@ -280,13 +284,9 @@ export const createCdpSession = (
   const attach = async (tid: string): Promise<Result<string, CdpError>> =>
     map(await req("Target.attachToTarget", { targetId: tid, flatten: true }, null), (d) => d.sessionId);
 
-  const detachRaw = async (sid: string): Promise<Result<void, CdpError>> =>
+  // Callers that ignore the Result are best effort: the session may already be gone, which is the outcome they wanted anyway.
+  const detachSession = async (sid: string): Promise<Result<void, CdpError>> =>
     map(await req("Target.detachFromTarget", { sessionId: sid }, null), () => undefined);
-
-  // Best effort: the session may already be gone, which is the outcome we wanted anyway.
-  const detachQuietly = async (sid: string): Promise<void> => {
-    await detachRaw(sid);
-  };
 
   const windowId = async (tid: string): Promise<Result<number, CdpError>> =>
     map(await req("Browser.getWindowForTarget", { targetId: tid }, null), (d) => d.windowId);
@@ -301,19 +301,17 @@ export const createCdpSession = (
     const enabled = await enableDomains(sid);
     if (!enabled.success) {
       forgetSession(sid);
-      await detachQuietly(sid);
+      await detachSession(sid);
       return enabled;
     }
-    if (previous !== undefined && previous !== sid) await detachQuietly(previous);
+    if (previous !== undefined && previous !== sid) await detachSession(previous);
     return ok(sid);
   };
 
   const discoverPages = async (): Promise<Result<ReadonlyArray<PageTarget>, CdpError>> => {
     const discovering = await req("Target.setDiscoverTargets", { discover: true }, null);
     if (!discovering.success) return discovering;
-    const targets = await req("Target.getTargets", {}, null);
-    if (!targets.success) return targets;
-    return ok(targets.data.targetInfos.filter((t) => t.type === "page"));
+    return map(await req("Target.getTargets", {}, null), (r) => r.targetInfos.filter((t) => t.type === "page"));
   };
 
   // Drops dead owned targets, then adopts every live page that shares a window with the first surviving owned tab.
@@ -335,10 +333,12 @@ export const createCdpSession = (
       const windows = await Promise.all(
         allPages.map((p) => (p.targetId === anchorId ? Promise.resolve(anchorWin) : windowId(p.targetId))),
       );
-      allPages.forEach((p, i) => {
+      // One replaceAll, one change notification: adding per page would persist state once per tab.
+      const adopted = allPages.filter((_, i) => {
         const r = windows[i];
-        if (r?.success && r.data === anchorWindowId) registry.add(p.targetId);
-      });
+        return r?.success === true && r.data === anchorWindowId;
+      }).map((p) => p.targetId);
+      registry.replaceAll([...new Set([...registry.list(), ...adopted])]);
     }
     if (!registry.harnessWindow()) registry.setHarnessWindow(anchorId);
   };
@@ -385,8 +385,7 @@ export const createCdpSession = (
       // Always a fresh session: callers reach this on start or after the current session was reported dead.
       const attached = await attachFresh(tid, false);
       if (!attached.success) return attached;
-      sessionId = attached.data;
-      targetId = tid;
+      setCurrent(tid, attached.data);
       return ok({ targetId: tid, sessionId: attached.data });
     },
     async switchTo(tid) {
@@ -394,27 +393,25 @@ export const createCdpSession = (
       if (!activated.success) return activated;
       const existing = tabs.get(tid);
       if (existing) {
-        sessionId = existing.sessionId;
-        targetId = tid;
+        setCurrent(tid, existing.sessionId);
         return ok(undefined);
       }
       const attached = await attachFresh(tid, true);
       if (!attached.success) return attached;
-      sessionId = attached.data;
-      targetId = tid;
+      setCurrent(tid, attached.data);
       return ok(undefined);
     },
     attach,
     async detach(sid) {
       forgetSession(sid);
-      return detachRaw(sid);
+      return detachSession(sid);
     },
     async detachAll() {
       const sids = [...sessionIdToTargetId.keys()];
       clearCurrent();
       tabs.clear();
       sessionIdToTargetId.clear();
-      await Promise.all(sids.map(detachQuietly));
+      await Promise.all(sids.map(detachSession));
     },
     sessionFor(tid) {
       return tabs.get(tid)?.sessionId;

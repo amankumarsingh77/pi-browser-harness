@@ -2,25 +2,16 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { setImmediate as tick } from "node:timers/promises";
-import { initTheme, Theme } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
-import { createFakeClient, type FakeClient, handlerContext } from "./fake-client";
+import { createFakeClient, type FakeClient, flush, handlerContext } from "./fake-client";
+import { installTheme, renderedText, testTheme } from "./client-overrides";
 import { httpGetTool, type NetworkDetails, networkRequestsTool } from "../../src/domains/network";
 import type { NetworkRecord } from "../../src/cdp/network-buffer";
 import { ok } from "../../src/util/result";
 
-const ANSI_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-const rendered = (component: Component): string =>
-  component.render(160).map((l) => l.replace(ANSI_SEQUENCE, "").trimEnd()).join("\n");
 
-before(() => { initTheme("dark"); });
-const anyTheme = (): Theme => Theme.prototype;
-
-const flush = async (): Promise<void> => {
-  await tick();
-  await tick();
-};
+before(() => {
+  installTheme();
+});
 
 type Sent = { id: string; url: string; method?: string; type?: string; postData?: string };
 
@@ -289,7 +280,7 @@ describe("browser_network_requests renderResult", () => {
   test("collapsed shows the first five compact rows and how many more there are", () => {
     assert.ok(render);
     const seven = Array.from({ length: 7 }, (_, i) => rec(i + 1));
-    const out = rendered(render(result(details(seven)), false, anyTheme()));
+    const out = renderedText(render(result(details(seven)), false, testTheme), 160);
     assert.match(out, /7 requests · 0 failed · 70 B/);
     assert.match(out, /GET {2}200 {2}https:\/\/x\.test\/1 {2}5 ms/);
     assert.match(out, /https:\/\/x\.test\/5/);
@@ -301,7 +292,7 @@ describe("browser_network_requests renderResult", () => {
 
   test("a failure or 5xx is marked with a warning in the compact row", () => {
     assert.ok(render);
-    const out = rendered(render(result(details([failedRec(1), rec(2, { status: 503 })])), false, anyTheme()));
+    const out = renderedText(render(result(details([failedRec(1), rec(2, { status: 503 })])), false, testTheme), 160);
     assert.match(out, /2 requests · 2 failed/);
     assert.match(out, /GET {2}ERR {2}https:\/\/x\.test\/1 {2}5 ms ⚠/);
     assert.match(out, /GET {2}503 {2}https:\/\/x\.test\/2 {2}5 ms ⚠/);
@@ -310,23 +301,23 @@ describe("browser_network_requests renderResult", () => {
   test("expanded renders the full table, and bodies only when they were captured", () => {
     assert.ok(render);
     const withBody = details([rec(1, { body: "payload-text" })], { includeBodies: true, fullOutputPath: "/tmp/net.txt" });
-    const expanded = rendered(render(result(withBody), true, anyTheme()));
+    const expanded = renderedText(render(result(withBody), true, testTheme), 160);
     assert.match(expanded, /│ # │ Method │ Status │ URL\s+│ Type │ ms │/);
     assert.match(expanded, /│ 1 │ GET\s+│ 200\s+│ https:\/\/x\.test\/1 │ XHR\s+│ 5\s+│/);
     assert.match(expanded, /payload-text/);
     assert.match(expanded, /full payload at \/tmp\/net\.txt/);
     assert.match(expanded, /to collapse/);
 
-    const collapsed = rendered(render(result(withBody), false, anyTheme()));
+    const collapsed = renderedText(render(result(withBody), false, testTheme), 160);
     assert.doesNotMatch(collapsed, /payload-text/, "bodies are hidden when collapsed");
 
-    const noBodies = rendered(render(result(details([rec(1, { body: "payload-text" })])), true, anyTheme()));
+    const noBodies = renderedText(render(result(details([rec(1, { body: "payload-text" })])), true, testTheme), 160);
     assert.doesNotMatch(noBodies, /payload-text/, "bodies are shown only when the drain included them");
   });
 
   test("no records renders the empty message", () => {
     assert.ok(render);
-    const out = rendered(render(result(details([], { bufferOverflowed: true })), true, anyTheme()));
+    const out = renderedText(render(result(details([], { bufferOverflowed: true })), true, testTheme), 160);
     assert.match(out, /No matching requests\. \(Buffer overflowed since last drain/);
   });
 });

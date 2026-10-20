@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { DAEMON_SOCKET_PATH, deserialize, serialize, type WireControl } from "./protocol";
+import { destroyQuietly } from "./socket";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
@@ -47,7 +48,7 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
 
     const sock = createConnection(DAEMON_SOCKET_PATH);
     const timer = setTimeout(() => {
-      sock.destroy();
+      destroyQuietly(sock);
       cleanupStaleSocket();
       done(false);
     }, timeoutMs);
@@ -65,13 +66,13 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
       clearTimeout(timer);
       const deregMsg: WireControl = { type: "control", action: "deregister", clientId: "_liveness_probe" };
       // end() lets the deregister reach the daemon; destroy() would drop it unflushed.
-      try { sock.end(serialize(deregMsg) + "\n"); } catch { sock.destroy(); }
+      try { sock.end(serialize(deregMsg) + "\n"); } catch { destroyQuietly(sock); }
       done(true);
     });
 
     sock.on("error", () => {
       clearTimeout(timer);
-      sock.destroy();
+      destroyQuietly(sock);
       cleanupStaleSocket();
       done(false);
     });
@@ -131,7 +132,7 @@ export const daemonNodeExecutable = (
 };
 
 export const daemonSpawnCommand = (): { readonly command: string; readonly args: ReadonlyArray<string> } | null => {
-  const daemonScript = join(moduleDir, "index.ts");
+  const daemonScript = join(moduleDir, "main.ts");
   const tsxCli = resolveTsxCli();
   if (!tsxCli) return null;
 

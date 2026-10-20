@@ -1,3 +1,4 @@
+import { sleep } from "../util/sleep";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import type { ToolErr } from "../util/tool";
@@ -14,23 +15,7 @@ export type PollOptions = {
 
 const DEFAULT_INTERVAL_MS = 50;
 
-// Resolves (never rejects) after `ms`, or as soon as `signal` aborts.
-export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
-  new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const onAbort = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+export { sleep } from "../util/sleep";
 
 // Evaluates `expression` in the page until it yields `true`. A deadline or an abort both surface as kind "timeout";
 // evaluation errors (e.g. mid-navigation) are retried until the deadline.

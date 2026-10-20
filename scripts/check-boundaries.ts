@@ -18,12 +18,14 @@
 //                        in src/ and test/
 //
 // Matching runs on a copy of each file with comments, string literals, regex
-// literals and template bodies blanked out, so prose never trips a rule. The
-// one exception is ts-ignore, which by nature lives in a comment. Templates
-// keep a `${}` marker when they interpolate and are tagged with anything other
-// than safeJs; that marker is what raw-js-template looks for.
+// literals and template bodies blanked out (ranges taken from the TypeScript
+// parser), so prose never trips a rule. The one exception is ts-ignore, which
+// by nature lives in a comment. Templates keep a `${}` marker when they
+// interpolate and are tagged with anything other than safeJs; that marker is
+// what raw-js-template looks for.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import { ALLOWLIST, type Exemption } from "./boundary-allowlist";
 
 export type { Exemption };
@@ -44,6 +46,7 @@ type Rule = {
   // "raw" matches the original line (needed for comment-borne markers),
   // "stripped" matches the line with literals and comments blanked,
   // "file" matches the whole stripped file so a call spanning lines still hits.
+  // "file" rules match across lines and must carry the g flag for matchAll.
   readonly on: "raw" | "stripped" | "file";
 };
 
@@ -85,194 +88,63 @@ const normalise = (path: string): string => path.split("\\").join("/");
 
 const key = (path: string, rule: string): string => `${normalise(path)}\u0000${rule}`;
 
-const REGEX_PRECEDERS = new Set(["(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}", ";", "+", "-", "*", "%", "<", ">", "~", "^"]);
-const REGEX_KEYWORDS = new Set(["return", "typeof", "instanceof", "in", "of", "new", "delete", "void", "throw", "case", "do", "else", "yield", "await"]);
-
 const SAFE_TAG = "safeJs";
 
-// Returns the source with every comment, string, regex and template body
-// replaced by spaces, keeping newlines so line numbers still line up. A
-// template that interpolates and is not tagged safeJs leaves a `${}` marker.
+// Returns the source with every comment, string, regex and template body replaced by spaces,
+// keeping newlines so line numbers still line up. A template that interpolates and is not
+// tagged safeJs leaves a `${}` marker right after its opening backtick. The ranges come from
+// the TypeScript parser, so regex-versus-division, nested templates and strings containing
+// comment openers are all resolved the way the compiler resolves them.
 export const stripLiterals = (src: string): string => {
-  const out: string[] = [];
-  let i = 0;
-  const n = src.length;
+  const sf = ts.createSourceFile("scan.ts", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const blank = new Uint8Array(src.length);
+  const markers = new Set<number>();
+  const seenComments = new Set<number>();
 
-  const blank = (ch: string): string => (ch === "\n" ? "\n" : " ");
-
-  const lastSignificant = (): string => {
-    for (let j = out.length - 1; j >= 0; j--) {
-      const c = out[j] ?? " ";
-      if (c !== " " && c !== "\n" && c !== "\t" && c !== "\r") return c;
-    }
-    return "";
+  const blankRange = (from: number, to: number): void => {
+    for (let i = from; i < to; i++) if (src[i] !== "\n") blank[i] = 1;
   };
-
-  const lastWord = (): string => {
-    let j = out.length - 1;
-    while (j >= 0 && /\s/.test(out[j] ?? "")) j--;
-    let w = "";
-    while (j >= 0 && /[A-Za-z0-9_$]/.test(out[j] ?? "")) {
-      w = (out[j] ?? "") + w;
-      j--;
-    }
-    return w;
-  };
-
-  const regexMayStart = (): boolean => {
-    const prev = lastSignificant();
-    if (prev === "") return true;
-    if (REGEX_PRECEDERS.has(prev)) return true;
-    if (/[A-Za-z0-9_$]/.test(prev)) return REGEX_KEYWORDS.has(lastWord());
-    return false;
-  };
-
-  const template = (): void => {
-    // out already has the tag characters; decide safety from them.
-    const tagged = lastWord();
-    const prev = lastSignificant();
-    const isTag = tagged !== "" && prev === tagged[tagged.length - 1];
-    const safe = isTag && tagged === SAFE_TAG;
-    out.push("`");
-    i++;
-    let interpolates = false;
-    while (i < n) {
-      const c = src[i] ?? "";
-      if (c === "\\") {
-        out.push(" ", blank(src[i + 1] ?? ""));
-        i += 2;
-        continue;
-      }
-      if (c === "`") {
-        out.push("`");
-        i++;
-        break;
-      }
-      if (c === "$" && src[i + 1] === "{") {
-        interpolates = true;
-        i += 2;
-        let depth = 1;
-        // The interpolation holds ordinary code; strip it recursively so a
-        // nested template or string inside it cannot end this one early.
-        const start = i;
-        while (i < n && depth > 0) {
-          const d = src[i] ?? "";
-          if (d === "{") depth++;
-          else if (d === "}") depth--;
-          else if (d === "`" || d === '"' || d === "'") {
-            // skip a nested literal wholesale
-            const q = d;
-            i++;
-            while (i < n && src[i] !== q) {
-              if (src[i] === "\\") i++;
-              i++;
-            }
-          }
-          if (depth > 0) i++;
-        }
-        const inner = src.slice(start, i);
-        for (const ch of inner) out.push(blank(ch));
-        i++; // closing }
-        continue;
-      }
-      out.push(blank(c));
-      i++;
-    }
-    if (interpolates && !safe) {
-      // Rewrite the just-emitted body so the marker sits right after the opening backtick.
-      let j = out.length - 2;
-      while (j >= 0 && out[j] !== "`") j--;
-      out.splice(j + 1, 0, "$", "{", "}");
+  const blankComments = (ranges: ReadonlyArray<ts.CommentRange> | undefined): void => {
+    for (const r of ranges ?? []) {
+      if (seenComments.has(r.pos)) continue;
+      seenComments.add(r.pos);
+      blankRange(r.pos, r.end);
     }
   };
+  const isSafeTagged = (node: ts.Node): boolean =>
+    ts.isTaggedTemplateExpression(node.parent) && node.parent.template === node && node.parent.tag.getText(sf) === SAFE_TAG;
 
-  const quoted = (q: string): void => {
-    out.push(q);
-    i++;
-    while (i < n) {
-      const c = src[i] ?? "";
-      if (c === "\\") {
-        out.push(" ", blank(src[i + 1] ?? ""));
-        i += 2;
-        continue;
-      }
-      if (c === q || c === "\n") {
-        out.push(c);
-        i++;
-        return;
-      }
-      out.push(" ");
-      i++;
+  const visit = (node: ts.Node): void => {
+    blankComments(ts.getLeadingCommentRanges(src, node.getFullStart()));
+    blankComments(ts.getTrailingCommentRanges(src, node.getEnd()));
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      blankRange(node.getStart(sf) + 1, node.getEnd() - 1);
+      return;
     }
+    if (ts.isRegularExpressionLiteral(node)) {
+      // Keep both slashes and the flags; only the pattern is prose-like.
+      blankRange(node.getStart(sf) + 1, src.lastIndexOf("/", node.getEnd() - 1));
+      return;
+    }
+    if (ts.isTemplateExpression(node)) {
+      // The interpolations hold ordinary code, but they are blanked wholesale with the body: a
+      // nested literal cannot end the template early, and the rules never need to see inside.
+      const open = node.getStart(sf);
+      blankRange(open + 1, node.getEnd() - 1);
+      if (!isSafeTagged(node)) markers.add(open + 1);
+      return;
+    }
+    ts.forEachChild(node, visit);
   };
+  visit(sf);
+  blankComments(ts.getLeadingCommentRanges(src, sf.endOfFileToken.getFullStart()));
 
-  const regex = (): void => {
-    out.push("/");
-    i++;
-    let inClass = false;
-    while (i < n) {
-      const c = src[i] ?? "";
-      if (c === "\\") {
-        out.push(" ", blank(src[i + 1] ?? ""));
-        i += 2;
-        continue;
-      }
-      if (c === "\n") {
-        out.push("\n");
-        i++;
-        return;
-      }
-      if (c === "[") inClass = true;
-      else if (c === "]") inClass = false;
-      else if (c === "/" && !inClass) {
-        out.push("/");
-        i++;
-        while (i < n && /[a-z]/.test(src[i] ?? "")) {
-          out.push(src[i] ?? "");
-          i++;
-        }
-        return;
-      }
-      out.push(" ");
-      i++;
-    }
-  };
-
-  while (i < n) {
-    const c = src[i] ?? "";
-    const next = src[i + 1] ?? "";
-    if (c === "/" && next === "/") {
-      while (i < n && src[i] !== "\n") {
-        out.push(" ");
-        i++;
-      }
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        out.push(blank(src[i] ?? ""));
-        i++;
-      }
-      out.push(" ", " ");
-      i += 2;
-      continue;
-    }
-    if (c === "`") {
-      template();
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      quoted(c);
-      continue;
-    }
-    if (c === "/" && regexMayStart()) {
-      regex();
-      continue;
-    }
-    out.push(c);
-    i++;
+  let out = "";
+  for (let i = 0; i < src.length; i++) {
+    if (markers.has(i)) out += "${}";
+    out += blank[i] ? " " : src.charAt(i);
   }
-  return out.join("");
+  return out;
 };
 
 const budgets = (exemptions: ReadonlyArray<Exemption>): Map<string, number> => {
@@ -302,8 +174,7 @@ const rawHits = (files: ReadonlyArray<SourceFile>): ReadonlyArray<Violation> => 
     for (const rule of RULES) {
       if (!applies(rule, path)) continue;
       if (rule.on === "file") {
-        const re = new RegExp(rule.re.source, rule.re.flags.includes("g") ? rule.re.flags : `${rule.re.flags}g`);
-        for (const m of stripped.matchAll(re)) {
+        for (const m of stripped.matchAll(rule.re)) {
           const line = lineOf(stripped, m.index);
           out.push({ path: file.path, line, rule: rule.rule, text: (rawLines[line - 1] ?? "").trim() });
         }

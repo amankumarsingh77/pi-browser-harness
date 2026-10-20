@@ -4,11 +4,10 @@ import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { axNode, type Canned, createFakeClient, type FakeClient, handlerContext } from "./fake-client";
-import { alwaysPageInfo, dialogOf, installTheme, pageInfoError, pageInfoOf, pngOf, renderedText, testTheme, withClient } from "./client-overrides";
+import { alwaysPageInfo, dialogOf, installTheme, pageInfoError, pageInfoOf, pngOf, renderWith, renderedText, withClient } from "./client-overrides";
 import { snapshotTool, type SnapshotDetails } from "../../src/domains/snapshot";
 import type { BrowserClient } from "../../src/client";
 import type { CdpSession } from "../../src/cdp/session";
-import type { Component } from "@mariozechner/pi-tui";
 import { cdpError } from "../../src/cdp/errors";
 import { asRecord } from "../../src/util/guards";
 import { err, ok } from "../../src/util/result";
@@ -52,10 +51,7 @@ const details = (d: SnapshotDetails | undefined): SnapshotDetails => {
   return d;
 };
 
-const render = (result: Parameters<NonNullable<typeof snapshotTool.renderResult>>[0], expanded: boolean): Component => {
-  assert.ok(snapshotTool.renderResult);
-  return snapshotTool.renderResult(result, expanded, testTheme);
-};
+const render = renderWith(snapshotTool);
 
 describe("browser_snapshot outline", () => {
   test("renders refs, click coordinates and live values for interactive nodes, hoisting ignored wrappers", async () => {

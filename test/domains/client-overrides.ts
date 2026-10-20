@@ -2,10 +2,13 @@
 // scripted transport but leaves the client-level helpers (pageInfo, listTabs, switchTab, newTab, current) as
 // "not configured"; the tools under test call those directly, so a test overrides just the members it drives.
 // Nothing here edits the fake: a wrapper is a spread of the fake's client with the overridden members on top.
+import assert from "node:assert/strict";
 import { deflateSync, crc32 } from "node:zlib";
 import { Theme, type ThemeColor, initTheme } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
+import type { TSchema } from "typebox";
 import type { BrowserClient } from "../../src/client";
+import type { BrowserToolDefinition } from "../../src/util/tool";
 import { type CdpError, cdpError } from "../../src/cdp/errors";
 import type { DialogInfo, PageInfo, PageInfoResult } from "../../src/cdp/types";
 import { type Result, err, ok } from "../../src/util/result";
@@ -65,6 +68,17 @@ export const stripAnsi = (line: string): string => line.replace(ANSI_SEQUENCE, "
 
 export const renderedText = (component: Component, width = 80): string =>
   component.render(width).map(stripAnsi).join("\n");
+
+type RenderResultOf<S extends TSchema, D extends TSchema> = NonNullable<BrowserToolDefinition<S, D>["renderResult"]>;
+
+// Binds a tool's renderResult to the in-memory palette so a test renders with `render(result, expanded)`.
+export const renderWith = <S extends TSchema, D extends TSchema>(
+  tool: BrowserToolDefinition<S, D>,
+): ((result: Parameters<RenderResultOf<S, D>>[0], expanded: boolean) => Component) => {
+  const renderResult = tool.renderResult;
+  assert.ok(renderResult, `${tool.name} has no renderResult`);
+  return (result, expanded) => renderResult(result, expanded, testTheme);
+};
 
 // A minimal valid PNG (8-bit RGB, no filter) so sharp has real pixels to measure and resize.
 export const pngOf = (width: number, height: number): Buffer => {

@@ -9,8 +9,6 @@ import { Type, type TSchema } from "typebox";
 import {
   type AgentToolResult,
   type ExtensionAPI,
-  Theme,
-  type ThemeColor,
   type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import type { Component } from "@mariozechner/pi-tui";
@@ -18,6 +16,7 @@ import { type BrowserToolDefinition, defineBrowserTool, renderToolError } from "
 import { err, ok } from "../../src/util/result";
 import { isRecord } from "../../src/util/guards";
 import { createFakeClient, handlerContext } from "../domains/fake-client";
+import { stripAnsi, testTheme } from "../domains/client-overrides";
 
 const EMPTY = Type.Object({});
 const ProbeDetails = Type.Object({ n: Type.Number(), label: Type.Optional(Type.String()) });
@@ -26,9 +25,6 @@ type ProbeDefinition<D extends TSchema> = Omit<
   BrowserToolDefinition<typeof EMPTY, D>,
   "name" | "label" | "description" | "promptSnippet" | "promptGuidelines" | "parameters" | "concurrency" | "ensureAlive"
 >;
-
-const ANSI_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-const stripAnsi = (line: string): string => line.replace(ANSI_SEQUENCE, "").trimEnd();
 
 const lines = (component: Component | undefined): string[] => {
   assert.ok(component, "renderer returned nothing");
@@ -41,22 +37,6 @@ const textComponent = (text: string): Component => ({
     // Static text has nothing to invalidate.
   },
 });
-
-// Only the renderer's colour calls go through the theme, so any complete palette will do.
-const FG_COLORS: Record<ThemeColor, number> = {
-  accent: 7, border: 7, borderAccent: 7, borderMuted: 7, success: 7, error: 7, warning: 7, muted: 7, dim: 7, text: 7,
-  thinkingText: 7, userMessageText: 7, customMessageText: 7, customMessageLabel: 7, toolTitle: 7, toolOutput: 7,
-  mdHeading: 7, mdLink: 7, mdLinkUrl: 7, mdCode: 7, mdCodeBlock: 7, mdCodeBlockBorder: 7, mdQuote: 7, mdQuoteBorder: 7,
-  mdHr: 7, mdListBullet: 7, toolDiffAdded: 7, toolDiffRemoved: 7, toolDiffContext: 7, syntaxComment: 7, syntaxKeyword: 7,
-  syntaxFunction: 7, syntaxVariable: 7, syntaxString: 7, syntaxNumber: 7, syntaxType: 7, syntaxOperator: 7,
-  syntaxPunctuation: 7, thinkingOff: 7, thinkingMinimal: 7, thinkingLow: 7, thinkingMedium: 7, thinkingHigh: 7,
-  thinkingXhigh: 7, bashMode: 7,
-};
-const theme = new Theme(
-  FG_COLORS,
-  { selectedBg: 0, userMessageBg: 0, customMessageBg: 0, toolPendingBg: 0, toolSuccessBg: 0, toolErrorBg: 0 },
-  "256color",
-);
 
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderResult"]>>[3];
 const renderContext = (isError: boolean): RenderContext => ({
@@ -109,7 +89,7 @@ const execute = async (td: RegisteredTool): Promise<AgentToolResult<unknown>> =>
 };
 
 const replay = (td: RegisteredTool, stored: AgentToolResult<unknown>, isError = false): Component | undefined =>
-  td.renderResult?.(stored, { expanded: false, isPartial: false }, theme, renderContext(isError));
+  td.renderResult?.(stored, { expanded: false, isPartial: false }, testTheme, renderContext(isError));
 
 describe("tool result mapping through pi's ToolDefinition.execute", () => {
   test("a successful handler resolves with its text and details stored verbatim", async () => {

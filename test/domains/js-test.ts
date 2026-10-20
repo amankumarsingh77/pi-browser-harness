@@ -3,21 +3,18 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { initTheme, Theme } from "@mariozechner/pi-coding-agent";
-import type { Component } from "@mariozechner/pi-tui";
 import { createFakeClient, handlerContext } from "./fake-client";
+import { installTheme, renderedText, testTheme } from "./client-overrides";
 import { type ExecuteJsDetails, executeJsTool, runScriptTool } from "../../src/domains/js";
 import type { BrowserClient } from "../../src/client";
 import type { HandlerContext } from "../../src/util/tool";
 import { ok } from "../../src/util/result";
 
-const ANSI_SEQUENCE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
-const rendered = (component: Component): string =>
-  component.render(100).map((l) => l.replace(ANSI_SEQUENCE, "").trimEnd()).join("\n");
 
-// The renderers call getMarkdownTheme() and keyHint(), which read pi's global theme; any theme will do.
-before(() => { initTheme("dark"); });
-const anyTheme = (): Theme => Theme.prototype;
+// The renderers call getMarkdownTheme() and keyHint(), which read pi's global theme.
+before(() => {
+  installTheme();
+});
 
 describe("browser_execute_js", () => {
   test("a JSON value is serialized into the text with the details describing it", async () => {
@@ -93,7 +90,7 @@ describe("browser_execute_js renderResult", () => {
 
   test("collapsed shows the size, the kind and the preview in a fence", () => {
     assert.ok(render);
-    const out = rendered(render(result('{"a":1}', { valueLength: 7, preview: '{"a":1}', isJson: true }), false, anyTheme()));
+    const out = renderedText(render(result('{"a":1}', { valueLength: 7, preview: '{"a":1}', isJson: true }), false, testTheme), 100);
     assert.match(out, /7 B JSON/);
     assert.match(out, /\{"a":1\}/);
     assert.match(out, /to expand/);
@@ -101,7 +98,7 @@ describe("browser_execute_js renderResult", () => {
 
   test("expanded pretty-prints the full JSON text, not the preview", () => {
     assert.ok(render);
-    const out = rendered(render(result('{"a":[1,2]}', { valueLength: 11, preview: "ignored", isJson: true }), true, anyTheme()));
+    const out = renderedText(render(result('{"a":[1,2]}', { valueLength: 11, preview: "ignored", isJson: true }), true, testTheme), 100);
     assert.match(out, /"a": \[/);
     assert.doesNotMatch(out, /ignored/);
     assert.match(out, /to collapse/);
@@ -109,8 +106,9 @@ describe("browser_execute_js renderResult", () => {
 
   test("expanded names the full output file when the value was truncated", () => {
     assert.ok(render);
-    const out = rendered(
-      render(result("undefined", { valueLength: 9, preview: "undefined", isJson: false, fullOutputPath: "/tmp/full.txt" }), true, anyTheme()),
+    const out = renderedText(
+      render(result("undefined", { valueLength: 9, preview: "undefined", isJson: false, fullOutputPath: "/tmp/full.txt" }), true, testTheme),
+      100,
     );
     assert.match(out, /9 B value/);
     assert.match(out, /Full value at \/tmp\/full\.txt/);

@@ -13,7 +13,7 @@ import type { CdpTransport } from "./cdp/types";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
 import type { BrowserTool } from "./util/tool";
-import { type Result, err, ok } from "./util/result";
+import type { Result } from "./util/result";
 
 export { defineBrowserTool } from "./util/tool";
 export type {
@@ -41,23 +41,8 @@ const harnessRegistry = createToolRegistry(ALL_TOOLS);
 // session_start; the tools are registered with pi on the next session_start alongside the
 // built-ins. The batch is all-or-nothing: a name clash rejects the whole call and leaves the
 // registry untouched.
-export const registerBrowserTools = (tools: ReadonlyArray<BrowserTool>): Result<void, RegistryError> => {
-  const existing = new Set(harnessRegistry.tools().map((t) => t.name));
-  for (const tool of tools) {
-    if (existing.has(tool.name)) {
-      return err({
-        kind: "duplicate_name",
-        message: `A browser tool named "${tool.name}" is already registered; pick a distinct name`,
-      });
-    }
-    existing.add(tool.name);
-  }
-  for (const tool of tools) {
-    const added = harnessRegistry.add(tool);
-    if (!added.success) return added;
-  }
-  return ok(undefined);
-};
+export const registerBrowserTools = (tools: ReadonlyArray<BrowserTool>): Result<void, RegistryError> =>
+  harnessRegistry.addAll(tools);
 
 // The tools the extension will register, built-ins plus contributions so far.
 export const browserTools = (): ReadonlyArray<BrowserTool> => harnessRegistry.tools();
@@ -115,7 +100,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       if (s.alive) {
         const info = await client.pageInfo();
         if (info.success) {
-          if ("dialog" in info.data) {
+          if (info.data.kind === "dialog") {
             lines.push(`\n⚠️  Dialog open: ${info.data.dialog.type} — "${info.data.dialog.message}"`);
           } else {
             lines.push(

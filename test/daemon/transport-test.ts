@@ -5,12 +5,11 @@ import { createInterface } from "node:readline";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { createDaemonTransport } from "../../src/daemon/transport";
 import { deserialize, serialize, type WireControl } from "../../src/daemon/protocol";
 
 const SKIP = process.platform === "win32" ? "the fake daemon listens on a temp socket file" : false;
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 type FakeDaemon = {
   readonly socketPath: string;

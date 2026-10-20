@@ -66,7 +66,7 @@ export const reloadTool = defineBrowserTool({
     if (!r.success) return r;
     const info = fromClient(await client.pageInfo(), "pageInfo");
     if (!info.success) return info;
-    if ("dialog" in info.data) {
+    if (info.data.kind === "dialog") {
       return ok({
         text: `Reloaded. ⚠️ Dialog open: ${info.data.dialog.type}`,
         details: { dialog: info.data.dialog },

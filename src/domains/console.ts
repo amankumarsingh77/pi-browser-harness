@@ -4,7 +4,7 @@ import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, ok } from "../util/result";
 import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
-import type { ConsoleRecord, ConsoleLevel } from "../cdp/console-buffer";
+import { type ConsoleRecord, type ConsoleLevel, ConsoleRecordSchema } from "../cdp/console-buffer";
 
 const ConsoleArgs = Type.Object({
   levels: Type.Optional(
@@ -95,25 +95,6 @@ const renderConsoleMarkdown = (
 
   return `${headerLines.join("\n")}\n\n${rows}${more}${cursor}`;
 };
-
-// Mirrors ConsoleRecord from the buffer: the handler's records must fit it and the renderer reads records out of
-// it, so a drift in either direction fails to compile.
-const ConsoleRecordSchema = Type.Object({
-  seq: Type.Number(),
-  timestampMs: Type.Number(),
-  level: Type.Union([
-    Type.Literal("log"),
-    Type.Literal("info"),
-    Type.Literal("warn"),
-    Type.Literal("error"),
-    Type.Literal("debug"),
-  ]),
-  text: Type.String(),
-  source: Type.Union([Type.Literal("console-api"), Type.Literal("log-entry")]),
-  url: Type.Optional(Type.String()),
-  lineNumber: Type.Optional(Type.Number()),
-  stackTrace: Type.Optional(Type.String()),
-});
 
 const ConsoleDetailsSchema = Type.Object({
   total: Type.Number(),

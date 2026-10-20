@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Component, visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { type Canned, createFakeClient, type FakeClient, handlerContext } from "./fake-client";
-import { pngOf, renderedText, testTheme } from "./client-overrides";
+import { pngOf, renderWith, renderedText } from "./client-overrides";
 import { type ScreenshotDetails, screenshotTool } from "../../src/domains/screenshot";
 import { captureBase, captureWithCrosshair, resizeIfNeeded } from "../../src/domains/screenshot-capture";
 import { loadSharp } from "../../src/util/sharp-shim";
@@ -29,10 +29,7 @@ const details = (d: ScreenshotDetails | undefined): ScreenshotDetails => {
   return d;
 };
 
-const render = (result: Parameters<NonNullable<typeof screenshotTool.renderResult>>[0], expanded: boolean): Component => {
-  assert.ok(screenshotTool.renderResult);
-  return screenshotTool.renderResult(result, expanded, testTheme);
-};
+const render = renderWith(screenshotTool);
 
 describe("browser_screenshot", () => {
   test("defaults to a png of the viewport, writes the decoded bytes and reports the path", async () => {

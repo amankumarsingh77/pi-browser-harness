@@ -133,8 +133,8 @@ export const snapshotTool = defineBrowserTool({
 
     const piRes = fromClient(await client.pageInfo(), "pageInfo");
     if (!piRes.success) return piRes;
-    const pageUrl = "dialog" in piRes.data ? "" : piRes.data.url;
-    const pageTitle = "dialog" in piRes.data ? "" : piRes.data.title;
+    const pageUrl = piRes.data.kind === "dialog" ? "" : piRes.data.url;
+    const pageTitle = piRes.data.kind === "dialog" ? "" : piRes.data.title;
 
     const slim = buildTree(rawNodes, {
       interestingOnly: args.interestingOnly ?? true,
@@ -172,8 +172,7 @@ export const snapshotTool = defineBrowserTool({
     }
     session.setRefMap(refMap, refSig);
 
-    const stripped = stripInternals(slim);
-    const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripped, null, 2);
+    const text = (args.format ?? "outline") === "outline" ? renderOutline(slim) : JSON.stringify(stripInternals(slim), null, 2);
     const trunc = await applyTruncation(text, "snapshot");
 
     const shotPath = args.includeScreenshot ? await captureJpeg(client) : undefined;

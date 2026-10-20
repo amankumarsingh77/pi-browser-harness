@@ -1,3 +1,4 @@
+import { borrowSession } from "../../cdp/target-factory";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../../schemas/parse";
@@ -5,7 +6,7 @@ import { type Result, err, ok } from "../../util/result";
 import { applyTruncation } from "../../util/truncate";
 import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../../util/tool";
 import type { BrowserClient } from "../../client";
-import { cdpCallBrowser, evalJs } from "../cdp-call";
+import { evalJs, fromClient } from "../cdp-call";
 import { pageCallExpression } from "../page/inject";
 import { capturePage } from "../page/read-page.page";
 import type * as captured from "../page/read-page.page";
@@ -66,9 +67,11 @@ const BODY_TEXT_LIMIT = 20_000;
 
 // The page function declares the capture shape it produces; this pins it to the shape the readability pass consumes,
 // so the two cannot drift apart silently (the runtime validator above still guards the actual wire value).
-export const asReadabilityCapture = (c: captured.PageCapture): PageCapture => c;
+type Pinned<T extends PageCapture> = T;
+export type CaptureFromPage = Pinned<captured.PageCapture>;
 
-const buildPageCaptureExpr = (): string => pageCallExpression(capturePage, BODY_TEXT_LIMIT);
+// Built once: stringifying the page function per call was the only cost of the thunk.
+const PAGE_CAPTURE_EXPR = pageCallExpression(capturePage, BODY_TEXT_LIMIT);
 
 // Accepts the capture either as JSON text (isolated tab) or as the already-decoded value (owned tab).
 export const toPageCapture = (raw: unknown): PageCapture | undefined => {
@@ -115,7 +118,7 @@ const readOpenedUrl = async (
     if (!navigated.success) return err(navigated.error);
     const loaded = await waitForIsolatedLoad(client, tab, LOAD_TIMEOUT_MS, signal);
     if (!loaded.success) return err(loaded.error);
-    const captured = await evalInIsolatedTab(client, tab, buildPageCaptureExpr(), isJsonText);
+    const captured = await evalInIsolatedTab(client, tab, PAGE_CAPTURE_EXPR, isJsonText);
     if (!captured.success) return err(captured.error);
     return await captureToResult(captured.data);
   } finally {
@@ -130,15 +133,14 @@ const readOwnedTab = async (
   if (!client.owns(targetId)) {
     return err({ kind: "invalid_state", message: `Tab ${targetId} is not owned by this session.` });
   }
-  const attached = await cdpCallBrowser(client, "Target.attachToTarget", { targetId, flatten: true });
-  if (!attached.success) return attached;
-  const sessionId = attached.data.sessionId;
+  const borrowed = await borrowSession(client, targetId);
+  if (!borrowed.success) return fromClient(borrowed, "Target.attachToTarget");
   try {
-    const captured = await evalJs(client, buildPageCaptureExpr(), sessionId);
+    const captured = await evalJs(client, PAGE_CAPTURE_EXPR, borrowed.data.sessionId);
     if (!captured.success) return captured;
     return await captureToResult(captured.data);
   } finally {
-    await cdpCallBrowser(client, "Target.detachFromTarget", { sessionId });
+    await borrowed.data.release();
   }
 };
 
