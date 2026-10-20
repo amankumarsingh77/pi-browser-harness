@@ -45,21 +45,21 @@ export const openProfileWindow = async (
   try {
     child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
   } catch (e) {
-    await rm(file, { force: true }).catch(() => {});
+    await rm(file, { force: true }).catch(() => undefined);
     return err(`could not launch ${req.exePath}: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // spawn() reports a bad binary asynchronously as an 'error' event rather than throwing; unhandled, an ENOENT looked like the 15s sentinel timeout.
   const spawnFailure = await new Promise<string | undefined>((resolve) => {
-    child.once("spawn", () => resolve(undefined));
-    child.once("error", (e: Error) => resolve(e.message));
+    child.once("spawn", () => { resolve(undefined); });
+    child.once("error", (e: Error) => { resolve(e.message); });
   });
   // A later 'error' event with no listener would throw, so keep one attached for the detached launcher's lifetime.
-  child.on("error", () => {});
+  child.on("error", () => undefined);
   child.unref();
 
   if (spawnFailure) {
-    await rm(file, { force: true }).catch(() => {});
+    await rm(file, { force: true }).catch(() => undefined);
     return err(`could not launch ${req.exePath}: ${spawnFailure}`);
   }
 
@@ -68,11 +68,15 @@ export const openProfileWindow = async (
   return ok({
     sentinelUrl,
     cleanup: async () => {
-      await rm(file, { force: true }).catch(() => {});
+      await rm(file, { force: true }).catch(() => undefined);
     },
     kill: () => {
       if (live) {
-        try { live.kill("SIGTERM"); } catch {}
+        try {
+          live.kill("SIGTERM");
+        } catch {
+          // The process already exited; there is nothing left to kill.
+        }
         live = null;
       }
     },

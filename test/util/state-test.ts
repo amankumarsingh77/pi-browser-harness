@@ -2,17 +2,20 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { type BrowserState, createStatePersister, defaultState } from "../../src/state";
+import { isRecord } from "../../src/util/guards";
 
 // Pi session JSONL is append-only, so every appendEntry is permanent. Issue #26: identical
 // snapshots were appended on every ownership callback, session_tree and shutdown, growing the
 // session file and the branch navigator's "+N custom" chain without bound.
-const fakePi = (): { readonly pi: ExtensionAPI; readonly entries: ReadonlyArray<unknown> } => {
+type EntrySink = Pick<ExtensionAPI, "appendEntry">;
+
+const fakePi = (): { readonly pi: EntrySink; readonly entries: ReadonlyArray<unknown> } => {
   const entries: unknown[] = [];
-  const pi = {
-    appendEntry: (_customType: string, data?: unknown) => {
+  const pi: EntrySink = {
+    appendEntry: (_customType, data) => {
       entries.push(data);
     },
-  } as unknown as ExtensionAPI;
+  };
   return { pi, entries };
 };
 
@@ -35,7 +38,10 @@ describe("state persister", () => {
     persister.persist(owned("a", "b"));
     persister.persist(owned("a", "b"));
     persister.persist(owned("a"));
-    assert.deepEqual(entries.map((e) => (e as BrowserState).ownedTargetIds), [["a"], ["a", "b"], ["a"]]);
+    assert.deepEqual(
+      entries.map((e) => (isRecord(e) ? e["ownedTargetIds"] : undefined)),
+      [["a"], ["a", "b"], ["a"]],
+    );
   });
 
   test("tab order does not count as a change", () => {

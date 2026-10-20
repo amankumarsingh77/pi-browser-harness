@@ -13,7 +13,7 @@ const tempDirs: string[] = [];
 
 export const cleanupTempDirs = async (): Promise<void> => {
   const dirs = tempDirs.splice(0);
-  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }).catch(() => {})));
+  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true }).catch(() => undefined)));
 };
 
 export type TruncatedOutput = {

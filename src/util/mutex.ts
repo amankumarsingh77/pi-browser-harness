@@ -7,7 +7,7 @@ export const createMutex = (): Mutex => {
 
   return {
     async acquire(): Promise<() => void> {
-      let release = () => {};
+      let release: () => void = () => undefined;
       const next = new Promise<void>((resolve) => {
         release = resolve;
       });

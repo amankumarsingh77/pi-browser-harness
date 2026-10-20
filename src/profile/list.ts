@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../schemas/parse";
+// Chrome writes "" for an unnamed profile and an unsigned-in account, so an empty string must read as absent.
+import { asNonEmptyString, asRecord } from "../util/guards";
 
 export type BrowserProfile = {
   readonly dir: string;
@@ -34,12 +36,6 @@ const readJsonFile = async (path: string): Promise<Record<string, unknown> | nul
   const parsed = parseJson(raw, jsonObjectValidator);
   return parsed.success ? parsed.data : null;
 };
-
-const asRecord = (v: unknown): Record<string, unknown> | null =>
-  jsonObjectValidator.Check(v) ? v : null;
-
-const asString = (v: unknown): string | undefined =>
-  typeof v === "string" && v.length > 0 ? v : undefined;
 
 const orderDirs = (dirs: ReadonlyArray<string>, order: ReadonlyArray<string>): ReadonlyArray<string> => {
   const known = order.filter((d) => dirs.includes(d));
@@ -73,9 +69,9 @@ const listFromLocalState = async (userDataDir: string): Promise<ReadonlyArray<Br
 
   const rawOrder = profileNode["profiles_order"];
   const order = Array.isArray(rawOrder) ? rawOrder.filter((v): v is string => typeof v === "string") : [];
-  const lastUsed = asString(profileNode["last_used"]);
+  const lastUsed = asNonEmptyString(profileNode["last_used"]);
 
-  const entries: Array<{ dir: string; entry: Record<string, unknown> }> = [];
+  const entries: Array<{ dir: string; entry: Readonly<Record<string, unknown>> }> = [];
   for (const [dir, value] of Object.entries(infoCache)) {
     if (NON_PROFILE_DIRS.has(dir)) continue;
     const entry = asRecord(value);
@@ -91,8 +87,8 @@ const listFromLocalState = async (userDataDir: string): Promise<ReadonlyArray<Br
   return ordered.flatMap((dir) => {
     const entry = byDir.get(dir);
     if (!entry) return [];
-    const name = asString(entry["name"]) ?? asString(entry["gaia_name"]);
-    const email = asString(entry["user_name"]);
+    const name = asNonEmptyString(entry["name"]) ?? asNonEmptyString(entry["gaia_name"]);
+    const email = asNonEmptyString(entry["user_name"]);
     return [buildProfile(dir, name, email, dir === lastUsed)];
   });
 };
@@ -115,10 +111,10 @@ const listFromPreferencesScan = async (userDataDir: string): Promise<ReadonlyArr
     const prefs = await readJsonFile(join(userDataDir, dir, "Preferences"));
     if (!prefs) continue;
     const profileNode = asRecord(prefs["profile"]);
-    const name = profileNode ? asString(profileNode["name"]) : undefined;
+    const name = profileNode ? asNonEmptyString(profileNode["name"]) : undefined;
     const accounts = prefs["account_info"];
-    const firstAccount = Array.isArray(accounts) ? asRecord(accounts[0]) : null;
-    const email = firstAccount ? asString(firstAccount["email"]) : undefined;
+    const firstAccount = Array.isArray(accounts) ? asRecord(accounts[0]) : undefined;
+    const email = firstAccount ? asNonEmptyString(firstAccount["email"]) : undefined;
     profiles.push(buildProfile(dir, name, email, false));
   }
   return profiles;

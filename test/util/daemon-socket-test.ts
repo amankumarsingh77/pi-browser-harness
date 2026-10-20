@@ -5,15 +5,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Type } from "typebox";
-import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { TSchema } from "typebox";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import {
   daemonNodeExecutable,
   daemonSocketMayExist,
   daemonSpawnCommand,
   resolveTsxCliFromFilesystem,
 } from "../../src/daemon/spawn";
-import { type AnyBrowserToolDefinition, registerBrowserTool } from "../../src/util/tool";
+import { defineBrowserTool } from "../../src/util/tool";
 import type { BrowserClient } from "../../src/client";
 import { ok } from "../../src/util/result";
 
@@ -136,11 +135,13 @@ type GateProbe = { readonly ran: ReadonlyArray<string>; readonly text: string };
 
 const runGate = async (ensureAlive: boolean | undefined): Promise<GateProbe> => {
   const ran: string[] = [];
-  const client = {
-    mutationMutex: () => ({ acquire: async () => () => {} }),
-    ensureAlive: async () => ok(undefined),
-  } as unknown as BrowserClient;
-  const def = {
+  const partialClient = {
+    mutationMutex: () => ({ acquire: () => Promise.resolve(() => undefined) }),
+    ensureAlive: () => Promise.resolve(ok(undefined)),
+  };
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- partial fake: the gate only reaches mutationMutex and ensureAlive
+  const client = partialClient as unknown as BrowserClient;
+  const tool = defineBrowserTool({
     name: "browser_probe",
     label: "Probe",
     description: "probe",
@@ -149,23 +150,32 @@ const runGate = async (ensureAlive: boolean | undefined): Promise<GateProbe> => 
     parameters: Type.Object({}),
     concurrency: "parallel",
     ...(ensureAlive !== undefined ? { ensureAlive } : {}),
-    handler: async () => {
+    handler: () => {
       ran.push("handler");
-      return ok({ text: "done" });
+      return Promise.resolve(ok({ text: "done" }));
     },
-  } as AnyBrowserToolDefinition;
+  });
 
-  let registered: ToolDefinition<TSchema> | undefined;
-  const pi = {
-    registerTool: (td: ToolDefinition<TSchema>) => {
+  let registered: ToolDefinition | undefined;
+  const sink = {
+    registerTool: (td: ToolDefinition) => {
       registered = td;
     },
-  } as unknown as ExtensionAPI;
-  registerBrowserTool(pi, client, def);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- pi's registerTool is generic over the schema; a sink typed for one schema needs the same erasure pi itself does
+  const pi = sink as unknown as ExtensionAPI;
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the probe handler never reads its context
+  const extensionCtx = undefined as unknown as ExtensionContext;
+  tool.register(pi, client);
   assert.ok(registered, "tool was not registered");
-  const result = await registered.execute?.("id", {}, undefined, undefined, undefined as never);
-  const first = result?.content[0];
-  return { ran, text: first !== undefined && first.type === "text" ? first.text : "" };
+  // A gate refusal is an error, which pi only recognises as a rejection; its message is the result text.
+  try {
+    const result = await registered.execute("id", {}, undefined, undefined, extensionCtx);
+    const first = result.content[0];
+    return { ran, text: first?.type === "text" ? first.text : "" };
+  } catch (e) {
+    return { ran, text: e instanceof Error ? e.message : String(e) };
+  }
 };
 
 describe("tool gate on the daemon socket", () => {

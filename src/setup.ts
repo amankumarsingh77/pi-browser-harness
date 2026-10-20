@@ -4,12 +4,19 @@ import { ensureDaemon } from "./daemon/spawn";
 import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 import { isBrowserRunning } from "./profile/browser-process";
 import { promptForProfileIfUnset } from "./profile/command";
+import { type Result, err, ok } from "./util/result";
 
-export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): void {
+// The machine probes setup runs before touching the client. Each defaults to the real implementation.
+export type SetupDeps = {
+  readonly isBrowserRunning?: () => Promise<boolean>;
+  readonly ensureDaemon?: () => Promise<boolean>;
+};
+
+export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient, deps: SetupDeps = {}): void {
   pi.registerCommand("browser-setup", {
     description: "Connect pi to your Chrome browser",
     handler: async (_args, ctx) => {
-      const result = await performSetup(client, ctx);
+      const result = await performSetup(client, ctx, deps);
       if (result.success) {
         ctx.ui.notify(result.data, "info");
       } else {
@@ -19,17 +26,21 @@ export function registerSetupCommand(pi: ExtensionAPI, client: BrowserClient): v
   });
 }
 
-export type SetupResult = { success: true; data: string } | { success: false; error: string };
+export type SetupResult = Result<string, string>;
 
-export async function performSetup(client: BrowserClient, ctx?: ExtensionContext): Promise<SetupResult> {
-  const chromeRunning = await isBrowserRunning();
+export async function performSetup(
+  client: BrowserClient,
+  ctx?: ExtensionContext,
+  deps: SetupDeps = {},
+): Promise<SetupResult> {
+  const chromeRunning = await (deps.isBrowserRunning ?? isBrowserRunning)();
   if (!chromeRunning) {
-    return { success: false, error: "No browser instance running. Please open your browser and then run /browser-setup." };
+    return err("No browser instance running. Please open your browser and then run /browser-setup.");
   }
 
-  const daemonReady = await ensureDaemon();
+  const daemonReady = await (deps.ensureDaemon ?? ensureDaemon)();
   if (!daemonReady) {
-    return { success: false, error: `Could not start the browser daemon. Check ${DAEMON_SOCKET_PATH}.` };
+    return err(`Could not start the browser daemon. Check ${DAEMON_SOCKET_PATH}.`);
   }
 
   const profileNote = await promptForProfileIfUnset(client, ctx);
@@ -45,25 +56,23 @@ export async function performSetup(client: BrowserClient, ctx?: ExtensionContext
       lower.includes("econnrefused") ||
       lower.includes("cannot reach chrome devtools")
     ) {
-      return {
-        success: false,
-        error:
-          "Browser remote debugging needs to be enabled.\n\n" +
+      return err(
+        "Browser remote debugging needs to be enabled.\n\n" +
           "Open chrome://inspect/#remote-debugging (or brave://inspect,\n" +
           "edge://inspect) in your browser, tick the\n" +
           '"Discover network targets" / Allow checkbox, then retry.\n\n' +
           "If that doesn't expose DevTools, relaunch the browser with\n" +
           "--remote-debugging-port=9222.\n\n" +
           "Or set BU_CDP_WS to a remote browser WebSocket URL.",
-      };
+      );
     }
 
-    return { success: false, error: `Connection failed: ${msg}` };
+    return err(`Connection failed: ${msg}`);
   }
 
   const tabResult = await client.newTab("https://github.com");
   if (!tabResult.success) {
-    return { success: false, error: `Browser connected but test navigation failed: ${tabResult.error.message}` };
+    return err(`Browser connected but test navigation failed: ${tabResult.error.message}`);
   }
 
   const info = await client.pageInfo();
@@ -74,6 +83,6 @@ export async function performSetup(client: BrowserClient, ctx?: ExtensionContext
   const pageUrl = info.success && !("dialog" in info.data) ? info.data.url : "github.com";
   const lines = ["Browser connected ✓", `Navigated to: ${pageUrl}`];
   if (profileNote) lines.push(profileNote);
-  return { success: true, data: lines.join("\n") };
+  return ok(lines.join("\n"));
 }
 

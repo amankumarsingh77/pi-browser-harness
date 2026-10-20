@@ -31,7 +31,8 @@ export type StatePersister = {
   readonly markPersisted: (state: BrowserState) => void;
 };
 
-export const createStatePersister = (pi: ExtensionAPI): StatePersister => {
+// Only appendEntry is needed, so a test can hand in a plain object instead of a whole ExtensionAPI.
+export const createStatePersister = (pi: Pick<ExtensionAPI, "appendEntry">): StatePersister => {
   let last: string | undefined;
   return {
     persist: (state) => {

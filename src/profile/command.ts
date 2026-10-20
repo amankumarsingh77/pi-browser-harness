@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
-import { discoverEndpoint } from "../cdp/discovery";
-import { type Result, err, ok } from "../util/result";
+import { type CdpEndpoint, discoverEndpoint } from "../cdp/discovery";
+import type { CdpError } from "../cdp/errors";
+import { type Result, err, mapErr, ok } from "../util/result";
 import { type BrowserProfile, listProfiles } from "./list";
 import { browserNameForUserDataDir, userDataDirCandidates } from "./paths";
 import { clearPin, type ProfilePin, readPin, writePin } from "./store";
@@ -53,15 +54,22 @@ const pinFor = (userDataDir: string, profile: BrowserProfile): ProfilePin => ({
   savedAt: new Date().toISOString(),
 });
 
-const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string, string>> => {
+// How the command finds a user-data-dir when the client is not connected: the DevTools endpoint's
+// own report, then a scan of the per-platform candidate directories. Each defaults to the real one.
+export type ProfileCommandDeps = {
+  readonly discoverEndpoint?: () => Promise<Result<CdpEndpoint, CdpError>>;
+  readonly userDataDirCandidates?: () => ReadonlyArray<string>;
+};
+
+const resolveUserDataDir = async (client: BrowserClient, deps: ProfileCommandDeps): Promise<Result<string, string>> => {
   const connected = client.userDataDir();
   if (connected) return ok(connected);
 
-  const endpoint = await discoverEndpoint();
+  const endpoint = await (deps.discoverEndpoint ?? discoverEndpoint)();
   if (endpoint.success && endpoint.data.userDataDir) return ok(endpoint.data.userDataDir);
 
   const withProfiles: string[] = [];
-  for (const dir of userDataDirCandidates()) {
+  for (const dir of (deps.userDataDirCandidates ?? userDataDirCandidates)()) {
     if ((await listProfiles(dir)).length > 0) withProfiles.push(dir);
   }
   const only = withProfiles[0];
@@ -77,8 +85,9 @@ const resolveUserDataDir = async (client: BrowserClient): Promise<Result<string,
 
 const loadProfiles = async (
   client: BrowserClient,
+  deps: ProfileCommandDeps,
 ): Promise<Result<{ userDataDir: string; profiles: ReadonlyArray<BrowserProfile> }, string>> => {
-  const dir = await resolveUserDataDir(client);
+  const dir = await resolveUserDataDir(client, deps);
   if (!dir.success) return dir;
   const profiles = await listProfiles(dir.data);
   if (profiles.length === 0) {
@@ -91,16 +100,14 @@ const applyToLiveSession = async (client: BrowserClient): Promise<Result<void, s
   if (!client.status().alive) return ok(undefined);
   await client.closeOwnedTabs();
   await client.stop();
-  const started = await client.start();
-  if (!started.success) return err(started.error.message);
-  return ok(undefined);
+  return mapErr(await client.start(), (e) => e.message);
 };
 
-export function registerProfileCommand(pi: ExtensionAPI, client: BrowserClient): void {
+export function registerProfileCommand(pi: ExtensionAPI, client: BrowserClient, deps: ProfileCommandDeps = {}): void {
   pi.registerCommand("browser-profile", {
     description: "Choose which browser profile the agent uses",
     handler: async (_args, ctx) => {
-      const loaded = await loadProfiles(client);
+      const loaded = await loadProfiles(client, deps);
       if (!loaded.success) {
         ctx.ui.notify(loaded.error, "error");
         return;
@@ -156,6 +163,7 @@ export function registerProfileCommand(pi: ExtensionAPI, client: BrowserClient):
 export const promptForProfileIfUnset = async (
   client: BrowserClient,
   ctx: ExtensionContext | undefined,
+  deps: ProfileCommandDeps = {},
 ): Promise<string | undefined> => {
   if (client.profilePin()) return undefined;
 
@@ -168,7 +176,7 @@ export const promptForProfileIfUnset = async (
     return "No browser profile selected — using whichever window is focused. Run /browser-profile to pin one.";
   }
 
-  const loaded = await loadProfiles(client);
+  const loaded = await loadProfiles(client, deps);
   if (!loaded.success) return loaded.error;
 
   const choice = await promptForProfile(

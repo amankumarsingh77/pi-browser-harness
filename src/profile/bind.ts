@@ -1,20 +1,37 @@
 import type { BrowserClient } from "../client";
 import type { ResultOf } from "../cdp/commands";
 import { type CdpError, cdpError } from "../cdp/errors";
-import { type Result, err, ok } from "../util/result";
-import { detectRunningBrowser, resolveBrowserExecutable } from "./browser-process";
-import { openProfileWindow } from "./launch";
+import { borrowSession } from "../cdp/target-factory";
+import { type Result, err, map, ok, unwrapOr } from "../util/result";
+import { detectRunningBrowser, resolveBrowserExecutable, type RunningBrowser } from "./browser-process";
+import { openProfileWindow, type ProfileWindowHandle, type ProfileWindowRequest } from "./launch";
 import type { ProfilePin } from "./store";
 
 const SEED_DEADLINE_MS = 15_000;
 const SEED_POLL_MS = 500;
 
+// The machine-facing steps of seeding: process detection, executable lookup, the window launch
+// and the sentinel poll's clock. Each defaults to the real implementation.
+export type SeedDeps = {
+  readonly detectRunningBrowser?: (preferUserDataDir?: string) => Promise<RunningBrowser>;
+  readonly resolveBrowserExecutable?: (running?: RunningBrowser) => Promise<string | undefined>;
+  readonly openProfileWindow?: (req: ProfileWindowRequest) => Promise<Result<ProfileWindowHandle, string>>;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => number;
+  readonly deadlineMs?: number;
+  readonly pollMs?: number;
+};
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 type PageTarget = ResultOf<"Target.getTargets">["targetInfos"][number];
 
 const pageTargets = async (client: BrowserClient): Promise<ReadonlyArray<PageTarget>> => {
   const r = await client.session().callBrowser("Target.getTargets");
-  if (!r.success) return [];
-  return r.data.targetInfos.filter((t) => t.type === "page");
+  return unwrapOr(
+    map(r, (d): ReadonlyArray<PageTarget> => d.targetInfos.filter((t) => t.type === "page")),
+    [],
+  );
 };
 
 const manualFallbackHint = (pin: ProfilePin): string =>
@@ -24,7 +41,16 @@ const manualFallbackHint = (pin: ProfilePin): string =>
 export const seedProfileWindow = async (
   client: BrowserClient,
   pin: ProfilePin,
+  deps: SeedDeps = {},
 ): Promise<Result<string, CdpError>> => {
+  const detect = deps.detectRunningBrowser ?? detectRunningBrowser;
+  const resolveExe = deps.resolveBrowserExecutable ?? resolveBrowserExecutable;
+  const launch = deps.openProfileWindow ?? openProfileWindow;
+  const sleep = deps.sleep ?? realSleep;
+  const now = deps.now ?? Date.now;
+  const deadlineMs = deps.deadlineMs ?? SEED_DEADLINE_MS;
+  const pollMs = deps.pollMs ?? SEED_POLL_MS;
+
   const connectedDir = client.userDataDir();
   if (connectedDir && connectedDir !== pin.userDataDir) {
     return err(cdpError(
@@ -35,8 +61,8 @@ export const seedProfileWindow = async (
   }
 
   const targetUserDataDir = connectedDir ?? pin.userDataDir;
-  const running = await detectRunningBrowser(targetUserDataDir);
-  const exePath = await resolveBrowserExecutable(running);
+  const running = await detect(targetUserDataDir);
+  const exePath = await resolveExe(running);
   if (!exePath) {
     return err(cdpError(
       "discovery_failed",
@@ -44,7 +70,7 @@ export const seedProfileWindow = async (
     ));
   }
 
-  const launched = await openProfileWindow({
+  const launched = await launch({
     exePath,
     profileDir: pin.profileDir,
     // ProcessSingleton keys on the user-data-dir path, so forward only the value the running browser reports: a reconstructed one may differ by case and start a SECOND browser.
@@ -55,10 +81,10 @@ export const seedProfileWindow = async (
   }
 
   const { sentinelUrl, cleanup, kill } = launched.data;
-  const deadline = Date.now() + SEED_DEADLINE_MS;
+  const deadline = now() + deadlineMs;
   let seed: PageTarget | undefined;
-  while (Date.now() < deadline && !seed) {
-    await new Promise((r) => setTimeout(r, SEED_POLL_MS));
+  while (now() < deadline && !seed) {
+    await sleep(pollMs);
     seed = (await pageTargets(client)).find((t) => t.url === sentinelUrl);
   }
 
@@ -80,9 +106,14 @@ export const seedProfileWindow = async (
   const win = await client.session().windowId(seed.targetId);
   if (win.success) ownership.setHarnessWindowId(win.data);
 
-  const attached = await client.session().attach(seed.targetId);
-  if (attached.success) {
-    await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, attached.data);
+  // Clears the sentinel URL from the seed tab. The session is borrowed and released so an untracked attach never outlives this call.
+  const borrowed = await borrowSession(client, seed.targetId);
+  if (borrowed.success) {
+    try {
+      await client.session().callOnTarget("Page.navigate", { url: "about:blank" }, borrowed.data.sessionId);
+    } finally {
+      await borrowed.data.release();
+    }
   }
   await cleanup();
 

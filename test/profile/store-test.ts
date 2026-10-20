@@ -39,8 +39,8 @@ describe("profile pin store", () => {
     assert.equal(written.success, true);
     const read = await readPin();
     assert.equal(read?.profileDir, "Profile 1");
-    assert.equal(read?.userDataDir, pin.userDataDir);
-    assert.equal(read?.label, pin.label);
+    assert.equal(read.userDataDir, pin.userDataDir);
+    assert.equal(read.label, pin.label);
   });
 
   test("P4: write leaves no .tmp files", () => {
@@ -107,8 +107,8 @@ describe("profile pin store", () => {
     mkdirSync(blocked, { recursive: true });
     writeFileSync(join(blocked, "browser-harness.json"), "{}", "utf8");
     process.env["PI_CODING_AGENT_DIR"] = join(blocked, "browser-harness.json");
-    const { writePin: writeAgain } = await import(`../../src/profile/store?nocache=${Date.now()}`);
-    const written = await writeAgain(pin);
+    const { writePin } = await import("../../src/profile/store");
+    const written = await writePin(pin);
     assert.equal(written.success, false);
     process.env["PI_CODING_AGENT_DIR"] = sandbox;
   });
