@@ -2,10 +2,11 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
-## Unreleased
+## 0.13.0 — 2026-10-20
 
 ### Fixed
 
+- **A killed daemon no longer crashes pi with `read ECONNRESET`.** The daemon's liveness probe, the client transport and the IPC server read the wire protocol through `node:readline`, which re-emits the socket's errors on its own interface with no listener. They now share a small line reader in `src/daemon/lines.ts` that only emits lines.
 - **Waking from sleep no longer stacks up "Allow remote debugging" prompts.** Each dial to Chrome is one prompt, and the daemon abandoned a dial after 10s and started another on the next tool call, so an agent mid-task could open a dozen prompts before anyone was back at the keyboard. A dial now stays open for 5 minutes while callers get a "waiting for the Allow prompt" answer after 10s, every caller joins the dial in flight, and an outright failure starts a doubling cooldown (30s to 5min) during which no automatic dial happens. A dropped connection still re-dials once at the next demand. `/browser-setup` and `/browser-reload-daemon` send `Daemon.reconnect`, which bypasses the cooldown.
 - **Tool failures now reach the model as errors.** `defineBrowserTool` set `isError` on the returned result, but pi only flags a result as an error when `execute` rejects, so every failed browser tool read as a success. Failed handlers now throw with the rendered error text; replayed errors still render in the UI.
 - **The daemon transport no longer exits mid-handshake.** The connect timer was cleared on TCP connect, before the daemon's `registered` reply, and the socket was already unref'd, so a print-mode run could exit before registering. The timer now stays armed until the handshake settles; a daemon that accepts but never registers times out instead of hanging.
