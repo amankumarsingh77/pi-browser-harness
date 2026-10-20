@@ -303,6 +303,91 @@ Scripts must live under the OS temp dir, the cwd, or `BH_SCRIPT_DIR`, and every 
 mandatory timeout (60s default, 600s max). They land on disk first, so they're reviewable and
 re-runnable.
 
+### Contributing tools from another pi extension
+
+Another extension can add its own `browser_*` tools to this harness. Contributed tools share the
+same client, mutation mutex, tab ownership, and lane prompt as the built-ins, so a `serialized` tool
+you add queues behind `browser_click` exactly as `browser_fill` does.
+
+Define the tool with `defineBrowserTool` and hand it to `registerBrowserTools` at your extension's
+load time, before pi emits `session_start`. The harness registers it with pi on the next
+`session_start` alongside the built-ins.
+
+```ts
+// my-extension/src/index.ts
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
+import { defineBrowserTool, registerBrowserTools, ok } from "pi-browser-harness/src/index.ts";
+import { evalJs } from "pi-browser-harness/src/domains/cdp-call.ts";
+
+const pageHeightTool = defineBrowserTool({
+  name: "browser_page_height",
+  label: "Browser Page Height",
+  description: "Report the document's full scroll height in CSS pixels.",
+  promptSnippet: "Measure the page's scroll height",
+  promptGuidelines: [],
+  parameters: Type.Object({}),
+  concurrency: "parallel",
+  handler: async (_args, { client }) => {
+    const height = await evalJs(client, "document.documentElement.scrollHeight");
+    if (!height.success) return height;
+    return ok({ text: `Scroll height: ${String(height.data)}px` });
+  },
+});
+
+export default function myExtension(_pi: ExtensionAPI): void {
+  const added = registerBrowserTools([pageHeightTool]);
+  if (!added.success) console.warn(added.error.message);
+}
+```
+
+`registerBrowserTools` returns a `Result`. The whole batch is rejected, and nothing is added, when any
+name is already taken by a built-in, an earlier contribution, or another tool in the same batch. Pick
+`concurrency: "serialized"` for anything that changes page or tab state; `"parallel"` for reads.
+`browserTools()` lists what the harness will register, built-ins plus contributions so far.
+
+A tool that wants a custom result view declares a `details` schema next to `parameters`. The handler
+then returns `details` of that shape, and `renderResult` receives them typed. pi stores details with
+the session and replays them later; the harness validates replayed details against the schema first,
+so a renderer never sees a stale shape from an older session (it falls back to the stored text instead).
+Details must be plain JSON: no `Map`s, and omit a key rather than setting it to `undefined`.
+
+```ts
+import { Text } from "@mariozechner/pi-tui";
+
+const PageHeightDetails = Type.Object({ height: Type.Number(), unit: Type.Literal("px") });
+
+const pageHeightTool = defineBrowserTool({
+  // ...name, label, description, promptSnippet, promptGuidelines, parameters, concurrency as above
+  details: PageHeightDetails,
+  handler: async (_args, { client }) => {
+    const height = await evalJs(client, "document.documentElement.scrollHeight");
+    if (!height.success) return height;
+    const px = typeof height.data === "number" ? height.data : 0;
+    return ok({ text: `Scroll height: ${px}px`, details: { height: px, unit: "px" } });
+  },
+  renderResult: (result, _expanded, theme) =>
+    new Text(theme.fg("muted", `${result.details.height}${result.details.unit}`), 0, 0),
+});
+```
+
+Tools without a `details` schema need nothing extra: they may still attach any JSON object for logs,
+and their `renderResult` (if any) sees it untyped.
+
+### Known limits
+
+Two extension points are documented but not implemented; the escape hatches that exist today are
+listed with each.
+
+- **No per-tab extension slot.** `TabSession` in `src/cdp/session.ts` carries only the harness's own
+  per-tab state (session id, dialog, page-info cache). A contributed tool cannot stash its own state
+  on a tab. Keep per-tab state in your extension keyed by `targetId` from `browser_current_tab` or
+  `browser_list_tabs`, or compute it on demand with `browser_run_script` through `daemon.session(targetId)`.
+- **Hardcoded browser list.** `src/profile/paths.ts` knows the user-data directories of a fixed set
+  of Chromium browsers, so `/browser-profile` cannot discover one that is not on that list. Point the
+  harness at any Chromium profile directory with `CHROME_USER_DATA_DIR`, or skip discovery entirely
+  by attaching to a running browser's DevTools endpoint with `BU_CDP_WS`.
+
 ---
 
 ## Commands, flags, and environment
@@ -393,6 +478,7 @@ path-restricted and timeout-bounded, but that is a blast-radius limit, not a san
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, conventions, and the PR process.
+`npm run check` runs the typecheck, the boundary scan, the type-aware ESLint pass and the test suite in that order; it is the one command a PR must pass.
 Release history lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## License

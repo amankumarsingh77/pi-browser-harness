@@ -134,8 +134,8 @@ describe("boundary check", () => {
   test("reports the 1-indexed line number and the trimmed text", () => {
     const v = checkSource([{ path: "a.ts", text: "const a = 1;\n  const b = c as any;" }], noExemptions);
     assert.equal(v[0]?.line, 2);
-    assert.equal(v[0]?.text, "const b = c as any;");
-    assert.equal(v[0]?.path, "a.ts");
+    assert.equal(v[0].text, "const b = c as any;");
+    assert.equal(v[0].path, "a.ts");
   });
 
   test("scans every file it is given", () => {
@@ -168,7 +168,7 @@ describe("boundary check exemptions", () => {
     const v = checkSource([{ path: "a.ts", text }], exemptions);
     assert.equal(v.length, 1);
     assert.equal(v[0]?.line, 2);
-    assert.equal(v[0]?.rule, "inline-object-cast");
+    assert.equal(v[0].rule, "inline-object-cast");
   });
 
   test("does not exempt a different rule in the same file", () => {
