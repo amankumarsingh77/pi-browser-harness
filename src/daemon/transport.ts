@@ -1,5 +1,5 @@
 import { createConnection, type Socket } from "node:net";
-import { createInterface } from "node:readline";
+import { readLines } from "./lines";
 import { destroyQuietly } from "./socket";
 import { type Result, err, ok } from "../util/result";
 import { type CdpError, cdpError, classifyRemoteError } from "../cdp/errors";
@@ -18,7 +18,7 @@ type ConnectResult = Result<void, CdpError>;
 
 export const createDaemonTransport = (clientId: string, socketPath: string = DAEMON_SOCKET_PATH): CdpTransport => {
   let socket: Socket | null = null;
-  let rl: ReturnType<typeof createInterface> | null = null;
+  let stopReading: (() => void) | null = null;
   let queue = makeEventQueue();
   const closeListeners = new Set<() => void>();
   const pending = new Map<number, Pending>();
@@ -41,7 +41,7 @@ export const createDaemonTransport = (clientId: string, socketPath: string = DAE
     queue = makeEventQueue();
     registered = false;
 
-    if (rl) { rl.close(); rl = null; }
+    if (stopReading) { stopReading(); stopReading = null; }
     socket = null;
     destroyQuietly(sock);
 
@@ -80,10 +80,7 @@ export const createDaemonTransport = (clientId: string, socketPath: string = DAE
       };
 
       sock.on("connect", () => {
-        const lines = createInterface({ input: sock, crlfDelay: Infinity });
-        rl = lines;
-
-        lines.on("line", (line: string) => {
+        stopReading = readLines(sock, (line) => {
           if (socket !== sock) return;
           const msg = deserialize(line);
           if (!msg) return;

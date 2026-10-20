@@ -1,5 +1,5 @@
 import { createServer, type Server, type Socket } from "node:net";
-import { createInterface, type Interface } from "node:readline";
+import { readLines } from "./lines";
 import { unlinkSync } from "node:fs";
 import { destroyQuietly } from "./socket";
 import {
@@ -14,7 +14,7 @@ import {
 export type ClientSocket = {
   id: string;
   readonly socket: Socket;
-  readonly rl: Interface;
+  readonly stopReading: () => void;
   registered: boolean;
 };
 
@@ -90,12 +90,12 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
         }
 
         const tempId = `anon-${nextTempId++}`;
-        const rl = createInterface({ input: socket, crlfDelay: Infinity });
-        const client: ClientSocket = { id: tempId, socket, rl, registered: false };
+        const stopReading = readLines(socket, (line) => { onLine(line); });
+        const client: ClientSocket = { id: tempId, socket, stopReading, registered: false };
 
         anonymous.set(tempId, client);
 
-        rl.on("line", (line: string) => {
+        function onLine(line: string): void {
           const msg = deserialize(line);
           if (!msg) return;
 
@@ -137,7 +137,7 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
           }
 
           for (const h of messageHandlers) h(msg, client);
-        });
+        }
 
         // A client socket error is always followed by "close", which does the cleanup.
         socket.on("error", () => undefined);
@@ -145,7 +145,7 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
         socket.on("close", () => {
           anonymous.delete(tempId);
           forget(client);
-          rl.close();
+          stopReading();
         });
       });
 
