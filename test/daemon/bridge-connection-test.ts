@@ -11,13 +11,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import type { WireRequest, WireResponse } from "../../src/daemon/protocol";
+import type { WireEvent, WireRequest, WireResponse } from "../../src/daemon/protocol";
 import type { CdpError } from "../../src/cdp/errors";
-import type { Result } from "../../src/util/result";
+import { type Result, err, ok } from "../../src/util/result";
 import { createCdpBridge } from "../../src/daemon/bridge";
-import type WebSocket from "ws";
+import type { ChromeSocket } from "../../src/daemon/connection";
+import { isRecord } from "../../src/util/guards";
 
-type ParsedSend = { id?: number; method?: string };
 type Discover = () => Promise<Result<string, CdpError>>;
 type SendResult = WireResponse;
 
@@ -94,30 +94,23 @@ class FakeWebSocket extends EventEmitter {
 }
 
 const makeDiscover = (urls: string[]): Discover => {
-  return async () => {
+  return () => {
     const next = urls.shift();
-    if (!next) {
-      return {
-        success: false,
-        error: {
-          kind: "discovery_failed",
-          message: "no more URLs",
-        },
-      };
-    }
-    return { success: true, data: next };
+    if (!next) return Promise.resolve(err({ kind: "discovery_failed", message: "no more URLs" }));
+    return Promise.resolve(ok(next));
   };
 };
 
 const requestIdByMethod = (socket: FakeWebSocket, method: string): number | null => {
   for (const payload of [...socket.sent].reverse()) {
+    let parsed: unknown;
     try {
-      const parsed = JSON.parse(payload) as ParsedSend;
-      if (parsed.method === method && typeof parsed.id === "number") {
-        return parsed.id;
-      }
+      parsed = JSON.parse(payload);
     } catch {
       continue;
+    }
+    if (isRecord(parsed) && parsed["method"] === method && typeof parsed["id"] === "number") {
+      return parsed["id"];
     }
   }
   return null;
@@ -141,10 +134,7 @@ const withSocket = (
 const testConstructorFailureSettlesAttempt = async (): Promise<void> => {
   let settled = false;
   const bridge = createCdpBridge({
-    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
-      success: true,
-      data: "ws://never-used.invalid:9",
-    }),
+    discoverWsUrl: () => Promise.resolve(ok("ws://never-used.invalid:9")),
     createWebSocket: () => {
       throw new Error("simulated constructor throw");
     },
@@ -165,17 +155,17 @@ const testUnresolvedDiscoveryIsBounded = async (): Promise<void> => {
   let discoverCalls = 0;
   const sockets: FakeWebSocket[] = [];
   const bridge = createCdpBridge({
-    discoverWsUrl: async () => {
+    discoverWsUrl: (): Promise<Result<string, CdpError>> => {
       discoverCalls += 1;
       if (discoverCalls === 1) {
         return new Promise(() => undefined);
       }
-      return { success: true, data: "ws://retry-attempt.invalid:9222" };
+      return Promise.resolve(ok("ws://retry-attempt.invalid:9222"));
     },
-    createWebSocket: (url: string): WebSocket => {
+    createWebSocket: (url: string): ChromeSocket => {
       const socket = new FakeWebSocket(url);
       sockets.push(socket);
-      return socket as unknown as WebSocket;
+      return socket;
     },
     connectTimeoutMs: 25,
     onAttemptSettled: () => {
@@ -210,15 +200,12 @@ const testHandleRequestStopsPollingAfterFailedAttempt = async (): Promise<void> 
   const responses: SendResult[] = [];
   const sockets: FakeWebSocket[] = [];
   const bridge = createCdpBridge({
-    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
-      success: true,
-      data: "ws://fast-fail.invalid:9222",
-    }),
-    createWebSocket: (url: string): WebSocket => {
+    discoverWsUrl: () => Promise.resolve(ok("ws://fast-fail.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => {
       const socket = new FakeWebSocket(url);
       sockets.push(socket);
-      setTimeout(() => socket.fail(new Error("forced connect failure")), 0);
-      return socket as unknown as WebSocket;
+      setTimeout(() => { socket.fail(new Error("forced connect failure")); }, 0);
+      return socket;
     },
     connectTimeoutMs: 30,
   });
@@ -252,14 +239,11 @@ const testStopRejectsPendingRequestCallbacks = async (): Promise<void> => {
   const responses: SendResult[] = [];
   const sockets: FakeWebSocket[] = [];
   const bridge = createCdpBridge({
-    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
-      success: true,
-      data: "ws://stop-callback.invalid:9222",
-    }),
-    createWebSocket: (url: string): WebSocket => {
+    discoverWsUrl: () => Promise.resolve(ok("ws://stop-callback.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => {
       const socket = new FakeWebSocket(url);
       sockets.push(socket);
-      return socket as unknown as WebSocket;
+      return socket;
     },
   });
 
@@ -307,14 +291,11 @@ const testDropRejectsInFlightRequests = async (): Promise<void> => {
 
   const bridge = createCdpBridge({
     connectTimeoutMs: 60,
-    discoverWsUrl: async (): Promise<Result<string, CdpError>> => ({
-      success: true,
-      data: "ws://drop-inflight.invalid:9222",
-    }),
-    createWebSocket: (url: string): WebSocket => {
+    discoverWsUrl: () => Promise.resolve(ok("ws://drop-inflight.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => {
       const socket = new FakeWebSocket(url);
       sockets.push(socket);
-      return socket as unknown as WebSocket;
+      return socket;
     },
   });
 
@@ -362,10 +343,10 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
     const bridge = createCdpBridge({
       discoverWsUrl: makeDiscover(urls),
-      createWebSocket: (url: string): WebSocket => {
+      createWebSocket: (url: string): ChromeSocket => {
         const socket = new FakeWebSocket(url);
         sockets.push(socket);
-        return socket as unknown as WebSocket;
+        return socket;
       },
       connectTimeoutMs: 15,
       onAttemptSettled: () => {
@@ -433,10 +414,10 @@ const testStaleFailureAttemptCannotResurrect = async (): Promise<void> => {
 
     const bridge = createCdpBridge({
       discoverWsUrl: makeDiscover(urls),
-      createWebSocket: (url: string): WebSocket => {
+      createWebSocket: (url: string): ChromeSocket => {
         const socket = new FakeWebSocket(url);
         sockets.push(socket);
-        return socket as unknown as WebSocket;
+        return socket;
       },
       connectTimeoutMs: 20,
     });
@@ -520,11 +501,11 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
 
   const bridge = createCdpBridge({
     discoverWsUrl: makeDiscover(urls),
-    createWebSocket: (url: string): WebSocket => {
+    createWebSocket: (url: string): ChromeSocket => {
       const delayCloseMs = sockets.length === 0 ? 12 : 0;
       const socket = new FakeWebSocket(url, { closeDelayMs: delayCloseMs });
       sockets.push(socket);
-      return socket as unknown as WebSocket;
+      return socket;
     },
     connectTimeoutMs: 50,
   });
@@ -605,6 +586,170 @@ const testOldGenerationCloseDoesNotAffectNewCallbacks = async (): Promise<void> 
   await bridge.stop();
 };
 
+// --- Test 8: a connect timeout must not be reported as Chrome disconnecting ---
+
+const testConnectTimeoutDoesNotNotifyClose = async (): Promise<void> => {
+  let closes = 0;
+  let settled = 0;
+  const bridge = createCdpBridge({
+    discoverWsUrl: () => Promise.resolve(ok("ws://never-opens.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => new FakeWebSocket(url),
+    connectTimeoutMs: 15,
+    onAttemptSettled: () => { settled += 1; },
+  });
+  bridge.onClose(() => { closes += 1; });
+
+  await bridge.start();
+  check(await waitFor(() => settled === 1, "attempt times out", 100), "a socket that never opens times out");
+  check(closes === 0, "a connect timeout is not broadcast as chrome_disconnected");
+  check(!bridge.isAlive(), "bridge is not alive after a connect timeout");
+
+  // A discovery failure is not a disconnect either.
+  const failing = createCdpBridge({
+    discoverWsUrl: () => Promise.resolve(err({ kind: "discovery_failed", message: "no chrome" })),
+    connectTimeoutMs: 15,
+    onAttemptSettled: () => { settled += 1; },
+  });
+  failing.onClose(() => { closes += 1; });
+  await failing.start();
+  check(await waitFor(() => settled === 2, "discovery failure settles", 100), "a discovery failure settles the attempt");
+  check(closes === 0, "a discovery failure is not broadcast as chrome_disconnected");
+
+  await bridge.stop();
+  await failing.stop();
+};
+
+// --- Test 9: only an established connection going away notifies close ---
+
+const testEstablishedDropNotifiesCloseOnce = async (): Promise<void> => {
+  let closes = 0;
+  const sockets: FakeWebSocket[] = [];
+  const bridge = createCdpBridge({
+    discoverWsUrl: () => Promise.resolve(ok("ws://drop-notify.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket;
+    },
+    connectTimeoutMs: 50,
+  });
+  bridge.onClose(() => { closes += 1; });
+
+  await bridge.start();
+  check(await waitFor(() => sockets.length === 1, "socket created", 50), "drop-notify socket created");
+  const socket = withSocket(sockets, 0, "drop-notify socket exists");
+  if (!socket) {
+    await bridge.stop();
+    return;
+  }
+  socket.open();
+  check(await waitFor(() => bridge.isAlive(), "bridge opens", 50), "bridge opens before the drop");
+
+  socket.fail(new Error("chrome went away"));
+  socket.close();
+  check(await waitFor(() => closes === 1, "close notified", 50), "an established drop is broadcast once");
+  await sleep(10);
+  check(closes === 1, "error followed by close notifies exactly once");
+
+  // Stopping the bridge is not a Chrome disconnect.
+  await bridge.stop();
+  await sleep(10);
+  check(closes === 1, "stop() does not broadcast chrome_disconnected");
+};
+
+// --- Test 10: Target.detachFromTarget releases the session named in params ---
+
+const testDetachReleasesSessionFromParams = async (): Promise<void> => {
+  const sockets: FakeWebSocket[] = [];
+  const bridge = createCdpBridge({
+    discoverWsUrl: () => Promise.resolve(ok("ws://detach.invalid:9222")),
+    createWebSocket: (url: string): ChromeSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket;
+    },
+    connectTimeoutMs: 50,
+  });
+
+  await bridge.start();
+  check(await waitFor(() => sockets.length === 1, "socket created", 50), "detach test socket created");
+  const socket = withSocket(sockets, 0, "detach test socket exists");
+  if (!socket) {
+    await bridge.stop();
+    return;
+  }
+  socket.open();
+
+  const noop = (): void => undefined;
+  await bridge.handleRequest(
+    { type: "request", id: 1, method: "Target.attachToTarget", params: { targetId: "T1", flatten: true } },
+    "client-a",
+    noop,
+  );
+  const attachId = requestIdByMethod(socket, "Target.attachToTarget");
+  check(attachId !== null, "attach request was sent");
+  if (attachId === null) {
+    await bridge.stop();
+    return;
+  }
+  socket.message(JSON.stringify({ id: attachId, result: { sessionId: "S1" } }));
+  check(bridge.getSessionOwner("S1") === "client-a", "attach response records the session owner");
+
+  // This is exactly how src/client.ts sends it: the session in params, no envelope sessionId.
+  await bridge.handleRequest(
+    { type: "request", id: 2, method: "Target.detachFromTarget", params: { sessionId: "S1" } },
+    "client-a",
+    noop,
+  );
+  check(bridge.getSessionOwner("S1") === undefined, "detach releases the session named in params");
+
+  const sent = requestIdByMethod(socket, "Target.detachFromTarget");
+  check(sent !== null, "detach request still goes to Chrome");
+
+  await bridge.stop();
+};
+
+// --- Test 11: concurrent requests while disconnected share one attempt ---
+
+const testConcurrentRequestsShareOneAttempt = async (): Promise<void> => {
+  const sockets: FakeWebSocket[] = [];
+  const responses: SendResult[] = [];
+  let discoverCalls = 0;
+  const bridge = createCdpBridge({
+    discoverWsUrl: (): Promise<Result<string, CdpError>> => {
+      discoverCalls += 1;
+      return Promise.resolve(ok("ws://shared-attempt.invalid:9222"));
+    },
+    createWebSocket: (url: string): ChromeSocket => {
+      const socket = new FakeWebSocket(url);
+      sockets.push(socket);
+      return socket;
+    },
+    connectTimeoutMs: 100,
+  });
+  const collect = (_clientId: string, msg: WireResponse | WireEvent): void => {
+    if (msg.type === "response") responses.push(msg);
+  };
+
+  const a = bridge.handleRequest({ type: "request", id: 1, method: "Runtime.enable", params: {} }, "client-a", collect);
+  const b = bridge.handleRequest({ type: "request", id: 2, method: "Runtime.enable", params: {} }, "client-b", collect);
+  check(await waitFor(() => sockets.length === 1, "one socket", 50), "two waiting requests open one socket");
+  const socket = withSocket(sockets, 0, "shared socket exists");
+  if (!socket) {
+    await bridge.stop();
+    return;
+  }
+  socket.open();
+  await Promise.all([a, b]);
+  check(discoverCalls === 1, "discovery ran once for both requests");
+  check(sockets.length === 1, "no second socket was opened");
+  check(responses.length === 0, "both requests went out rather than failing");
+  check(socket.sent.filter((p) => p.includes("Runtime.enable")).length === 2, "both requests reached Chrome");
+
+  await bridge.stop();
+  check(responses.length === 2 && responses.every((r) => r.error?.message === "Chrome disconnected"), "stop fails both in-flight requests");
+};
+
 describe("cdp bridge connection lifecycle", () => {
   test("a WebSocket constructor failure settles the attempt", testConstructorFailureSettlesAttempt);
   test("an unresolved discovery is bounded by the connect timeout", testUnresolvedDiscoveryIsBounded);
@@ -613,4 +758,8 @@ describe("cdp bridge connection lifecycle", () => {
   test("a dropped connection rejects its in-flight requests", testDropRejectsInFlightRequests);
   test("a stale failed attempt cannot resurrect the bridge", testStaleFailureAttemptCannotResurrect);
   test("an old-generation close leaves new-generation callbacks alone", testOldGenerationCloseDoesNotAffectNewCallbacks);
+  test("a connect timeout or discovery failure is not reported as a disconnect", testConnectTimeoutDoesNotNotifyClose);
+  test("an established connection dropping notifies close exactly once", testEstablishedDropNotifiesCloseOnce);
+  test("Target.detachFromTarget releases the session named in params", testDetachReleasesSessionFromParams);
+  test("concurrent requests while disconnected share one attempt", testConcurrentRequestsShareOneAttempt);
 });
