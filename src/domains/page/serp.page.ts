@@ -4,6 +4,7 @@ export type SerpAnchor = {
   readonly href: string;
   readonly heading: string;
   readonly snippet: string;
+  readonly cite?: string;
 };
 
 export type SerpExtraction = {
@@ -31,7 +32,9 @@ export function extractSerp(pageTextLimit: number): string {
     const containerText = container ? container.innerText : "";
     const heading = h3.innerText || h3.textContent;
     const snippet = containerText.replace(heading, "").replace(/\s+/g, " ").trim().slice(0, 500);
-    anchors.push({ href, heading, snippet });
+    const citeEl = container ? container.querySelector<HTMLElement>("cite") : null;
+    const cite = citeEl ? (citeEl.innerText || citeEl.textContent || "").trim() : "";
+    anchors.push({ href, heading, snippet, cite });
   }
   const pageText = document.body.innerText.slice(0, pageTextLimit);
   const extraction: SerpExtraction = { anchors, pageText };
