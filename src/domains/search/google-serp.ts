@@ -87,21 +87,25 @@ export type ResolvedTargets = ReadonlyMap<string, string>;
 // Direct external hrefs win. A /goto wrapper is opaque: the server-resolved redirect target is exact, and the cite is
 // a display breadcrumb that only approximates the path, so it is the fallback when no target was resolved.
 const resolveResultUrl = (anchor: SerpAnchor, resolved: ResolvedTargets): string | undefined => {
-  const unwrapped = unwrapRedirect(anchor.href);
-  if (isExternalResult(unwrapped)) return unwrapped;
-  if (!isGotoRedirect(anchor.href)) return undefined;
+  if (!isGotoRedirect(anchor.href)) {
+    const unwrapped = unwrapRedirect(anchor.href);
+    return isExternalResult(unwrapped) ? unwrapped : undefined;
+  }
   const target = resolved.get(anchor.href);
   if (target !== undefined && isExternalResult(target)) return target;
   if (anchor.cite !== undefined && anchor.cite.trim() !== "") return urlFromCite(anchor.cite);
   return undefined;
 };
 
+// Any Google property, on any TLD (google.com, google.co.uk, consent.google.de, googleusercontent.com), is never a
+// result: a sorry or consent page is where a rate-limited /goto redirect lands.
+const GOOGLE_PROPERTY = /(?:^|\.)google(?:usercontent)?\.(?:com?\.[a-z]{2}|[a-z]{2,3})$/;
+
 const isExternalResult = (url: string): boolean => {
   if (!/^https?:\/\//i.test(url)) return false;
   try {
     const host = new URL(url).hostname.toLowerCase();
-    if (host === "google.com" || host.endsWith(".google.com")) return false;
-    if (host === "googleusercontent.com" || host.endsWith(".googleusercontent.com")) return false;
+    if (GOOGLE_PROPERTY.test(host)) return false;
     return true;
   } catch {
     return false;

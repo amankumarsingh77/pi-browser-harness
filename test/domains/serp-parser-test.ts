@@ -147,6 +147,23 @@ describe("resolved /goto targets", () => {
     assert.equal(results[0]?.url, "https://a.example/p");
   });
 
+  test("R3: a ccTLD /goto href is never emitted verbatim; it resolves or falls back to the cite", () => {
+    const href = "https://www.google.co.uk/goto?url=CAESx";
+    const cite = "https://a.example › p";
+    const viaCite = parseGoogleSerp([{ href, heading: "h", snippet: "", cite }], 10, new Map());
+    assert.equal(viaCite[0]?.url, "https://a.example/p");
+    const viaTarget = parseGoogleSerp([{ href, heading: "h", snippet: "", cite }], 10, new Map([[href, "https://real.example/x"]]));
+    assert.equal(viaTarget[0]?.url, "https://real.example/x");
+  });
+
+  test("R3: a resolved target on a Google ccTLD (sorry/consent page) is ignored and the cite is used", () => {
+    const anchor = { href: "https://www.google.com/goto?url=CAESx", heading: "h", snippet: "", cite: "https://a.example" };
+    for (const target of ["https://www.google.de/sorry/index", "https://consent.google.co.uk/m", "https://google.com.au/search"]) {
+      const results = parseGoogleSerp([anchor], 10, new Map([[anchor.href, target]]));
+      assert.equal(results[0]?.url, "https://a.example", target);
+    }
+  });
+
   test("R3: a resolved target on google.com is ignored and the cite is used", () => {
     const anchor = { href: "https://www.google.com/goto?url=CAESx", heading: "h", snippet: "", cite: "https://a.example" };
     const resolved = new Map([[anchor.href, "https://www.google.com/sorry/index"]]);
