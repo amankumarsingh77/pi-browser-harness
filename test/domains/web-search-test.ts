@@ -2,7 +2,7 @@ import { test, describe, before } from "node:test";
 import assert from "node:assert/strict";
 import { type Canned, createFakeClient, evaluated, type FakeClient, handlerContext } from "./fake-client";
 import { installTheme, renderWith, renderedText, withClient } from "./client-overrides";
-import { parseSerpExtraction, webSearchTool } from "../../src/domains/search/web-search";
+import { createWebSearchTool, parseSerpExtraction, webSearchTool } from "../../src/domains/search/web-search";
 import type { SerpExtraction } from "../../src/domains/search/google-serp";
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
@@ -104,7 +104,7 @@ describe("browser_web_search", () => {
     assert.deepEqual(closed, ["t2"]);
   });
 
-  test("a page with only Google-internal anchors is invalid_state with reason no_results", async () => {
+  test("a page with only Google-internal anchors is invalid_state with reason extraction_mismatch and the anchor count", async () => {
     const empty: SerpExtraction = {
       anchors: [{ href: "https://accounts.google.com/", heading: "Sign in", snippet: "" }],
       pageText: "Your search did not match any documents",
@@ -113,8 +113,78 @@ describe("browser_web_search", () => {
     const r = await webSearchTool.handler({ query: "zzz" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
+    assert.equal(r.error.message, "found 1 result anchor(s) but none parsed to an external url (Google markup may have changed)");
+    assert.deepEqual(r.error.details, {
+      reason: "extraction_mismatch",
+      anchorCount: 1,
+      serpUrl: "https://www.google.com/search?q=zzz&num=10&hl=en",
+    });
+  });
+
+  test("a page with no anchors at all is invalid_state with reason no_results", async () => {
+    const empty: SerpExtraction = { anchors: [], pageText: "Your search did not match any documents" };
+    const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(empty)) });
+    const r = await webSearchTool.handler({ query: "zzz" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
     assert.equal(r.error.message, "no results found");
-    assert.equal(r.error.details?.["reason"], "no_results");
+    assert.deepEqual(r.error.details, { reason: "no_results", serpUrl: "https://www.google.com/search?q=zzz&num=10&hl=en" });
+  });
+
+  test("/goto anchors are resolved through the redirect resolver, and the cite is the fallback", async () => {
+    const goto: SerpExtraction = {
+      anchors: [
+        { href: "https://www.google.com/goto?url=CAESWgHr", heading: "TS", snippet: "s1", cite: "https://www.typescriptlang.org" },
+        { href: "https://www.google.com/goto?url=CAESdAHr", heading: "W3", snippet: "s2", cite: "https://www.w3schools.com › typescript_intro" },
+        { href: "https://www.google.com/goto?url=CAESYwHr", heading: "Wiki", snippet: "s3", cite: "https://en.wikipedia.org › wiki › TypeScript" },
+      ],
+      pageText: "results",
+    };
+    const asked: string[] = [];
+    const tool = createWebSearchTool({
+      resolveRedirect: (href) => {
+        asked.push(href);
+        if (href.includes("CAESdAHr")) return Promise.resolve("https://www.w3schools.com/typescript/typescript_intro.php");
+        if (href.includes("CAESWgHr")) return Promise.resolve("https://www.typescriptlang.org/");
+        return Promise.resolve(undefined);
+      },
+    });
+    const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(goto)) });
+    const r = await tool.handler({ query: "typescript", limit: 3 }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.deepEqual(asked.sort(), goto.anchors.map((a) => a.href).sort());
+    assert.deepEqual(r.data.details?.results, [
+      { title: "TS", url: "https://www.typescriptlang.org/", snippet: "s1", rank: 1 },
+      { title: "W3", url: "https://www.w3schools.com/typescript/typescript_intro.php", snippet: "s2", rank: 2 },
+      { title: "Wiki", url: "https://en.wikipedia.org/wiki/TypeScript", snippet: "s3", rank: 3 },
+    ]);
+  });
+
+  test("only /goto anchors are sent to the resolver; direct and /url?q= hrefs never are", async () => {
+    const asked: string[] = [];
+    const tool = createWebSearchTool({ resolveRedirect: (href) => { asked.push(href); return Promise.resolve(undefined); } });
+    const fake = await searching();
+    const r = await tool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.deepEqual(asked, []);
+  });
+
+  test("a resolver that throws or hangs past the budget still yields cite-based results", async () => {
+    const goto: SerpExtraction = {
+      anchors: [
+        { href: "https://www.google.com/goto?url=A", heading: "A", snippet: "", cite: "https://a.example › x" },
+        { href: "https://www.google.com/goto?url=B", heading: "B", snippet: "", cite: "https://b.example" },
+      ],
+      pageText: "results",
+    };
+    const tool = createWebSearchTool({
+      resolveRedirect: (href) => (href.endsWith("A") ? Promise.reject(new Error("boom")) : new Promise(() => undefined)),
+      resolveBudgetMs: 50,
+    });
+    const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(goto)) });
+    const r = await tool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.deepEqual(r.data.details?.results.map((x) => x.url), ["https://a.example/x", "https://b.example"]);
   });
 
   test("an extraction of the wrong shape is an internal error that names the mismatch", async () => {

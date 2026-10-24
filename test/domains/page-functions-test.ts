@@ -205,6 +205,7 @@ type Node = {
   children: Node[];
   getAttribute: (name: string) => string | null;
   querySelectorAll: (selector: string) => Node[];
+  querySelector: (selector: string) => Node | null;
   closest: (selector: string) => Node | null;
 };
 
@@ -218,6 +219,7 @@ const node = (tagName: string, innerText: string, opts: { attrs?: Record<string,
     children: opts.children ?? [],
     getAttribute: (name) => n.attrs[name] ?? null,
     querySelectorAll: (selector) => descendants(n).filter((d) => matches(d, selector)),
+    querySelector: (selector) => descendants(n).find((d) => matches(d, selector)) ?? null,
     closest: (selector) => {
       for (let cur: Node | null = n; cur; cur = cur.parentElement) if (matches(cur, selector)) return cur;
       return null;
@@ -286,18 +288,28 @@ describe("capturePage", () => {
 
 describe("extractSerp", () => {
   test("collects one anchor per unique result link with its container snippet", () => {
-    const result = (href: string, heading: string, snippet: string): Node =>
-      node("DIV", `${heading}\n${snippet}`, { attrs: { class: "g" }, children: [node("A", heading, { href, children: [node("H3", heading)] })] });
+    const result = (href: string, heading: string, snippet: string, cite?: string): Node =>
+      node("DIV", `${heading}\n${snippet}`, {
+        attrs: { class: "g" },
+        children: [
+          node("A", heading, { href, children: [node("H3", heading)] }),
+          ...(cite === undefined ? [] : [node("CITE", ` ${cite} `)]),
+        ],
+      });
     const search = node("DIV", "", {
       attrs: { id: "search" },
-      children: [result("https://a/", "A title", "A snippet"), result("https://a/", "A again", "dup"), result("https://b/", "B title", "B  snippet")],
+      children: [
+        result("https://google/goto?url=CAES", "A title", "A snippet", "https://a › x"),
+        result("https://google/goto?url=CAES", "A again", "dup"),
+        result("https://b/", "B title", "B  snippet"),
+      ],
     });
     installDocument(node("BODY", "A title A snippet B title", { children: [search] }), "q - Google", "https://google/");
     const parsed: unknown = JSON.parse(String(callPage(extractSerp, 7)));
     assert.deepEqual(parsed, {
       anchors: [
-        { href: "https://a/", heading: "A title", snippet: "A snippet" },
-        { href: "https://b/", heading: "B title", snippet: "B snippet" },
+        { href: "https://google/goto?url=CAES", heading: "A title", snippet: "A snippet", cite: "https://a › x" },
+        { href: "https://b/", heading: "B title", snippet: "B snippet", cite: "" },
       ],
       pageText: "A title",
     });

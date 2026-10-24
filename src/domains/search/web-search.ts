@@ -16,9 +16,47 @@ import { pageCallExpression } from "../page/inject";
 import { extractSerp } from "../page/serp.page";
 import type * as extracted from "../page/serp.page";
 import { ExpandableTextSchema, renderExpandableText } from "../render";
-import { classifySerp, parseGoogleSerp, type SearchResult, type SerpExtraction } from "./google-serp";
+import { deadlineSignal, runLimited } from "../concurrency";
+import {
+  classifySerp,
+  isGotoRedirect,
+  parseGoogleSerp,
+  type ResolvedTargets,
+  type SearchResult,
+  type SerpExtraction,
+} from "./google-serp";
+import { fetchRedirectTarget, type RedirectResolver } from "./redirect-resolver";
 
 const LOAD_TIMEOUT_MS = 15_000;
+const RESOLVE_BUDGET_MS = 5_000;
+const RESOLVE_CONCURRENCY = 5;
+
+export type WebSearchDeps = {
+  readonly resolveRedirect: RedirectResolver;
+  readonly resolveBudgetMs?: number;
+};
+
+// Resolves every /goto anchor in parallel under one time budget; a slot that fails or runs out of time is simply
+// absent from the map, and the parser falls back to that anchor's cite.
+const resolveGotoTargets = async (
+  anchors: ReadonlyArray<SerpExtraction["anchors"][number]>,
+  deps: WebSearchDeps,
+  signal: AbortSignal | undefined,
+): Promise<ResolvedTargets> => {
+  const hrefs = anchors.map((a) => a.href).filter(isGotoRedirect);
+  if (hrefs.length === 0) return new Map();
+  const deadline = deadlineSignal(deps.resolveBudgetMs ?? RESOLVE_BUDGET_MS, signal);
+  const targets = await runLimited(hrefs, { limit: RESOLVE_CONCURRENCY, signal: deadline.signal }, (href, s) =>
+    deps.resolveRedirect(href, s),
+  );
+  deadline.clear();
+  const resolved = new Map<string, string>();
+  hrefs.forEach((href, i) => {
+    const target = targets[i];
+    if (target !== undefined) resolved.set(href, target);
+  });
+  return resolved;
+};
 
 const WebSearchArgs = Type.Object({
   query: Type.String({ description: "The search query." }),
@@ -42,7 +80,12 @@ const buildSerpUrl = (query: string, limit: number): string =>
 
 const SerpExtractionSchema = Type.Object({
   anchors: Type.Array(
-    Type.Object({ href: Type.String(), heading: Type.String(), snippet: Type.String() }),
+    Type.Object({
+      href: Type.String(),
+      heading: Type.String(),
+      snippet: Type.String(),
+      cite: Type.Optional(Type.String()),
+    }),
   ),
   pageText: Type.String(),
 });
@@ -74,7 +117,7 @@ const formatResults = (query: string, results: ReadonlyArray<SearchResult>): str
   return `${results.length} result(s) for "${query}":\n\n${lines.join("\n\n")}`;
 };
 
-export const webSearchTool = defineBrowserTool({
+export const createWebSearchTool = (deps: WebSearchDeps) => defineBrowserTool({
   name: "browser_web_search",
   label: "Browser Web Search",
   description:
@@ -83,6 +126,7 @@ export const webSearchTool = defineBrowserTool({
   promptGuidelines: [
     "On a CAPTCHA / bot wall the call fails with kind:'invalid_state' and details.reason:'captcha' (plus serpUrl) — surface it to the user; do not retry in a tight loop.",
     "On zero results it fails with details.reason:'no_results' — rephrase the query and try again.",
+    "If results were on the page but none could be parsed it fails with details.reason:'extraction_mismatch' (plus anchorCount) — Google's markup changed; report it rather than retrying.",
     "Runs in its own isolated tab and never disturbs the user's current tab.",
   ],
   parameters: WebSearchArgs,
@@ -112,14 +156,26 @@ export const webSearchTool = defineBrowserTool({
       }
       const extraction: SerpExtraction = parsedJson.data;
 
-      const results = parseGoogleSerp(extraction.anchors, limit);
-      const verdict = classifySerp(extraction.pageText, results.length);
-      if (verdict !== "ok") {
+      const resolved = await resolveGotoTargets(extraction.anchors, deps, signal);
+      const results = parseGoogleSerp(extraction.anchors, limit, resolved);
+      const anchorCount = extraction.anchors.length;
+      const verdict = classifySerp(extraction.pageText, results.length, anchorCount);
+      if (verdict === "captcha") {
         return err({
           kind: "invalid_state",
-          message: verdict === "captcha" ? "Google served a CAPTCHA / bot wall" : "no results found",
+          message: "Google served a CAPTCHA / bot wall",
           details: { reason: verdict, serpUrl },
         });
+      }
+      if (verdict === "extraction_mismatch") {
+        return err({
+          kind: "invalid_state",
+          message: `found ${anchorCount} result anchor(s) but none parsed to an external url (Google markup may have changed)`,
+          details: { reason: verdict, anchorCount, serpUrl },
+        });
+      }
+      if (verdict === "no_results") {
+        return err({ kind: "invalid_state", message: "no results found", details: { reason: verdict, serpUrl } });
       }
 
       const body = formatResults(args.query, results);
@@ -146,3 +202,5 @@ export const webSearchTool = defineBrowserTool({
     return renderExpandableText(result.details.render, expanded);
   },
 });
+
+export const webSearchTool = createWebSearchTool({ resolveRedirect: fetchRedirectTarget });
