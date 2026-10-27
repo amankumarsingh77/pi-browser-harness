@@ -60,7 +60,7 @@
   },
   "scripts": {
     "typecheck": "tsc -b tsconfig.page.json && tsc --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --conditions=import --import tsx --test \"test/{profile,domains,cdp,daemon,util,types}/**/*-test.ts\"",
+    "test": "node --conditions=import --import tsx --test \"test/{profile,domains,cdp,daemon,util,types,recipes}/**/*-test.ts\"",
     "boundaries": "tsx scripts/check-boundaries.ts",
     "gen:skill": "node --conditions=import --import tsx scripts/gen-skill.ts",
     "check": "npm run typecheck && npm run boundaries && npm run lint && npm test",

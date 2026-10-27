@@ -21,6 +21,8 @@ export type FakePi = {
   readonly flags: ReadonlyArray<RecordedFlag>;
   readonly commands: ReadonlyArray<RecordedCommand>;
   readonly tools: ReadonlyArray<string>;
+  // The registered definition, so a test can run a tool's execute the way pi does.
+  readonly tool: (name: string) => ToolDefinition;
   readonly events: ReadonlyArray<string>;
   readonly entries: ReadonlyArray<{ readonly customType: string; readonly data: unknown }>;
   readonly flagReads: ReadonlyArray<string>;
@@ -33,6 +35,7 @@ export const fakePi = (): FakePi => {
   const flags: RecordedFlag[] = [];
   const commands: RecordedCommand[] = [];
   const tools: string[] = [];
+  const toolDefs = new Map<string, ToolDefinition>();
   const events: string[] = [];
   const entries: Array<{ readonly customType: string; readonly data: unknown }> = [];
   const flagReads: string[] = [];
@@ -48,6 +51,7 @@ export const fakePi = (): FakePi => {
     },
     registerTool: (td: ToolDefinition) => {
       tools.push(td.name);
+      toolDefs.set(td.name, td);
     },
     getFlag: (name: string): unknown => {
       flagReads.push(name);
@@ -71,6 +75,11 @@ export const fakePi = (): FakePi => {
     flags,
     commands,
     tools,
+    tool: (name) => {
+      const found = toolDefs.get(name);
+      if (!found) throw new Error(`tool ${name} was not registered`);
+      return found;
+    },
     events,
     entries,
     flagReads,
@@ -96,6 +105,7 @@ export type FakeCtxOptions = {
   // Answers `ui.select` in order; undefined (or running out) means the user escaped.
   readonly selections?: ReadonlyArray<string | undefined>;
   readonly branch?: ReadonlyArray<unknown>;
+  readonly sessionId?: string;
 };
 
 export type FakeCtx = {
@@ -119,9 +129,9 @@ export const fakeCtx = (opts: FakeCtxOptions = {}): FakeCtx => {
         return Promise.resolve(answers.shift());
       },
     },
-    sessionManager: { getBranch: () => [...(opts.branch ?? [])] },
+    sessionManager: { getBranch: () => [...(opts.branch ?? [])], getSessionId: () => opts.sessionId ?? "fake-session" },
   };
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, ui.notify, ui.select and sessionManager.getBranch are read
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, ui.notify, ui.select and sessionManager.getBranch/getSessionId are read
   const ctx = shape as unknown as ExtensionContext;
   return { ctx, notices, prompts };
 };

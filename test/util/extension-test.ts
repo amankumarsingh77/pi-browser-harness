@@ -78,9 +78,9 @@ describe("browser harness extension", () => {
     assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon", "browser-setup", "browser-profile"]);
   });
 
-  test("subscribes to the session lifecycle and the agent prompt", () => {
+  test("subscribes to the session lifecycle, agent start and the agent prompt", () => {
     const pi = load();
-    assert.deepEqual([...pi.events].sort(), ["before_agent_start", "session_shutdown", "session_start", "session_tree"]);
+    assert.deepEqual([...pi.events].sort(), ["agent_start", "before_agent_start", "session_shutdown", "session_start", "session_tree"]);
   });
 
   test("does not read flags at load, only once a session starts", async () => {

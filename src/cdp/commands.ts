@@ -325,6 +325,10 @@ export const COMMANDS = {
     Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
     Type.Object({ object: RemoteObject }),
   ),
+  "DOM.describeNode": cmd(
+    Type.Object({ objectId: Type.String() }),
+    Type.Object({ node: Type.Object({ backendNodeId: Type.Number() }, { additionalProperties: true }) }),
+  ),
   "DOM.setFileInputFiles": cmd(
     Type.Object({
       files: Type.Array(Type.String()),
