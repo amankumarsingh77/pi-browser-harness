@@ -24,6 +24,7 @@ import { executeJsTool, runScriptTool } from "./domains/js";
 import { setupTool } from "./domains/setup";
 import { webSearchTool } from "./domains/search/web-search";
 import { readPageTool } from "./domains/readpage/read-page";
+import { saveRecipeTool } from "./recipes/save-tool";
 
 export const ALL_TOOLS: ReadonlyArray<BrowserTool> = [
   setupTool,
@@ -68,6 +69,7 @@ export const ALL_TOOLS: ReadonlyArray<BrowserTool> = [
   runScriptTool,
   webSearchTool,
   readPageTool,
+  saveRecipeTool,
 ];
 
 export type RegistryError = {

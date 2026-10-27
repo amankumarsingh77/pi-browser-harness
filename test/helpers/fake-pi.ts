@@ -106,18 +106,24 @@ export type FakeCtxOptions = {
   readonly selections?: ReadonlyArray<string | undefined>;
   readonly branch?: ReadonlyArray<unknown>;
   readonly sessionId?: string;
+  // Answers `ui.confirm` in order; running out means the user declined.
+  readonly confirms?: ReadonlyArray<boolean>;
+  readonly cwd?: string;
 };
 
 export type FakeCtx = {
   readonly ctx: ExtensionContext;
   readonly notices: ReadonlyArray<RecordedNotice>;
   readonly prompts: ReadonlyArray<{ readonly title: string; readonly options: ReadonlyArray<string> }>;
+  readonly confirmations: ReadonlyArray<{ readonly title: string; readonly message: string }>;
 };
 
 export const fakeCtx = (opts: FakeCtxOptions = {}): FakeCtx => {
   const notices: RecordedNotice[] = [];
   const prompts: Array<{ readonly title: string; readonly options: ReadonlyArray<string> }> = [];
+  const confirmations: Array<{ readonly title: string; readonly message: string }> = [];
   const answers = [...(opts.selections ?? [])];
+  const confirmAnswers = [...(opts.confirms ?? [])];
   const shape = {
     hasUI: opts.hasUI ?? true,
     ui: {
@@ -128,10 +134,15 @@ export const fakeCtx = (opts: FakeCtxOptions = {}): FakeCtx => {
         prompts.push({ title, options: [...options] });
         return Promise.resolve(answers.shift());
       },
+      confirm: (title: string, message: string): Promise<boolean> => {
+        confirmations.push({ title, message });
+        return Promise.resolve(confirmAnswers.shift() ?? false);
+      },
     },
+    cwd: opts.cwd ?? process.cwd(),
     sessionManager: { getBranch: () => [...(opts.branch ?? [])], getSessionId: () => opts.sessionId ?? "fake-session" },
   };
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, ui.notify, ui.select and sessionManager.getBranch/getSessionId are read
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, cwd, ui.notify/select/confirm and sessionManager.getBranch/getSessionId are read
   const ctx = shape as unknown as ExtensionContext;
-  return { ctx, notices, prompts };
+  return { ctx, notices, prompts, confirmations };
 };

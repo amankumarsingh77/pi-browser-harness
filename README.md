@@ -182,6 +182,7 @@ tabs or navigating the tab to another origin.
 | Tool | Purpose |
 |---|---|
 | `browser_run_script` | Run a temporary script with raw CDP and full Node access. See [Extending](#extending). |
+| `browser_save_recipe` | Save the browser task the agent just finished as a replayable recipe. See [Saved recipes](#saved-recipes). |
 | `browser_setup` | Agent-callable setup. Idempotent — how the agent recovers from `not initialized` on its own. |
 
 `browser_snapshot`, `browser_network_requests`, `browser_console`, `browser_execute_js`,
@@ -254,6 +255,21 @@ Modifiers are a bitfield: `1` Alt · `2` Ctrl · `4` Meta/Cmd · `8` Shift.
 browser_press_key({ key: "c", modifiers: 2 })    // Ctrl+C
 browser_press_key({ key: "T", modifiers: 10 })   // Ctrl+Shift+T
 ```
+
+---
+
+## Saved recipes
+
+Every page-changing browser call is journaled to `~/.pi/agent/browser-harness/journal/<session>.jsonl`
+(user-only permissions, pruned after 30 days). Password values are never written.
+
+After a multi-step task the agent offers to save it. `browser_save_recipe` turns that task into a YAML
+file under `~/.pi/agent/browser-recipes/<site>/<name>.yaml` (or `.pi/browser-recipes/` in the project
+with `project: true`), replacing the values you name as params with `{{param}}`. You confirm the recipe
+before it is written. Saving over a name bumps `version` and keeps the old file under `.history/`.
+
+A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
+be saved.
 
 ---
 
