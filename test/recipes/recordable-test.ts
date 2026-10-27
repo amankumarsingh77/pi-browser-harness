@@ -14,7 +14,7 @@ import { observeCall } from "../../src/recipes/recordable";
 import { type ToolConcurrency, defineBrowserTool, setCallObserver } from "../../src/util/tool";
 import { isRecord } from "../../src/util/guards";
 import { ok } from "../../src/util/result";
-import { type Canned, type FakeClientOptions, axNode, createFakeClient, evaluated, handlerContext } from "../domains/fake-client";
+import { type Canned, type FakeClientOptions, axNode, createFakeClient, evaluated, flush, handlerContext } from "../domains/fake-client";
 import { pageInfoOf, withClient } from "../domains/client-overrides";
 
 const BEFORE_URL = "https://example.test/start";
@@ -176,6 +176,38 @@ describe("recipe journal recording", () => {
     const change = (await only()).change;
     assert.equal(change?.url, "https://example.test/done");
     assert.deepEqual(change.appeared, [{ role: "link", name: "Export complete" }]);
+  });
+
+  test("SC6b: a status toast that appears after the call is journaled in appeared", async () => {
+    let reads = 0;
+    const client = await clientFor({
+      refs: [{ ref: "e1", backendId: 11, sig: sig("button", "Export") }],
+      canned: { "Accessibility.getFullAXTree": tree({ role: "button", name: "Export", backendId: 11 }) },
+      evaluate: (expression) => {
+        if (!expression.includes("liveMessages")) return ok(false);
+        reads += 1;
+        return ok(reads === 1 ? [] : [{ role: "status", name: "Export complete" }]);
+      },
+    });
+
+    await observe({ client, name: "browser_click", args: { ref: "e1" } });
+
+    assert.deepEqual((await only()).change?.appeared, [{ role: "status", name: "Export complete" }]);
+  });
+
+  test("SC34: an export click followed by Page.downloadWillBegin on the tab's session is journaled with change.download true", async () => {
+    const fake = await createFakeClient({
+      refs: [{ ref: "e1", backendId: 11, sig: sig("button", "Export CSV") }],
+      canned: { "Accessibility.getFullAXTree": tree({ role: "button", name: "Export CSV", backendId: 11 }) },
+    });
+    const client = withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) });
+
+    const finish = await observeCall({ name: "browser_click", concurrency: "serialized", args: { ref: "e1" }, client });
+    fake.emit({ method: "Page.downloadWillBegin", sessionId: "s1", params: { guid: "g1", url: "https://example.test/x.csv", suggestedFilename: "x.csv" } });
+    await flush();
+    await finish?.({ ok: true });
+
+    assert.equal((await only()).change?.download, true);
   });
 
   test("SC7: browser_execute_js is journaled as replayable false and a following browser_snapshot is not journaled", async () => {

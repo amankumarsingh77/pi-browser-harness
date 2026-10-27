@@ -78,6 +78,7 @@ Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
 | `browser_print_to_pdf` | serialized | Print the current page to PDF |
 | `browser_read_page` | parallel | Read a page's main content as clean text |
 | `browser_reload` | serialized | Reload the page |
+| `browser_run_recipe` | parallel | Replay a saved browser recipe, or list recipes |
 | `browser_run_script` | parallel | Run a temporary script with daemon + Node access (security-bounded) |
 | `browser_save_recipe` | parallel | Save the last browser task as a replayable recipe |
 | `browser_screenshot` | parallel | Capture a screenshot — visual verification only |

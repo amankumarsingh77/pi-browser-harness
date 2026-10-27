@@ -36,6 +36,7 @@ describe("cdp events", () => {
       "Network.loadingFinished",
       "Network.requestWillBeSent",
       "Network.responseReceived",
+      "Page.downloadWillBegin",
       "Page.frameNavigated",
       "Page.javascriptDialogClosed",
       "Page.javascriptDialogOpening",

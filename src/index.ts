@@ -16,6 +16,7 @@ import { type BrowserTool, setCallObserver } from "./util/tool";
 import type { Result } from "./util/result";
 import { activeJournal, createJournal, journalDir, setActiveJournal } from "./recipes/journal";
 import { observeCall } from "./recipes/recordable";
+import { registerRecipeCommand } from "./recipes/command";
 
 export { defineBrowserTool } from "./util/tool";
 export type {
@@ -186,6 +187,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
     harnessRegistry.register(pi, client);
     registerSetupCommand(pi, client);
     registerProfileCommand(pi, client);
+    registerRecipeCommand(pi, client);
   });
 
   pi.on("agent_start", async () => {

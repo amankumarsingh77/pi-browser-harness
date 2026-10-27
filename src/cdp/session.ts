@@ -26,6 +26,7 @@ type TabSession = {
   pageInfoDirty: boolean;
   readonly networkBuffer: NetworkBuffer;
   readonly consoleBuffer: ConsoleBuffer;
+  downloads: number;
   refMap: ReadonlyMap<string, number>;
   refSig: ReadonlyMap<string, RefSignature>;
 };
@@ -53,6 +54,8 @@ export type CdpSession = {
   resolveRef(ref: string): number | undefined;
   refSignatures(): ReadonlyMap<string, RefSignature>;
   refMappings(): ReadonlyMap<string, number>;
+  // Downloads Chrome has started from the current tab; compare before and after an action to see whether it began one.
+  downloadCount(): number;
   // Sends on the current page session. Params are required only when the method has a required key (see CallArgs).
   call<M extends CdpMethod>(method: M, ...args: CallArgs<M>): Promise<Result<ResultOf<M>, CdpError>>;
   // Sends on an explicit session id (a borrowed or background tab). Params always come first because the session id follows them.
@@ -97,6 +100,7 @@ export const createCdpSession = (
     pageInfoDirty,
     networkBuffer: createNetworkBuffer(),
     consoleBuffer: createConsoleBuffer(),
+    downloads: 0,
     refMap: new Map(),
     refSig: new Map(),
   });
@@ -170,6 +174,11 @@ export const createCdpSession = (
       case "Page.loadEventFired": {
         const tab = resolveTab(ev.sessionId);
         if (tab) tab.pageInfoDirty = true;
+        break;
+      }
+      case "Page.downloadWillBegin": {
+        const tab = resolveTab(ev.sessionId);
+        if (tab) tab.downloads += 1;
         break;
       }
       case "Target.targetCreated": {
@@ -438,6 +447,9 @@ export const createCdpSession = (
     refMappings() {
       const tab = currentTab();
       return tab?.refMap ?? new Map();
+    },
+    downloadCount() {
+      return currentTab()?.downloads ?? 0;
     },
     call(method, ...args) {
       const [params, opts] = args;

@@ -183,6 +183,7 @@ tabs or navigating the tab to another origin.
 |---|---|
 | `browser_run_script` | Run a temporary script with raw CDP and full Node access. See [Extending](#extending). |
 | `browser_save_recipe` | Save the browser task the agent just finished as a replayable recipe. See [Saved recipes](#saved-recipes). |
+| `browser_run_recipe` | Replay a saved recipe with no model calls, or list recipes when called with no name. |
 | `browser_setup` | Agent-callable setup. Idempotent — how the agent recovers from `not initialized` on its own. |
 
 `browser_snapshot`, `browser_network_requests`, `browser_console`, `browser_execute_js`,
@@ -267,6 +268,12 @@ After a multi-step task the agent offers to save it. `browser_save_recipe` turns
 file under `~/.pi/agent/browser-recipes/<site>/<name>.yaml` (or `.pi/browser-recipes/` in the project
 with `project: true`), replacing the values you name as params with `{{param}}`. You confirm the recipe
 before it is written. Saving over a name bumps `version` and keeps the old file under `.history/`.
+
+Run one yourself with `/browser-recipe vendor-invoices-export month=2026-10` (no model involved), or ask
+the agent ("run the invoices recipe for October"), which calls `browser_run_recipe`. `/browser-recipe`
+with no name lists recipes; names tab-complete. Each step finds its element by role and name, waits up to
+5s for it, and checks that the page changed the way the recorded run did. A status or alert message the
+recorded run saw counts when its first words match, so "Exported 43 rows" satisfies "Exported 42 rows".
 
 A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
 be saved.
@@ -414,6 +421,7 @@ listed with each.
 | `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
 | `/browser-status` | Connection state, selected profile, and current page. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
+| `/browser-recipe` | Replay a saved recipe: `/browser-recipe NAME key=value`. No name lists recipes. |
 
 | Flag / variable | Effect |
 |---|---|

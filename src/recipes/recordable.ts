@@ -3,7 +3,7 @@ import type { RefSignature } from "../cdp/types";
 import { cdpCall, evalJs } from "../domains/cdp-call";
 import { runOnElement } from "../domains/element-call";
 import { elementFunctionSource, pageFunctionSource } from "../domains/page/inject";
-import { focusedIsPassword, interactiveAt, isPasswordInput } from "../domains/page/recipe.page";
+import { focusedIsPassword, interactiveAt, isPasswordInput, liveMessages } from "../domains/page/recipe.page";
 import { refreshRefs } from "../domains/ref-resolve";
 import { safeJs } from "../util/js-template";
 import type { CallObserver, JsonObject } from "../util/tool";
@@ -56,6 +56,19 @@ const MAX_APPEARED = 5;
 const FOCUSED_IS_PASSWORD_EXPR = "(" + pageFunctionSource(focusedIsPassword) + ")()";
 const INTERACTIVE_AT_SRC = "(" + pageFunctionSource(interactiveAt) + ")";
 const IS_PASSWORD_FN = elementFunctionSource(isPasswordInput);
+const LIVE_MESSAGES_EXPR = "(" + pageFunctionSource(liveMessages) + ")()";
+
+export type LiveMessage = { readonly role: string; readonly name: string };
+
+// Roles liveMessages reports. They have no ref, so replay matches them against the page's messages instead.
+export const MESSAGE_ROLES: ReadonlySet<string> = new Set(["status", "alert", "alertdialog"]);
+
+// The page's visible status and alert messages, or undefined when the page could not be read.
+export const readLiveMessages = async (client: BrowserClient): Promise<ReadonlyArray<LiveMessage> | undefined> => {
+  const r = await evalJs(client, LIVE_MESSAGES_EXPR);
+  if (!r.success || !Array.isArray(r.data)) return undefined;
+  return r.data.flatMap((m) => (isRecord(m) && typeof m["role"] === "string" && typeof m["name"] === "string" ? [{ role: m["role"], name: m["name"] }] : []));
+};
 
 const sameKey = (a: RefSignature, b: RefSignature): boolean => a.role === b.role && a.name === b.name;
 
@@ -100,22 +113,44 @@ const urlOf = async (client: BrowserClient): Promise<string> => {
   return info.success && info.data.kind === "page" ? info.data.url : "";
 };
 
-// What the page did after the call: where it is now, which named elements appeared, and whether a dialog opened.
-export const observeChange = async (client: BrowserClient, before: ReadonlyMap<string, RefSignature>): Promise<ObservedChange> => {
+export type BeforeCall = {
+  readonly refs: ReadonlyMap<string, RefSignature>;
+  readonly downloads: number;
+  // Undefined when the messages could not be read before the call; then none are recorded.
+  readonly messages: ReadonlyArray<LiveMessage> | undefined;
+};
+
+const keyOf = (m: LiveMessage): string => `${m.role}\u0000${m.name}`;
+
+const newMessages = async (client: BrowserClient, before: ReadonlyArray<LiveMessage> | undefined): Promise<ReadonlyArray<LiveMessage>> => {
+  if (before === undefined) return [];
+  const after = await readLiveMessages(client);
+  if (after === undefined) return [];
+  // Seeded with what was there before; each new message is added as it is taken, so nested live regions count once.
+  const seen = new Set(before.map(keyOf));
+  return after.filter((m) => !seen.has(keyOf(m)) && Boolean(seen.add(keyOf(m))));
+};
+
+// What the page did after the call: where it is now, which named elements and messages appeared, whether a dialog
+// opened, and whether a download began.
+export const observeChange = async (client: BrowserClient, before: BeforeCall): Promise<ObservedChange> => {
   const info = await client.pageInfo();
   const dialog = info.success && info.data.kind === "dialog" ? info.data.dialog.type : undefined;
   const url = info.success && info.data.kind === "page" ? info.data.url : undefined;
   const refreshed = await refreshRefs(client);
-  const appeared: Array<{ role: string; name: string }> = [];
-  if (refreshed.success) {
-    const had = new Set([...before.values()].map((s) => `${s.role}\u0000${s.name}`));
-    for (const sig of refreshed.data.cur.values()) {
-      if (appeared.length >= MAX_APPEARED) break;
-      if (sig.name === "" || had.has(`${sig.role}\u0000${sig.name}`)) continue;
-      appeared.push({ role: sig.role, name: sig.name });
-    }
-  }
-  return { appeared, ...(url !== undefined ? { url } : {}), ...(dialog !== undefined ? { dialog } : {}) };
+  const had = new Set([...before.refs.values()].map(keyOf));
+  const elements = refreshed.success
+    ? [...refreshed.data.cur.values()].filter((sig) => sig.name !== "" && !had.has(keyOf(sig))).map((sig) => ({ role: sig.role, name: sig.name }))
+    : [];
+  // Messages go first: a toast is the clearest sign an action worked, and the cap must not crowd it out.
+  const appeared = [...(await newMessages(client, before.messages)), ...elements].slice(0, MAX_APPEARED);
+  const download = client.session().downloadCount() > before.downloads;
+  return {
+    appeared,
+    ...(url !== undefined ? { url } : {}),
+    ...(dialog !== undefined ? { dialog } : {}),
+    ...(download ? { download: true } : {}),
+  };
 };
 
 const stringArg = (args: Readonly<Record<string, unknown>>, key: string): string | undefined => {
@@ -183,7 +218,11 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
       password = r.success && r.data === true;
     }
     const url = await urlOf(client);
-    const before = new Map(client.session().refSignatures());
+    const before: BeforeCall = {
+      refs: new Map(client.session().refSignatures()),
+      downloads: client.session().downloadCount(),
+      messages: await readLiveMessages(client),
+    };
     return async (outcome) => {
       try {
         const change = outcome.ok ? await observeChange(client, before) : undefined;

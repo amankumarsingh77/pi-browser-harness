@@ -57,9 +57,9 @@ describe("browser harness extension", () => {
     const commandsAfterFirst = pi.commands.length;
     await pi.emit("session_start", { type: "session_start" }, fakeCtx().ctx);
     assert.equal(pi.tools.length, toolsAfterFirst, "tools were re-registered");
-    // registerSetupCommand / registerProfileCommand run on every session_start; pi replaces a
+    // registerSetupCommand / registerProfileCommand / registerRecipeCommand run on every session_start; pi replaces a
     // command registered under the same name, so this documents what reaches pi rather than guarding it.
-    assert.equal(pi.commands.length, commandsAfterFirst + 2);
+    assert.equal(pi.commands.length, commandsAfterFirst + 3);
   });
 
   test("registers the namespace and debug-click flags at load", () => {
@@ -70,12 +70,12 @@ describe("browser harness extension", () => {
     ]);
   });
 
-  test("registers the status and reload commands at load, and setup/profile only once a session starts", async () => {
+  test("registers the status and reload commands at load, and setup/profile/recipe only once a session starts", async () => {
     const pi = load();
     assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon"]);
     for (const c of pi.commands) assert.ok(c.description, `${c.name} has no description`);
     await pi.emit("session_start", { type: "session_start" }, fakeCtx().ctx);
-    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon", "browser-setup", "browser-profile"]);
+    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon", "browser-setup", "browser-profile", "browser-recipe"]);
   });
 
   test("subscribes to the session lifecycle, agent start and the agent prompt", () => {

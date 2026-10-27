@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { agentDir } from "../profile/paths";
 import { type Result, err, ok } from "../util/result";
-import { type Recipe, parseRecipe, stringifyRecipe } from "./recipe";
+import { type LastRun, type Recipe, parseRecipe, stringifyRecipe } from "./recipe";
 
 export type StoredRecipe = { readonly recipe: Recipe; readonly path: string; readonly root: string };
 
@@ -92,4 +92,9 @@ export const saveRecipe = async (root: string, recipe: Recipe): Promise<Result<S
   } catch (e) {
     return err(`could not save recipe to ${path}: ${e instanceof Error ? e.message : String(e)}`);
   }
+};
+
+// Records the outcome of a replay without bumping the version; a run is not a new recipe.
+export const recordRun = async (stored: StoredRecipe, lastRun: LastRun): Promise<void> => {
+  await writeAtomic(stored.path, stringifyRecipe({ ...stored.recipe, lastRun })).catch(() => undefined);
 };

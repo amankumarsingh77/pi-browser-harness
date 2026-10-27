@@ -34,6 +34,7 @@ export type JournalEntry = {
   readonly ok: boolean;
   readonly error?: string;
   readonly change?: ObservedChange;
+  readonly recipe?: { readonly name: string; readonly step: number };
 };
 
 export type NewEntry = Omit<JournalEntry, "v" | "at" | "run">;

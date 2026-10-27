@@ -7,6 +7,7 @@ All notable changes to pi-browser-harness will be documented in this file.
 ### Added
 
 - **Browser recipes: journal and save.** Every page-changing browser call is journaled per session, and `browser_save_recipe` saves the agent's last browser task as a YAML recipe with `{{params}}`, after the user confirms it.
+- **Browser recipes: replay.** `browser_run_recipe` and `/browser-recipe NAME key=value` replay a saved recipe with no model calls, finding each element by role and name and checking each step's recorded outcome. Downloads and status/alert toasts are now recorded, so a step can expect them.
 
 ## 0.13.0 — 2026-10-20
 

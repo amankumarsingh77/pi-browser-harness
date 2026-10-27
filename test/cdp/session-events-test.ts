@@ -91,4 +91,14 @@ describe("CdpSession event routing across tabs", () => {
     await session.switchTo("t1");
     assert.equal(session.drainConsoleBuffer({}).records.length, 0);
   });
+  test("SC30: a Page.downloadWillBegin on the current tab's session raises downloadCount from 0 to 1, and one on an untracked session changes nothing", async () => {
+    const { stub, session } = await twoTabSession();
+    assert.equal(session.downloadCount(), 0);
+    stub.emit({ method: "Page.downloadWillBegin", sessionId: "s2", params: { guid: "g1", url: "data:text/plain,hi", suggestedFilename: "x.txt" } });
+    await flush();
+    assert.equal(session.downloadCount(), 1);
+    stub.emit({ method: "Page.downloadWillBegin", sessionId: "unknown-session", params: { guid: "g2", url: "data:text/plain,hi", suggestedFilename: "y.txt" } });
+    await flush();
+    assert.equal(session.downloadCount(), 1);
+  });
 });
