@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
 import { missingParams, runRecipe } from "./replay";
-import { formatFailure, listText } from "./run-tool";
+import { formatFailureHandoff, listText } from "./run-tool";
 import { findRecipe, listRecipes, recordRun } from "./store";
 import { approveProjectRecipe, trustWritten } from "./trust";
 
@@ -74,7 +74,7 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
       await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });
       await trustWritten(stored.data, ctx.cwd);
       ctx.ui.notify(`Recipe ${name} failed at step ${outcome.failure.step}; handing it to the agent to finish the task and repair the recipe.`, "warning");
-      const report = `/browser-recipe ${name} failed. ${formatFailure(stored.data.recipe, params, outcome.failure)}`;
+      const report = `/browser-recipe ${name} failed. ${formatFailureHandoff(stored.data.recipe, params, outcome.failure)}`;
       if (ctx.isIdle()) pi.sendUserMessage(report);
       else pi.sendUserMessage(report, { deliverAs: "followUp" });
     },
