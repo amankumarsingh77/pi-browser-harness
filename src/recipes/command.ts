@@ -3,6 +3,7 @@ import type { BrowserClient } from "../client";
 import { missingParams, runRecipe } from "./replay";
 import { formatFailure, listText } from "./run-tool";
 import { findRecipe, listRecipes, recordRun } from "./store";
+import { approveProjectRecipe, trustWritten } from "./trust";
 
 const TOKEN = /([^\s=]+)="([^"]*)"|(\S+)/g;
 
@@ -56,15 +57,22 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
         ctx.ui.notify(`Recipe ${name} needs: ${missing.map((p) => `${p}=… (e.g. ${stored.data.recipe.params[p]?.example ?? ""})`).join(" ")}`, "error");
         return;
       }
+      const approved = await approveProjectRecipe(ctx, stored.data);
+      if (!approved.success) {
+        ctx.ui.notify(approved.error, "error");
+        return;
+      }
       ctx.ui.notify(`Running recipe ${name}…`, "info");
       const outcome = await runRecipe({ client, extensionCtx: ctx, recipe: stored.data.recipe, params });
       const at = new Date().toISOString();
       if (outcome.ok) {
         await recordRun(stored.data, { at, result: "ok" });
+        await trustWritten(stored.data, ctx.cwd);
         ctx.ui.notify(`Recipe ${name} done: ${outcome.steps} steps ✓`, "info");
         return;
       }
       await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });
+      await trustWritten(stored.data, ctx.cwd);
       ctx.ui.notify(`Recipe ${name} failed at step ${outcome.failure.step}; handing it to the agent to finish the task and repair the recipe.`, "warning");
       const report = `/browser-recipe ${name} failed. ${formatFailure(stored.data.recipe, params, outcome.failure)}`;
       if (ctx.isIdle()) pi.sendUserMessage(report);

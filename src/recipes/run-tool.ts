@@ -4,6 +4,7 @@ import { defineBrowserTool } from "../util/tool";
 import { RECIPE_NAME, type Recipe } from "./recipe";
 import { type ReplayFailure, describeStep, missingParams, runRecipe } from "./replay";
 import { findRecipe, listRecipes, recordRun } from "./store";
+import { approveProjectRecipe, trustWritten } from "./trust";
 
 const RunArgs = Type.Object({
   name: Type.Optional(Type.String({ pattern: RECIPE_NAME.source, description: "Recipe to run. Omit to list saved recipes." })),
@@ -67,13 +68,17 @@ export const runRecipeTool = defineBrowserTool({
       const hints = missing.map((p) => `${p} (e.g. ${stored.data.recipe.params[p]?.example ?? ""})`).join(", ");
       return err({ kind: "invalid_args", message: `Recipe ${args.name} needs params: ${hints}` });
     }
+    const approved = await approveProjectRecipe(extensionCtx, stored.data);
+    if (!approved.success) return err({ kind: "invalid_state", message: approved.error });
     const outcome = await runRecipe({ client, extensionCtx, recipe: stored.data.recipe, params, ...(signal !== undefined ? { signal } : {}) });
     const at = new Date().toISOString();
     if (outcome.ok) {
       await recordRun(stored.data, { at, result: "ok" });
+      await trustWritten(stored.data, cwd);
       return ok({ text: `Recipe ${args.name} ran ${outcome.steps} steps successfully.`, details: { name: args.name, steps: outcome.steps } });
     }
     await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });
+    await trustWritten(stored.data, cwd);
     return err({ kind: "invalid_state", message: formatFailure(stored.data.recipe, params, outcome.failure) });
   },
 });

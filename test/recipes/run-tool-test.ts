@@ -1,12 +1,13 @@
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TabInfo } from "../../src/cdp/types";
 import type { Recipe } from "../../src/recipes/recipe";
 import type { ReplayFailure } from "../../src/recipes/replay";
 import { formatFailure, runRecipeTool } from "../../src/recipes/run-tool";
+import { confirmAndSave } from "../../src/recipes/save-tool";
 import { recipeRoots, saveRecipe } from "../../src/recipes/store";
 import { ok } from "../../src/util/result";
 import { sleep } from "../../src/util/sleep";
@@ -74,7 +75,7 @@ describe("browser_run_recipe", () => {
   });
 
   test("SC35: a replay started while a serialized tool holds the mutation mutex runs its first step only after the release, and completes", async () => {
-    await saveRecipe(recipeRoots(cwd).project, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
+    await saveRecipe(recipeRoots(cwd).user, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
     const { fake, client } = await navigatingClient();
     const pi = fakePi();
     // The daemon-socket gate is not under test; the parallel lane and the per-step mutex are.
@@ -91,6 +92,61 @@ describe("browser_run_recipe", () => {
     assert.equal(navigatesWhileHeld, 0);
     assert.equal(fake.callsTo("Page.navigate").length, 1);
     assert.equal(textOf(result), "Recipe vendor-invoices ran 1 steps successfully.");
+  });
+
+  const runAsAgent = async (opts: { readonly confirms?: ReadonlyArray<boolean>; readonly hasUI?: boolean }) => {
+    const { fake, client } = await navigatingClient();
+    const ui = fakeCtx({ cwd, ...opts });
+    const r = await runRecipeTool.handler({ name: "vendor-invoices", params: { month: "2026-10" } }, { client, signal: undefined, onUpdate: () => undefined, extensionCtx: ui.ctx });
+    return { r, ui, navigates: fake.callsTo("Page.navigate").length };
+  };
+
+  test("SC56: after approval the same file runs without asking; after its bytes change it asks again", async () => {
+    const saved = await saveRecipe(recipeRoots(cwd).project, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
+    assert.ok(saved.success);
+
+    const approved = await runAsAgent({ confirms: [true] });
+    const again = await runAsAgent({});
+    appendFileSync(saved.data.path, "# edited by someone else\n");
+    const changed = await runAsAgent({ confirms: [false] });
+
+    assert.equal(approved.ui.confirmations.length, 1);
+    assert.ok(approved.r.success && again.r.success, "expected the approved file to run twice");
+    assert.equal(again.ui.confirmations.length, 0);
+    assert.equal(again.navigates, 1);
+    assert.equal(changed.ui.confirmations.length, 1);
+    assert.ok(!changed.r.success && changed.r.error.message.includes("not run: not approved"));
+    assert.equal(changed.navigates, 0);
+  });
+
+  test("SC56b: a project recipe the agent saved or repaired through confirmAndSave runs next without asking", async () => {
+    const saved = await confirmAndSave(fakeCtx({ cwd, confirms: [true] }).ctx, recipeRoots(cwd).project, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY), "Save?");
+    assert.ok(saved.success);
+
+    const { r, ui } = await runAsAgent({});
+
+    assert.ok(r.success, r.success ? "" : r.error.message);
+    assert.equal(ui.confirmations.length, 0);
+  });
+
+  test("SC57: with no UI an untrusted project recipe is refused and no step runs", async () => {
+    await saveRecipe(recipeRoots(cwd).project, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
+
+    const { r, navigates } = await runAsAgent({ hasUI: false });
+
+    assert.ok(!r.success, "expected the run to be refused");
+    assert.match(r.error.message, /recipe vendor-invoices is a project recipe that has not been approved; run it once in an interactive session to approve it/);
+    assert.equal(navigates, 0);
+  });
+
+  test("SC58: a recipe under the agent dir runs without asking", async () => {
+    await saveRecipe(recipeRoots(cwd).user, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
+
+    const { r, ui, navigates } = await runAsAgent({});
+
+    assert.ok(r.success, r.success ? "" : r.error.message);
+    assert.equal(ui.confirmations.length, 0);
+    assert.equal(navigates, 1);
   });
 
   test("SC36: with no name it lists a project recipe and a user recipe with site, step count and month (e.g. 2026-09)", async () => {

@@ -281,6 +281,12 @@ which replaces that step onward with what it just did, bumps `version` and keeps
 `/browser-recipe` goes to the agent the same way. If the page asks you to sign in, the replay stops and the
 agent asks you to sign in; it never types credentials.
 
+A recipe in the project's `.pi/browser-recipes/` comes from whoever wrote the repo, so it needs your
+approval before its first run: you see its file, site, the URLs it opens, the files it uploads and its
+downloads. The approval holds for those exact file bytes (kept in
+`~/.pi/agent/browser-harness/trusted-recipes.json`); if the file changes, you are asked again. Without a UI
+an unapproved project recipe does not run.
+
 A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
 be saved.
 

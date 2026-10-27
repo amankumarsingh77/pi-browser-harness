@@ -6,6 +6,7 @@ import { applyParams, compileSteps, latestTask, siteOf } from "./compile";
 import { type JournalEntry, activeJournal } from "./journal";
 import { RECIPE_NAME, type Recipe, type RecipeStep, stringifyRecipe } from "./recipe";
 import { type StoredRecipe, findRecipe, recipeRoots, saveRecipe } from "./store";
+import { trustWritten } from "./trust";
 
 const SaveArgs = Type.Object({
   name: Type.String({ pattern: RECIPE_NAME.source, description: "Recipe name, lowercase words joined by '-' (e.g. 'vendor-invoices-export')" }),
@@ -36,6 +37,7 @@ export const confirmAndSave = async (
   }
   const saved = await saveRecipe(root, recipe);
   if (!saved.success) return err({ kind: "io_error", message: saved.error });
+  await trustWritten(saved.data, ctx.cwd);
   return ok(saved.data);
 };
 
