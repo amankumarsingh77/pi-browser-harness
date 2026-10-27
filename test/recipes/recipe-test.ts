@@ -62,4 +62,11 @@ describe("recipe file format", () => {
       assert.match(parsed.error, new RegExp(`^step ${c.step}:`));
     });
   }
+
+  test("SC53: a file whose site is \"../x\" is rejected before any step is read", () => {
+    const parsed = parseRecipe(HEADER.replace("site: billing.test", 'site: "../x"') + `steps:\n  - reload: {}\n`);
+
+    assert.ok(!parsed.success, "expected site ../x to be rejected");
+    assert.match(parsed.error, /site|pattern/);
+  });
 });

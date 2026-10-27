@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 import { err, ok } from "../util/result";
 import { defineBrowserTool } from "../util/tool";
-import { RECIPE_NAME } from "./recipe";
-import { type ReplayFailure, missingParams, runRecipe } from "./replay";
+import { RECIPE_NAME, type Recipe } from "./recipe";
+import { type ReplayFailure, describeStep, missingParams, runRecipe } from "./replay";
 import { findRecipe, listRecipes, recordRun } from "./store";
 
 const RunArgs = Type.Object({
@@ -21,8 +21,27 @@ export const listText = async (cwd: string): Promise<string> => {
     .join("\n");
 };
 
-export const formatFailure = (name: string, f: ReplayFailure): string =>
-  [`Recipe ${name} stopped at step ${f.step} (${f.action}): ${f.reason}`, `Expected: ${f.expected}`, "", "Page now:", f.snapshot].join("\n");
+export const formatFailure = (recipe: Recipe, params: Readonly<Record<string, string>>, f: ReplayFailure): string => {
+  const head = [`Recipe ${recipe.name} stopped at step ${f.step} of ${recipe.steps.length} (${f.action}): ${f.reason}`, `Expected: ${f.expected}`];
+  const paramLine = Object.keys(params).length > 0 ? `Params: ${Object.entries(params).map(([k, v]) => `${k}=${v}`).join(" ")}` : "";
+  if (f.authWall) {
+    return [...head, "", "Do not sign in or type any credentials. Ask the user to sign in in the browser, then run the recipe again.", "", "Page now:", f.snapshot].join("\n");
+  }
+  const remaining = recipe.steps.slice(f.step - 1).map((s, i) => `  ${f.step + i}. ${describeStep(s)}`);
+  return [
+    ...head,
+    paramLine,
+    "",
+    `Finish the user's task now: do what steps ${f.step}–${recipe.steps.length} were meant to do, using normal browser tools and the page below. Then call browser_save_recipe with { name: "${recipe.name}", repair_step: ${f.step} } to repair the recipe from what you did.`,
+    "Remaining steps:",
+    ...remaining,
+    "",
+    "Page now:",
+    f.snapshot,
+  ]
+    .filter((l, i, all) => l !== "" || all[i - 1] !== "")
+    .join("\n");
+};
 
 export const runRecipeTool = defineBrowserTool({
   name: "browser_run_recipe",
@@ -32,6 +51,7 @@ export const runRecipeTool = defineBrowserTool({
   promptSnippet: "Replay a saved browser recipe, or list recipes",
   promptGuidelines: [
     "When the user asks to redo a browser task, call browser_run_recipe with no name first to see whether a saved recipe covers it.",
+    "When a recipe fails, finish the user's task yourself from the failed step before anything else, then repair the recipe with browser_save_recipe repair_step. At an auth wall, never sign in: ask the user to.",
   ],
   parameters: RunArgs,
   // Must stay parallel: the replay takes the non-reentrant mutation mutex itself, per step.
@@ -54,6 +74,6 @@ export const runRecipeTool = defineBrowserTool({
       return ok({ text: `Recipe ${args.name} ran ${outcome.steps} steps successfully.`, details: { name: args.name, steps: outcome.steps } });
     }
     await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });
-    return err({ kind: "invalid_state", message: formatFailure(args.name, outcome.failure) });
+    return err({ kind: "invalid_state", message: formatFailure(stored.data.recipe, params, outcome.failure) });
   },
 });

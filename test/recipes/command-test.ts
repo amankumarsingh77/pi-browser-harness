@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { cdpError } from "../../src/cdp/errors";
 import type { TabInfo } from "../../src/cdp/types";
 import { parseCommandArgs, registerRecipeCommand } from "../../src/recipes/command";
 import { recipeRoots, findRecipe, saveRecipe } from "../../src/recipes/store";
-import { ok } from "../../src/util/result";
+import { err, ok } from "../../src/util/result";
 import { createFakeClient } from "../domains/fake-client";
 import { pageInfoOf, withClient } from "../domains/client-overrides";
 import { fakeCtx, fakePi } from "../helpers/fake-pi";
@@ -38,6 +39,49 @@ describe("/browser-recipe", () => {
       else process.env["PI_CODING_AGENT_DIR"] = savedAgentDir;
       rmSync(agentDir, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });
+    });
+
+    // vendor-invoices navigates twice; the second Page.navigate is refused, so the replay fails at step 2.
+    const runFailingAtStep2 = async (opts: { readonly idle: boolean }) => {
+      await saveRecipe(recipeRoots(cwd).project, {
+        name: "vendor-invoices",
+        site: "billing.test",
+        version: 1,
+        params: { month: { type: "string", example: "2026-09" } },
+        steps: [
+          { action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } },
+          { action: "navigate", args: { url: "https://billing.test/export?m={{month}}" } },
+        ],
+        recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      });
+      const fake = await createFakeClient({
+        canned: { "Page.navigate": [ok({ frameId: "f1" }), err(cdpError("invalid_response", "net::ERR_ABORTED"))] },
+      });
+      const client = withClient(fake.client, {
+        listTabs: () => Promise.resolve(ok(ONE_TAB)),
+        pageInfo: () => Promise.resolve(pageInfoOf({ url: "https://billing.test/invoices" })),
+      });
+      const pi = fakePi();
+      registerRecipeCommand(pi.pi, client);
+      const ui = fakeCtx({ cwd, idle: opts.idle });
+      await pi.command("browser-recipe").handler("vendor-invoices month=2026-10", ui.ctx);
+      return { pi, ui };
+    };
+
+    test("SC47: a /browser-recipe run failing at step 2 sends the agent one user message holding repair_step: 2, with no confirm dialog", async () => {
+      const { pi, ui } = await runFailingAtStep2({ idle: true });
+
+      assert.equal(pi.userMessages.length, 1);
+      assert.match(String(pi.userMessages[0]?.content), /repair_step: 2/);
+      assert.equal(pi.userMessages[0]?.options, undefined);
+      assert.deepEqual(ui.confirmations, []);
+    });
+
+    test("SC48: a /browser-recipe run failing while the agent is busy queues its report as a followUp", async () => {
+      const { pi } = await runFailingAtStep2({ idle: false });
+
+      assert.equal(pi.userMessages.length, 1);
+      assert.deepEqual(pi.userMessages[0]?.options, { deliverAs: "followUp" });
     });
 
     test("SC37: /browser-recipe vendor-invoices month=2026-10 on a passing recipe shows the done notice, sends no user message, and records last_run ok at the same version", async () => {

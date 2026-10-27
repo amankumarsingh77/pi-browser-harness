@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TabInfo } from "../../src/cdp/types";
 import type { Recipe } from "../../src/recipes/recipe";
-import { runRecipeTool } from "../../src/recipes/run-tool";
+import type { ReplayFailure } from "../../src/recipes/replay";
+import { formatFailure, runRecipeTool } from "../../src/recipes/run-tool";
 import { recipeRoots, saveRecipe } from "../../src/recipes/store";
 import { ok } from "../../src/util/result";
 import { sleep } from "../../src/util/sleep";
@@ -103,5 +104,43 @@ describe("browser_run_recipe", () => {
     assert.ok(r.success);
     assert.match(r.data.text, /vendor-invoices — billing\.test, 1 steps, v1, params: month \(e\.g\. 2026-09\)/);
     assert.match(r.data.text, /payroll-export — payroll\.test, 2 steps, v1, params: month \(e\.g\. 2026-09\)/);
+  });
+});
+
+describe("formatFailure", () => {
+  const FIVE_STEPS: Recipe["steps"] = [
+    { action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } },
+    { action: "select_option", args: { label: "{{month}}" }, locator: { role: "combobox", name: "Period", nth: 0 } },
+    { action: "click", args: {}, locator: { role: "button", name: "Export CSV", nth: 0 } },
+    { action: "click", args: {}, locator: { role: "button", name: "Confirm", nth: 0 } },
+    { action: "click", args: {}, locator: { role: "link", name: "Download", nth: 0 } },
+  ];
+  const atStep3 = (authWall: boolean): ReplayFailure => ({
+    step: 3,
+    action: 'click button "Export CSV"',
+    reason: authWall ? "auth wall: the page is asking to sign in (a password field is showing)" : 'no button "Export CSV" on the page',
+    expected: "a download to start",
+    snapshot: '- button "Download CSV" [ref=e4]',
+    authWall,
+  });
+
+  test("SC41: a 5-step recipe failed at step 3 with month=2026-10 names step 3 of 5, the expectation and params, lists steps 3-5, and ends with the repair_step: 3 call and the snapshot", () => {
+    const text = formatFailure(recipeOf("vendor-invoices", "billing.test", FIVE_STEPS), { month: "2026-10" }, atStep3(false));
+
+    assert.match(text, /step 3 of 5/);
+    assert.match(text, /Expected: a download to start/);
+    assert.match(text, /Params: month=2026-10/);
+    assert.match(text, /3\. click button "Export CSV"\n {2}4\. click button "Confirm"\n {2}5\. click link "Download"/);
+    assert.doesNotMatch(text, /2\. select_option/);
+    assert.match(text, /browser_save_recipe with \{ name: "vendor-invoices", repair_step: 3 \}/);
+    assert.ok(text.endsWith('Page now:\n- button "Download CSV" [ref=e4]'), text);
+  });
+
+  test("SC42: an auth-wall failure says never to type credentials and to ask the user to sign in, and offers no repair_step", () => {
+    const text = formatFailure(recipeOf("vendor-invoices", "billing.test", FIVE_STEPS), { month: "2026-10" }, atStep3(true));
+
+    assert.match(text, /Do not sign in or type any credentials/);
+    assert.match(text, /Ask the user to sign in/);
+    assert.doesNotMatch(text, /repair_step/);
   });
 });

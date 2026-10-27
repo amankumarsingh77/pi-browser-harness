@@ -275,6 +275,12 @@ with no name lists recipes; names tab-complete. Each step finds its element by r
 5s for it, and checks that the page changed the way the recorded run did. A status or alert message the
 recorded run saw counts when its first words match, so "Exported 43 rows" satisfies "Exported 42 rows".
 
+When a step fails, the replay stops and hands the agent the step, what it expected and a fresh snapshot.
+The agent finishes your task from that step first, then calls `browser_save_recipe` with `repair_step`,
+which replaces that step onward with what it just did, bumps `version` and keeps the old file. A failed
+`/browser-recipe` goes to the agent the same way. If the page asks you to sign in, the replay stops and the
+agent asks you to sign in; it never types credentials.
+
 A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
 be saved.
 

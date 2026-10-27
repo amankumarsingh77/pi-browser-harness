@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type NewEntry, createJournal, setActiveJournal } from "../../src/recipes/journal";
-import { parseRecipe } from "../../src/recipes/recipe";
-import { saveRecipeTool } from "../../src/recipes/save-tool";
+import { type JournalEntry, type NewEntry, activeJournal, createJournal, setActiveJournal } from "../../src/recipes/journal";
+import { type Recipe, type RecipeStep, parseRecipe } from "../../src/recipes/recipe";
+import { repairSteps, saveRecipeTool } from "../../src/recipes/save-tool";
+import { recipeRoots, saveRecipe } from "../../src/recipes/store";
 import { createFakeClient } from "../domains/fake-client";
 import { fakeCtx, fakePi } from "../helpers/fake-pi";
 
@@ -102,5 +103,95 @@ describe("browser_save_recipe", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  test("SC46: repairing vendor-invoices v1 from step 2 after a failure marker and one agent click is confirmed, written as v2 with the new step 2 and last_run.repaired_step 2, and keeps v1 under .history", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-save-recipe-repair-"));
+    try {
+      await saveRecipe(recipeRoots(cwd).user, {
+        name: "vendor-invoices",
+        site: "billing.test",
+        version: 1,
+        params: { month: { type: "string", example: "2026-09" } },
+        steps: [
+          { action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } },
+          { action: "click", args: {}, locator: { role: "button", name: "Export CSV", nth: 0 } },
+        ],
+        recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      });
+      const journal = activeJournal();
+      assert.ok(journal !== undefined);
+      await journal.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { month: "2026-10" }, password: false, url: "https://billing.test/invoices", ok: false, recipe: { name: "vendor-invoices", step: 2 } });
+      await journal.append({ source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false, url: "https://billing.test/invoices", ok: true });
+
+      const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", repair_step: 2 }, cwd });
+      await run;
+
+      assert.equal(fake.confirmations.length, 1);
+      const repaired = parseRecipe(readFileSync(userFile(), "utf8"));
+      assert.ok(repaired.success, repaired.success ? "" : repaired.error);
+      assert.equal(repaired.data.version, 2);
+      assert.deepEqual(repaired.data.steps[1]?.locator, { role: "button", name: "Download CSV", nth: 0 });
+      assert.equal(repaired.data.lastRun?.repairedStep, 2);
+      assert.equal(existsSync(join(agentDir, "browser-recipes", "billing.test", ".history", "vendor-invoices.v1.yaml")), true);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("repairSteps", () => {
+  const entry = (over: Partial<JournalEntry> & Pick<JournalEntry, "tool">): JournalEntry => ({
+    v: 1,
+    at: "2026-10-01T00:00:00.000Z",
+    run: 2,
+    source: "agent",
+    replayable: true,
+    args: {},
+    password: false,
+    url: "https://billing.test/invoices",
+    ok: true,
+    ...over,
+  });
+  const failedAt = (step: number, args: JournalEntry["args"] = { month: "2026-10" }): JournalEntry =>
+    entry({ tool: "browser_run_recipe", source: "replay", replayable: false, ok: false, args, recipe: { name: "vendor-invoices", step } });
+  const click = (role: string, name: string): RecipeStep => ({ action: "click", args: {}, locator: { role, name, nth: 0 } });
+  const FOUR_STEPS: ReadonlyArray<RecipeStep> = [
+    { action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } },
+    { action: "select_option", args: { label: "{{month}}" }, locator: { role: "combobox", name: "Period", nth: 0 } },
+    click("button", "Export CSV"),
+    click("button", "Close"),
+  ];
+  const recipe: Recipe = {
+    name: "vendor-invoices",
+    site: "billing.test",
+    version: 1,
+    params: { month: { type: "string", example: "2026-09" } },
+    steps: FOUR_STEPS,
+    recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+  };
+  const agentClick = (name: string): JournalEntry => entry({ tool: "browser_click", locator: { role: "button", name, nth: 0 } });
+
+  test("SC43: with a failure marker at step 3 followed by clicks on Download CSV and Close, steps 1-2 stay and the two clicks replace steps 3-4", () => {
+    const r = repairSteps(recipe, [failedAt(3), agentClick("Download CSV"), agentClick("Close")], 3);
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data.steps, [FOUR_STEPS[0], FOUR_STEPS[1], click("button", "Download CSV"), click("button", "Close")]);
+  });
+
+  test("SC44: repairing step 2 when the last failure marker is at step 3 fails saying the replay stopped at step 3", () => {
+    const r = repairSteps(recipe, [failedAt(3), agentClick("Download CSV")], 2);
+
+    assert.ok(!r.success, "expected the repair to be refused");
+    assert.match(r.error, /stopped at step 3, not 2/);
+  });
+
+  test("SC45: a run with month=2026-10 whose repair selected label 2026-10 templates the label back to {{month}}", () => {
+    const selected = entry({ tool: "browser_select_option", args: { label: "2026-10" }, locator: { role: "combobox", name: "Period", nth: 0 } });
+
+    const r = repairSteps(recipe, [failedAt(2), selected, agentClick("Export CSV")], 2);
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data.steps[1]?.args, { label: "{{month}}" });
   });
 });

@@ -14,6 +14,8 @@ export type RecordedCommand = {
 
 export type RecordedNotice = { readonly message: string; readonly type: string | undefined };
 
+export type RecordedUserMessage = { readonly content: unknown; readonly options: unknown };
+
 export type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 export type FakePi = {
@@ -26,8 +28,8 @@ export type FakePi = {
   readonly events: ReadonlyArray<string>;
   readonly entries: ReadonlyArray<{ readonly customType: string; readonly data: unknown }>;
   readonly flagReads: ReadonlyArray<string>;
-  // Every message the extension handed to the agent, which starts a model turn.
-  readonly userMessages: ReadonlyArray<unknown>;
+  // Every message the extension handed to the agent, which starts a model turn, with its delivery options.
+  readonly userMessages: ReadonlyArray<RecordedUserMessage>;
   readonly setFlag: (name: string, value: unknown) => void;
   readonly command: (name: string) => RecordedCommand;
   readonly emit: (event: string, payload: unknown, ctx: ExtensionContext) => Promise<unknown>;
@@ -41,7 +43,7 @@ export const fakePi = (): FakePi => {
   const events: string[] = [];
   const entries: Array<{ readonly customType: string; readonly data: unknown }> = [];
   const flagReads: string[] = [];
-  const userMessages: unknown[] = [];
+  const userMessages: RecordedUserMessage[] = [];
   const flagValues = new Map<string, unknown>();
   const handlers = new Map<string, EventHandler[]>();
 
@@ -63,8 +65,8 @@ export const fakePi = (): FakePi => {
     appendEntry: (customType: string, data: unknown) => {
       entries.push({ customType, data });
     },
-    sendUserMessage: (content: unknown) => {
-      userMessages.push(content);
+    sendUserMessage: (content: unknown, options?: unknown) => {
+      userMessages.push({ content, options });
     },
     on: (event: string, handler: EventHandler) => {
       events.push(event);
@@ -116,6 +118,8 @@ export type FakeCtxOptions = {
   // Answers `ui.confirm` in order; running out means the user declined.
   readonly confirms?: ReadonlyArray<boolean>;
   readonly cwd?: string;
+  // What `isIdle()` answers; the agent is idle unless a test says it is busy.
+  readonly idle?: boolean;
 };
 
 export type FakeCtx = {
@@ -147,9 +151,10 @@ export const fakeCtx = (opts: FakeCtxOptions = {}): FakeCtx => {
       },
     },
     cwd: opts.cwd ?? process.cwd(),
+    isIdle: () => opts.idle ?? true,
     sessionManager: { getBranch: () => [...(opts.branch ?? [])], getSessionId: () => opts.sessionId ?? "fake-session" },
   };
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, cwd, ui.notify/select/confirm and sessionManager.getBranch/getSessionId are read
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only hasUI, cwd, isIdle, ui.notify/select/confirm and sessionManager.getBranch/getSessionId are read
   const ctx = shape as unknown as ExtensionContext;
   return { ctx, notices, prompts, confirmations };
 };

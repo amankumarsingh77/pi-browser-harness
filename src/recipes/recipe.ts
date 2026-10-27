@@ -35,6 +35,9 @@ export type Recipe = {
 };
 
 export const RECIPE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// A host (name, IPv4, bracketed IPv6) or unknown-site. The site is a directory under the recipe root, so it may
+// never hold a path separator or be "." or "..".
+export const RECIPE_SITE = /^(?!\.{1,2}$)[a-z0-9._\-[\]:]{1,253}$/;
 const PARAM_REF = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
 const LOCATOR_KEYS: ReadonlySet<string> = new Set(["role", "name", "nth", "css", "x", "y"]);
 const STEP_META_KEYS: ReadonlySet<string> = new Set(["expect", "fragile"]);
@@ -48,7 +51,7 @@ const ACTIONS: ReadonlySet<string> = new Set(
 
 const FileSchema = Type.Object({
   name: Type.String({ pattern: RECIPE_NAME.source }),
-  site: Type.String({ minLength: 1 }),
+  site: Type.String({ pattern: RECIPE_SITE.source }),
   version: Type.Integer({ minimum: 1 }),
   params: Type.Record(Type.String(), Type.Object({ type: Type.Literal("string"), example: Type.String() })),
   steps: Type.Array(Type.Record(Type.String(), Type.Unknown()), { minItems: 1 }),

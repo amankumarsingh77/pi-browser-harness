@@ -65,7 +65,10 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
         return;
       }
       await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });
-      ctx.ui.notify(formatFailure(name, outcome.failure), "error");
+      ctx.ui.notify(`Recipe ${name} failed at step ${outcome.failure.step}; handing it to the agent to finish the task and repair the recipe.`, "warning");
+      const report = `/browser-recipe ${name} failed. ${formatFailure(stored.data.recipe, params, outcome.failure)}`;
+      if (ctx.isIdle()) pi.sendUserMessage(report);
+      else pi.sendUserMessage(report, { deliverAs: "followUp" });
     },
   });
 };

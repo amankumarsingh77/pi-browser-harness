@@ -1,7 +1,7 @@
 import { type Result, err, ok } from "../util/result";
 import type { JsonObject } from "../util/tool";
 import type { JournalEntry, Locator } from "./journal";
-import type { RecipeStep, StepExpect } from "./recipe";
+import { RECIPE_SITE, type RecipeStep, type StepExpect } from "./recipe";
 
 const MAX_EXPECT_APPEARED = 3;
 
@@ -92,9 +92,9 @@ export const siteOf = (entries: ReadonlyArray<JournalEntry>): string => {
     const url = e.tool === "browser_navigate" && typeof e.args["url"] === "string" ? e.args["url"] : e.url;
     try {
       const host = new URL(url).hostname;
-      if (host !== "") return host;
+      if (RECIPE_SITE.test(host)) return host;
     } catch {
-      // An empty or about: URL names no site; try the next entry.
+      // An unparseable URL names no site; try the next entry.
     }
   }
   return "unknown-site";

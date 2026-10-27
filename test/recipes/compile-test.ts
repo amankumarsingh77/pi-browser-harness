@@ -2,7 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import type { JournalEntry } from "../../src/recipes/journal";
 import type { RecipeStep } from "../../src/recipes/recipe";
-import { applyParams, compileSteps, latestTask } from "../../src/recipes/compile";
+import { applyParams, compileSteps, latestTask, siteOf } from "../../src/recipes/compile";
 
 const entry = (over: Partial<JournalEntry> & Pick<JournalEntry, "tool">): JournalEntry => ({
   v: 1,
@@ -123,5 +123,13 @@ describe("applyParams", () => {
     assert.ok(r.success, r.success ? "" : r.error);
     assert.equal(r.data[0]?.args["value"], "{{day}}");
     assert.equal(r.data[1]?.args["value"], "{{month}}");
+  });
+});
+
+describe("siteOf", () => {
+  test("SC52: a task that navigated to http://../ and then sat on about:blank names no site, so it falls back to unknown-site rather than \"..\"", () => {
+    const site = siteOf([entry({ tool: "browser_navigate", args: { url: "http://../" } }), entry({ tool: "browser_click", url: "about:blank" })]);
+
+    assert.equal(site, "unknown-site");
   });
 });

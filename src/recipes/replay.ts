@@ -3,6 +3,7 @@ import { Compile } from "typebox/compile";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
 import { clickTool } from "../domains/click";
+import { evalJs } from "../domains/cdp-call";
 import { handleDialogTool } from "../domains/dialog";
 import { dragAndDropTool } from "../domains/drag";
 import { downloadTool, uploadFileTool } from "../domains/files";
@@ -11,6 +12,8 @@ import { goBackTool, goForwardTool, reloadTool } from "../domains/history";
 import { dispatchKeyTool, pressKeyTool, typeTool } from "../domains/keyboard";
 import { navigateTool } from "../domains/navigate";
 import { waitForLoadTool, waitForTool } from "../domains/page";
+import { pageFunctionSource } from "../domains/page/inject";
+import { hasVisiblePasswordField } from "../domains/page/recipe.page";
 import { refreshRefs } from "../domains/ref-resolve";
 import { scrollTool } from "../domains/scroll";
 import { snapshotTool } from "../domains/snapshot";
@@ -164,6 +167,36 @@ const currentUrl = async (client: BrowserClient): Promise<string> => {
   return info.success && info.data.kind === "page" ? info.data.url : "";
 };
 
+const HAS_PASSWORD_EXPR = "(" + pageFunctionSource(hasVisiblePasswordField) + ")()";
+
+const hostOf = (url: string): string | undefined => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+};
+
+// The hosts a recipe is allowed to be on: its site, and every host a step navigates to or expects to land on.
+const knownHosts = (recipe: Recipe, params: Readonly<Record<string, string>>): ReadonlySet<string> => {
+  const hosts = new Set([recipe.site]);
+  for (const s of recipe.steps) {
+    const url = typeof s.args["url"] === "string" ? s.args["url"] : s.expect?.url;
+    const host = url !== undefined ? hostOf(fill(url, params)) : undefined;
+    if (host !== undefined) hosts.add(host);
+  }
+  return hosts;
+};
+
+const authWall = async (client: BrowserClient, hosts: ReadonlySet<string>): Promise<string | undefined> => {
+  const url = await currentUrl(client);
+  const host = hostOf(url);
+  if (host !== undefined && host !== "" && !hosts.has(host)) return `the page left the recipe's site for ${host}`;
+  const pw = await evalJs(client, HAS_PASSWORD_EXPR);
+  if (pw.success && pw.data === true) return "the page is asking to sign in (a password field is showing)";
+  return undefined;
+};
+
 // Runs every step through the tool that recorded it, with no model in the loop. The first step that fails, or whose
 // page does not change the way the recorded run's did, stops the replay.
 export const runRecipe = async (opts: {
@@ -183,8 +216,11 @@ export const runRecipe = async (opts: {
     return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall } };
   };
 
+  const hosts = knownHosts(recipe, params);
   for (const [i, step] of recipe.steps.entries()) {
     const n = i + 1;
+    const wall = await authWall(client, hosts);
+    if (wall !== undefined) return fail(n, step, `auth wall: ${wall}`, true);
     const run = REPLAYERS.get(step.action);
     if (run === undefined) return fail(n, step, `"${step.action}" is not a replayable action`);
     const args = fillArgs(step.args, params);

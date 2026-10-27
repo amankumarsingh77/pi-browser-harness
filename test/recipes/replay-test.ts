@@ -43,8 +43,16 @@ const clickExport = (expect?: RecipeStep["expect"]): RecipeStep => ({
   ...(expect !== undefined ? { expect } : {}),
 });
 
-// A page whose live status messages are whatever `messages` holds; every other page script reads as false.
-const clientFor = async (opts: { readonly messages?: ReadonlyArray<{ readonly role: string; readonly name: string }> } = {}): Promise<{ readonly fake: FakeClient; readonly client: BrowserClient }> => {
+// A page at `url` whose live status messages are whatever `messages` holds and whose password check answers
+// `passwordShown(n)` on its nth call; every other page script reads as false.
+const clientFor = async (
+  opts: {
+    readonly messages?: ReadonlyArray<{ readonly role: string; readonly name: string }>;
+    readonly url?: string;
+    readonly passwordShown?: (call: number) => boolean;
+  } = {},
+): Promise<{ readonly fake: FakeClient; readonly client: BrowserClient }> => {
+  let passwordChecks = 0;
   const fake = await createFakeClient({
     canned: {
       "Accessibility.getFullAXTree": EXPORT_PAGE,
@@ -53,11 +61,15 @@ const clientFor = async (opts: { readonly messages?: ReadonlyArray<{ readonly ro
       "Runtime.callFunctionOn": evaluated({ status: "ok", value: "2026-10", label: "2026-10" }),
       "Page.navigate": ok({ frameId: "f1" }),
     },
-    evaluate: (expression) => ok(expression.includes("liveMessages") ? (opts.messages ?? []) : false),
+    evaluate: (expression) => {
+      if (expression.includes("liveMessages")) return ok(opts.messages ?? []);
+      if (expression.includes("hasVisiblePasswordField")) return ok(opts.passwordShown?.(++passwordChecks) ?? false);
+      return ok(false);
+    },
   });
   const client = withClient(fake.client, {
     listTabs: () => Promise.resolve(ok(ONE_TAB)),
-    pageInfo: () => Promise.resolve(pageInfoOf({ url: "https://billing.test/invoices" })),
+    pageInfo: () => Promise.resolve(pageInfoOf({ url: opts.url ?? "https://billing.test/invoices" })),
   });
   return { fake, client };
 };
@@ -169,5 +181,31 @@ describe("recipe replay", () => {
 
     assert.ok(!outcome.ok, "expected the replay to fail");
     assert.equal(outcome.failure.step, 1);
+  });
+
+  test("SC39: a visible password field showing when step 2 is about to run fails step 2 as an auth wall with no Input call sent for it", async () => {
+    const { fake, client } = await clientFor({ passwordShown: (call) => call >= 2 });
+    const recipe = recipeOf([{ action: "navigate", args: { url: "https://billing.test/invoices" } }, clickExport()]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+
+    assert.ok(!outcome.ok, "expected the replay to stop at the auth wall");
+    assert.equal(outcome.failure.step, 2);
+    assert.equal(outcome.failure.authWall, true);
+    assert.deepEqual(fake.calls.filter((c) => c.method.startsWith("Input.")), []);
+  });
+
+  test("SC40: a recipe on billing.test that navigates to sso.billing.test stops as an auth wall on login.other.test but runs on sso.billing.test", async () => {
+    const recipe = recipeOf([{ action: "navigate", args: { url: "https://sso.billing.test/login" } }]);
+    const elsewhere = await clientFor({ url: "https://login.other.test/signin" });
+    const sso = await clientFor({ url: "https://sso.billing.test/login" });
+
+    const stopped = await runRecipe({ client: elsewhere.client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+    const ran = await runRecipe({ client: sso.client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+
+    assert.ok(!stopped.ok, "expected the replay on login.other.test to stop");
+    assert.equal(stopped.failure.authWall, true);
+    assert.match(stopped.failure.reason, /login\.other\.test/);
+    assert.deepEqual(ran, { ok: true, steps: 1 });
   });
 });

@@ -1,9 +1,9 @@
 import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { agentDir } from "../profile/paths";
 import { type Result, err, ok } from "../util/result";
-import { type LastRun, type Recipe, parseRecipe, stringifyRecipe } from "./recipe";
+import { type LastRun, RECIPE_SITE, type Recipe, parseRecipe, stringifyRecipe } from "./recipe";
 
 export type StoredRecipe = { readonly recipe: Recipe; readonly path: string; readonly root: string };
 
@@ -75,6 +75,9 @@ const writeAtomic = async (path: string, text: string): Promise<void> => {
 // A save over an existing recipe keeps the old file under .history and bumps the version (R5).
 export const saveRecipe = async (root: string, recipe: Recipe): Promise<Result<StoredRecipe, string>> => {
   const dir = join(root, recipe.site);
+  if (!RECIPE_SITE.test(recipe.site) || !resolve(dir).startsWith(resolve(root) + sep)) {
+    return err(`refusing to save recipe ${recipe.name}: site "${recipe.site}" is not a host name`);
+  }
   const path = join(dir, `${recipe.name}.yaml`);
   try {
     await mkdir(dir, { recursive: true });
