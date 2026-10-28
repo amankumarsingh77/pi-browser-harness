@@ -208,4 +208,18 @@ describe("recipe replay", () => {
     assert.match(stopped.failure.reason, /login\.other\.test/);
     assert.deepEqual(ran, { ok: true, steps: 1 });
   });
+
+  test("SC66: a sign-in form that renders only after the navigate step returns fails step 2 as an auth wall, not as a missing \"Download statement\" button", async () => {
+    // Clear before step 1 and before step 2; the password field shows by the time the button lookup has failed.
+    const { client } = await clientFor({ passwordShown: (call) => call >= 3 });
+    const download: RecipeStep = { action: "click", args: {}, locator: { role: "button", name: "Download statement", nth: 0 } };
+    const recipe = recipeOf([{ action: "navigate", args: { url: "https://billing.test/account.html" } }, download]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+
+    assert.ok(!outcome.ok, "expected the replay to stop");
+    assert.equal(outcome.failure.step, 2);
+    assert.equal(outcome.failure.authWall, true);
+    assert.match(outcome.failure.reason, /^auth wall: .*password field/);
+  });
 });

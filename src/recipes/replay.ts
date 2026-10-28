@@ -209,14 +209,19 @@ export const runRecipe = async (opts: {
   const { client, recipe, params } = opts;
   const ctx: ReplayCtx = { client, signal: opts.signal, extensionCtx: opts.extensionCtx };
   const journal = activeJournal();
-  const fail = async (step: number, s: RecipeStep, reason: string, authWall = false): Promise<ReplayOutcome> => {
+  const hosts = knownHosts(recipe, params);
+  // A navigate returns before the next page renders, so a sign-in form can appear only after the check before a
+  // step; looking again here keeps it from being reported as an ordinary missing element.
+  const fail = async (step: number, s: RecipeStep, failure: string, wallFound = false): Promise<ReplayOutcome> => {
+    const wall = wallFound ? undefined : await authWall(client, hosts);
+    const reason = wall !== undefined ? `auth wall: ${wall}` : failure;
+    const isWall = wallFound || wall !== undefined;
     await journal
       ?.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { ...params }, password: false, url: await currentUrl(client), ok: false, error: reason, recipe: { name: recipe.name, step } })
       .catch(() => undefined);
-    return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall } };
+    return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall: isWall } };
   };
 
-  const hosts = knownHosts(recipe, params);
   for (const [i, step] of recipe.steps.entries()) {
     const n = i + 1;
     const wall = await authWall(client, hosts);
