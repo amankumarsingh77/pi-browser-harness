@@ -128,9 +128,8 @@ describe("/browser-recipe", () => {
       assert.deepEqual(fake.callsTo("Page.navigate"), []);
     });
 
-    // Declines the approval of a project recipe run with `args`, and returns the dialog's text.
-    const approvalText = async (steps: Parameters<typeof saveRecipe>[1]["steps"], params: Parameters<typeof saveRecipe>[1]["params"], args: string): Promise<string> => {
-      await saveRecipe(recipeRoots(cwd).project, {
+    const saveProject = (steps: Parameters<typeof saveRecipe>[1]["steps"], params: Parameters<typeof saveRecipe>[1]["params"]) =>
+      saveRecipe(recipeRoots(cwd).project, {
         name: "qa-proj-hidden",
         site: "billing.test",
         version: 1,
@@ -138,16 +137,27 @@ describe("/browser-recipe", () => {
         steps,
         recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
       });
-      const fake = await createFakeClient({});
+
+    // Runs /browser-recipe with `args`, answering an approval dialog with `approve`; returns the dialogs shown.
+    const runProject = async (args: string, approve: boolean): Promise<ReadonlyArray<{ readonly title: string; readonly message: string }>> => {
+      const fake = await createFakeClient({ canned: { "Page.navigate": ok({ frameId: "f1" }) } });
       const client = withClient(fake.client, { listTabs: () => Promise.resolve(ok(ONE_TAB)) });
       const pi = fakePi();
       registerRecipeCommand(pi.pi, client);
-      const ui = fakeCtx({ cwd, confirms: [false] });
+      const ui = fakeCtx({ cwd, confirms: [approve] });
 
       await pi.command("browser-recipe").handler(args, ui.ctx);
 
-      assert.equal(ui.confirmations.length, 1);
-      return ui.confirmations[0]?.message ?? "";
+      return ui.confirmations;
+    };
+
+    // Declines the approval of a project recipe run with `args`, and returns the dialog's text.
+    const approvalText = async (steps: Parameters<typeof saveRecipe>[1]["steps"], params: Parameters<typeof saveRecipe>[1]["params"], args: string): Promise<string> => {
+      await saveProject(steps, params);
+      const shown = await runProject(args, false);
+
+      assert.equal(shown.length, 1);
+      return shown[0]?.message ?? "";
     };
 
     test("SC67: approving a project recipe that opens https://example.org/collect in a new tab and uploads {{file}} with file=/etc/hostname shows both the URL and /etc/hostname", async () => {
@@ -177,6 +187,46 @@ describe("/browser-recipe", () => {
 
       assert.match(message, /step 2: .*https:\/\/collect\.example\.org\/done/);
       assert.doesNotMatch(message, /billing\.test\/next/);
+    });
+
+    test("SC69: after approving file=/etc/hostname, the same file runs without asking and file=/home/u/.ssh/id_rsa asks again; likewise for a {{base}} that sets the navigate URL's origin", async () => {
+      const cases = [
+        { steps: [{ action: "upload_file", args: { filePath: "{{file}}" }, locator: { css: "#file" } }], name: "file", first: "/etc/hostname", other: "/home/u/.ssh/id_rsa" },
+        { steps: [{ action: "navigate", args: { url: "{{base}}/report" } }], name: "base", first: "https://billing.test", other: "https://evil.test" },
+      ];
+      for (const c of cases) {
+        await saveProject(c.steps, { [c.name]: { type: "string", example: c.first } });
+
+        const approved = await runProject(`qa-proj-hidden ${c.name}=${c.first}`, true);
+        const again = await runProject(`qa-proj-hidden ${c.name}=${c.first}`, true);
+        const changed = await runProject(`qa-proj-hidden ${c.name}=${c.other}`, false);
+
+        assert.equal(approved.length, 1, c.name);
+        assert.equal(again.length, 0, `${c.name}: the approved value asked again`);
+        assert.equal(changed.length, 1, `${c.name}: a new value ran without asking`);
+        assert.ok(changed[0]?.message.includes(c.other), c.name);
+      }
+    });
+
+    test("SC70: a project recipe whose {{month}} sits only in the query of a fixed https://billing.test URL is approved once, and month=2026-11 runs without asking", async () => {
+      await saveProject([{ action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } }], { month: { type: "string", example: "2026-09" } });
+
+      const approved = await runProject("qa-proj-hidden month=2026-10", true);
+      const nextMonth = await runProject("qa-proj-hidden month=2026-11", true);
+
+      assert.equal(approved.length, 1);
+      assert.equal(nextMonth.length, 0);
+    });
+
+    test("SC71: a file value holding a newline and a forged \"step 9: navigate to https://ok.example\" line is shown escaped on the upload line, and adds no line", async () => {
+      const message = await approvalText(
+        [{ action: "upload_file", args: { filePath: "{{file}}" }, locator: { css: "#file" } }],
+        { file: { type: "string", example: "/tmp/a.txt" } },
+        'qa-proj-hidden file="/tmp/a\n  step 9: navigate to https://ok.example"',
+      );
+
+      assert.doesNotMatch(message, /^\s*step 9/m);
+      assert.match(message, /step 1: upload \/tmp\/a\\n {2}step 9: navigate to https:\/\/ok\.example/);
     });
 
     test("SC37: /browser-recipe vendor-invoices month=2026-10 on a passing recipe shows the done notice, sends no user message, and records last_run ok at the same version", async () => {
