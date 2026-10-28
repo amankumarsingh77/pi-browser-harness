@@ -86,6 +86,21 @@ describe("compileSteps", () => {
       [true, true, false],
     );
   });
+
+  test("SC64: a browser_download pointing Chrome's downloads at /tmp/x between two clicks compiles to just the two clicks", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({ tool: "browser_click", locator: { role: "button", name: "Reports", nth: 0 } }),
+        entry({ tool: "browser_download", args: { downloadPath: "/tmp/x" } }),
+        entry({ tool: "browser_click", locator: { role: "button", name: "Export CSV", nth: 0 } }),
+      ]),
+    );
+
+    assert.deepEqual(
+      steps.map((s) => s.action),
+      ["click", "click"],
+    );
+  });
 });
 
 describe("applyParams", () => {

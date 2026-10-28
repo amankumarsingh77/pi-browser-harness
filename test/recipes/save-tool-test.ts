@@ -194,4 +194,13 @@ describe("repairSteps", () => {
     assert.ok(r.success, r.success ? "" : r.error);
     assert.deepEqual(r.data.steps[1]?.args, { label: "{{month}}" });
   });
+
+  test("SC65: a repair that set Chrome's downloads to /tmp/x before clicking Download CSV keeps only the click, not the download folder", () => {
+    const download = entry({ tool: "browser_download", args: { downloadPath: "/tmp/x" } });
+
+    const r = repairSteps(recipe, [failedAt(3), download, agentClick("Download CSV")], 3);
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data.steps, [FOUR_STEPS[0], FOUR_STEPS[1], click("button", "Download CSV")]);
+  });
 });
