@@ -252,4 +252,49 @@ describe("recipe journal recording", () => {
     assert.deepEqual(result.content, [{ type: "text", text: "Clicked at (10, 20)" }]);
     assert.equal(appends, 1, "the journal was never asked to append, so the rejection went untested");
   });
+
+  test("SC61: four clicks in one run append the save-recipe offer hint to the third click's result only", async () => {
+    await journal.beginRun();
+    setCallObserver(observeCall);
+    const client = await clientFor({
+      canned: {
+        "Accessibility.getFullAXTree": tree(),
+        "Runtime.evaluate": ok({ result: { type: "object", subtype: "null", value: null } }),
+      },
+    });
+    let registered: unknown;
+    const pi: Pick<ExtensionAPI, "registerTool"> = {
+      registerTool: (td) => {
+        registered = td;
+      },
+    };
+    defineBrowserTool({ ...clickTool, ensureAlive: false }).register(pi, client);
+    assert.ok(isRegisteredTool(registered), "click was not registered");
+    const click = registered;
+
+    const texts: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const result = await click.execute("id", { x: 10, y: 20 }, undefined, undefined, handlerContext(client).extensionCtx);
+      const [first] = result.content;
+      texts.push(first?.type === "text" ? first.text : "");
+    }
+
+    const hinted = texts.map((t) => t.includes("browser_save_recipe"));
+    assert.deepEqual(hinted, [false, false, true, false]);
+    assert.match(texts[2] ?? "", /^Clicked at \(10, 20\)\n\n.*offer.*once/s);
+  });
+
+  test("SC62: after a failed replay in the run, the third click gets no save-recipe hint, since repair is the next step", async () => {
+    await journal.beginRun();
+    await journal.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: {}, password: false, url: BEFORE_URL, ok: false, recipe: { name: "r", step: 2 } });
+    const client = await clientFor({});
+
+    const notes: Array<string | undefined> = [];
+    for (let i = 0; i < 3; i++) {
+      const finish = await observeCall({ name: "browser_click", concurrency: "serialized", args: { x: 1, y: 1 }, client });
+      notes.push(await finish?.({ ok: true }));
+    }
+
+    assert.deepEqual(notes, [undefined, undefined, undefined]);
+  });
 });

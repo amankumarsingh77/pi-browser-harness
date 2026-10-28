@@ -8,7 +8,7 @@ import { refreshRefs } from "../domains/ref-resolve";
 import { safeJs } from "../util/js-template";
 import type { CallObserver, JsonObject } from "../util/tool";
 import { isRecord } from "../util/guards";
-import { type JournalFieldEntry, type Locator, type ObservedChange, activeJournal } from "./journal";
+import { type Journal, type JournalFieldEntry, type Locator, type ObservedChange, activeJournal } from "./journal";
 
 // How a replayable tool names its element: by `ref`/`selector`/x-y, by a `fields` list, or not at all.
 export const REPLAYABLE: ReadonlyMap<string, "ref" | "fields" | "none"> = new Map([
@@ -52,6 +52,21 @@ const IGNORED: ReadonlySet<string> = new Set(["browser_setup", "browser_web_sear
 
 const HANDLE_KEYS: ReadonlySet<string> = new Set(["ref", "selector", "x", "y"]);
 const MAX_APPEARED = 5;
+
+// Steps a task needs before it is worth saving. The hint rides on the result that reaches this count, so it is shown
+// once per run however long the task goes on; a run with a failed replay is left alone, since its next step is repair.
+const SAVE_HINT_STEPS = 3;
+const SAVE_HINT =
+  "This browser task is now several replayable steps long. When the whole task is done, end your final message with one offer to save it as a recipe with browser_save_recipe (a proposed name and params). Offer once; do not repeat it.";
+
+const saveHint = async (journal: Journal): Promise<string | undefined> => {
+  const entries = await journal.entries();
+  const run = entries[entries.length - 1]?.run;
+  const current = entries.filter((e) => e.run === run);
+  if (current.some((e) => e.tool === "browser_run_recipe")) return undefined;
+  const steps = current.filter((e) => e.source === "agent" && e.ok && e.replayable).length;
+  return steps === SAVE_HINT_STEPS ? SAVE_HINT : undefined;
+};
 
 const FOCUSED_IS_PASSWORD_EXPR = "(" + pageFunctionSource(focusedIsPassword) + ")()";
 const INTERACTIVE_AT_SRC = "(" + pageFunctionSource(interactiveAt) + ")";
@@ -192,7 +207,8 @@ const fieldsOf = async (client: BrowserClient, args: Readonly<Record<string, unk
 };
 
 // Watches one tool call for the journal. Returns undefined when the call is not journaled, otherwise the function
-// that records the outcome. Any error inside is dropped: observing must never change the call it watches.
+// that records the outcome and returns the save hint when this call is due one. Any error inside is dropped:
+// observing must never change whether the call it watches succeeds.
 export const observeCall: CallObserver = async ({ name, concurrency, args, client }) => {
   const journal = activeJournal();
   if (journal === undefined || IGNORED.has(name) || !isRecord(args)) return undefined;
@@ -239,8 +255,10 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
           ...(outcome.error !== undefined ? { error: outcome.error } : {}),
           ...(change !== undefined ? { change } : {}),
         });
+        return outcome.ok && mode !== undefined ? await saveHint(journal) : undefined;
       } catch {
         // Journal write failures are dropped; the tool already ran.
+        return undefined;
       }
     };
   } catch {

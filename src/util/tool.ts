@@ -12,7 +12,7 @@ import type {
 import { type Component, Text } from "@mariozechner/pi-tui";
 import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
-import { type Result, err } from "./result";
+import { type Result, err, ok } from "./result";
 
 // Details are stored by pi as JSON and handed back on replay, so a renderer only ever reads them.
 export type DeepReadonly<T> = T extends ReadonlyArray<infer U>
@@ -144,13 +144,14 @@ const notConnected = (message: string): Result<never, ToolErr> =>
 export type CallOutcome = { readonly ok: boolean; readonly error?: string };
 
 // Watches a tool call from outside the tool (the recipe journal). Returns the function that receives the call's
-// outcome, or undefined to skip the call. Errors it throws are swallowed by runHandler.
+// outcome and may return a note for the end of a successful result, or undefined to skip the call. Errors it throws
+// are swallowed by runHandler.
 export type CallObserver = (call: {
   readonly name: string;
   readonly concurrency: ToolConcurrency;
   readonly args: unknown;
   readonly client: BrowserClient;
-}) => Promise<((outcome: CallOutcome) => Promise<void>) | undefined>;
+}) => Promise<((outcome: CallOutcome) => Promise<string | undefined>) | undefined>;
 
 let callObserver: CallObserver | undefined;
 export const setCallObserver = (o: CallObserver | undefined): void => {
@@ -188,8 +189,8 @@ const runHandler = async <S extends TSchema, D extends TSchema>(
       onUpdate: (u) => onUpdate?.(okResult(u)),
       extensionCtx,
     });
-    await finish?.(result.success ? { ok: true } : { ok: false, error: result.error.message }).catch(() => undefined);
-    return result;
+    const note = await finish?.(result.success ? { ok: true } : { ok: false, error: result.error.message }).catch(() => undefined);
+    return result.success && note !== undefined ? ok({ ...result.data, text: `${result.data.text}\n\n${note}` }) : result;
   } catch (e) {
     // A throw is a bug in the handler, not a tool outcome; it still has to reach the model as an error.
     const message = e instanceof Error ? e.message : String(e);
