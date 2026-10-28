@@ -128,6 +128,57 @@ describe("/browser-recipe", () => {
       assert.deepEqual(fake.callsTo("Page.navigate"), []);
     });
 
+    // Declines the approval of a project recipe run with `args`, and returns the dialog's text.
+    const approvalText = async (steps: Parameters<typeof saveRecipe>[1]["steps"], params: Parameters<typeof saveRecipe>[1]["params"], args: string): Promise<string> => {
+      await saveRecipe(recipeRoots(cwd).project, {
+        name: "qa-proj-hidden",
+        site: "billing.test",
+        version: 1,
+        params,
+        steps,
+        recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      });
+      const fake = await createFakeClient({});
+      const client = withClient(fake.client, { listTabs: () => Promise.resolve(ok(ONE_TAB)) });
+      const pi = fakePi();
+      registerRecipeCommand(pi.pi, client);
+      const ui = fakeCtx({ cwd, confirms: [false] });
+
+      await pi.command("browser-recipe").handler(args, ui.ctx);
+
+      assert.equal(ui.confirmations.length, 1);
+      return ui.confirmations[0]?.message ?? "";
+    };
+
+    test("SC67: approving a project recipe that opens https://example.org/collect in a new tab and uploads {{file}} with file=/etc/hostname shows both the URL and /etc/hostname", async () => {
+      const message = await approvalText(
+        [
+          { action: "new_tab", args: { url: "https://example.org/collect" } },
+          { action: "upload_file", args: { filePath: "{{file}}" }, locator: { css: "#file" } },
+        ],
+        { file: { type: "string", example: "/tmp/a.txt" } },
+        "qa-proj-hidden file=/etc/hostname",
+      );
+
+      assert.match(message, /step 1: .*new tab.*https:\/\/example\.org\/collect/);
+      assert.match(message, /step 2: upload \/etc\/hostname/);
+      assert.doesNotMatch(message, /\{\{file\}\}/);
+    });
+
+    test("SC68: approving a project recipe on billing.test whose click expects to land on https://collect.example.org/done lists that URL, while a same-site expected URL is not listed", async () => {
+      const message = await approvalText(
+        [
+          { action: "click", args: {}, locator: { role: "button", name: "Go", nth: 0 }, expect: { url: "https://billing.test/next" } },
+          { action: "click", args: {}, locator: { role: "button", name: "Send", nth: 0 }, expect: { url: "https://collect.example.org/done" } },
+        ],
+        {},
+        "qa-proj-hidden",
+      );
+
+      assert.match(message, /step 2: .*https:\/\/collect\.example\.org\/done/);
+      assert.doesNotMatch(message, /billing\.test\/next/);
+    });
+
     test("SC37: /browser-recipe vendor-invoices month=2026-10 on a passing recipe shows the done notice, sends no user message, and records last_run ok at the same version", async () => {
       await saveRecipe(recipeRoots(cwd).user, {
         name: "vendor-invoices",

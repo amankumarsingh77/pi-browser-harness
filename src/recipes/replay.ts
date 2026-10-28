@@ -76,10 +76,10 @@ const REPLAYERS: ReadonlyMap<string, Replayer> = new Map([
 const EXPECT_TIMEOUT_MS = 5_000;
 const POLL_MS = 250;
 
-const fill = (s: string, params: Readonly<Record<string, string>>): string =>
+export const fill = (s: string, params: Readonly<Record<string, string>>): string =>
   s.replace(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g, (whole, name: string) => params[name] ?? whole);
 
-const fillArgs = (args: JsonObject, params: Readonly<Record<string, string>>): JsonObject => {
+export const fillArgs = (args: JsonObject, params: Readonly<Record<string, string>>): JsonObject => {
   const out: Record<string, JsonObject[string]> = {};
   for (const [k, v] of Object.entries(args)) out[k] = typeof v === "string" ? fill(v, params) : v;
   return out;
@@ -169,7 +169,7 @@ const currentUrl = async (client: BrowserClient): Promise<string> => {
 
 const HAS_PASSWORD_EXPR = "(" + pageFunctionSource(hasVisiblePasswordField) + ")()";
 
-const hostOf = (url: string): string | undefined => {
+export const hostOf = (url: string): string | undefined => {
   try {
     return new URL(url).hostname;
   } catch {

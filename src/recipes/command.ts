@@ -57,7 +57,7 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
         ctx.ui.notify(`Recipe ${name} needs: ${missing.map((p) => `${p}=… (e.g. ${stored.data.recipe.params[p]?.example ?? ""})`).join(" ")}`, "error");
         return;
       }
-      const approved = await approveProjectRecipe(ctx, stored.data);
+      const approved = await approveProjectRecipe(ctx, stored.data, params);
       if (!approved.success) {
         ctx.ui.notify(approved.error, "error");
         return;

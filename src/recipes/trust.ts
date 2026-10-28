@@ -5,7 +5,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { agentDir } from "../profile/paths";
 import { isRecord } from "../util/guards";
 import { type Result, err, ok } from "../util/result";
-import { describeStep } from "./replay";
+import { describeStep, fill, fillArgs, hostOf } from "./replay";
 import { type StoredRecipe, recipeRoots } from "./store";
 
 // A project recipe's absolute path -> sha256 of the file bytes the user approved.
@@ -51,15 +51,21 @@ export const trustWritten = async (stored: StoredRecipe, cwd: string): Promise<v
   if (bytes !== undefined) await trust(stored.path, bytes).catch(() => undefined);
 };
 
-// What a project recipe can do outside the page: where it goes, which local files it sends, what it downloads.
-const approvalBody = (stored: StoredRecipe): string => {
+// What a project recipe can do outside the page: where it goes, which local files it sends, what it downloads. Shown
+// with this run's params filled in, since a {{placeholder}} hides exactly what the user is approving.
+const approvalBody = (stored: StoredRecipe, params: Readonly<Record<string, string>>): string => {
   const { recipe } = stored;
   const lines = recipe.steps.flatMap((s, i) => {
-    const url = s.args["url"];
-    const file = s.args["filePath"];
-    if (s.action === "navigate" && typeof url === "string") return [`  step ${i + 1}: navigate to ${url}`];
-    if (s.action === "upload_file" && typeof file === "string") return [`  step ${i + 1}: upload ${file}`];
-    if (s.action === "download") return [`  step ${i + 1}: ${describeStep(s)}${typeof s.args["downloadPath"] === "string" ? ` to ${s.args["downloadPath"]}` : ""}`];
+    const at = `  step ${i + 1}:`;
+    const args = fillArgs(s.args, params);
+    const url = args["url"];
+    const file = args["filePath"];
+    const lands = s.expect?.url !== undefined ? fill(s.expect.url, params) : undefined;
+    if (s.action === "navigate" && typeof url === "string") return [`${at} navigate to ${url}`];
+    if (s.action === "new_tab" && typeof url === "string") return [`${at} open a new tab at ${url}`];
+    if (s.action === "upload_file" && typeof file === "string") return [`${at} upload ${file}`];
+    if (s.action === "download") return [`${at} ${describeStep(s)}${typeof args["downloadPath"] === "string" ? ` to ${args["downloadPath"]}` : ""}`];
+    if (lands !== undefined && hostOf(lands) !== recipe.site) return [`${at} ${describeStep(s)}, landing on ${lands}`];
     return [];
   });
   return [`File: ${stored.path}`, `Site: ${recipe.site}`, ...(lines.length > 0 ? ["", ...lines] : []), "", `${recipe.steps.length} steps`].join("\n");
@@ -67,14 +73,18 @@ const approvalBody = (stored: StoredRecipe): string => {
 
 // A recipe from the project's .pi/browser-recipes was written by whoever wrote the repo and replays with no model in
 // the loop, so its exact bytes must be approved once before it runs. Recipes under the agent dir are the user's own.
-export const approveProjectRecipe = async (ctx: ExtensionContext, stored: StoredRecipe): Promise<Result<void, string>> => {
+export const approveProjectRecipe = async (
+  ctx: ExtensionContext,
+  stored: StoredRecipe,
+  params: Readonly<Record<string, string>>,
+): Promise<Result<void, string>> => {
   if (!isProject(stored, ctx.cwd)) return ok(undefined);
   const name = stored.recipe.name;
   const bytes = await readFile(stored.path).catch(() => undefined);
   if (bytes === undefined) return err(`recipe ${name} could not be read at ${stored.path}`);
   if (await isTrusted(stored.path, bytes)) return ok(undefined);
   if (!ctx.hasUI) return err(`recipe ${name} is a project recipe that has not been approved; run it once in an interactive session to approve it`);
-  if (!(await ctx.ui.confirm(`Run project recipe ${name}?`, approvalBody(stored)))) return err(`recipe ${name} not run: not approved`);
+  if (!(await ctx.ui.confirm(`Run project recipe ${name}?`, approvalBody(stored, params)))) return err(`recipe ${name} not run: not approved`);
   await trust(stored.path, bytes);
   return ok(undefined);
 };

@@ -98,7 +98,7 @@ export const runRecipeTool = defineBrowserTool({
       const hints = missing.map((p) => `${p} (e.g. ${stored.data.recipe.params[p]?.example ?? ""})`).join(", ");
       return err({ kind: "invalid_args", message: `Recipe ${args.name} needs params: ${hints}` });
     }
-    const approved = await approveProjectRecipe(extensionCtx, stored.data);
+    const approved = await approveProjectRecipe(extensionCtx, stored.data, params);
     if (!approved.success) return err({ kind: "invalid_state", message: approved.error });
     const outcome = await runRecipe({ client, extensionCtx, recipe: stored.data.recipe, params, ...(signal !== undefined ? { signal } : {}) });
     const at = new Date().toISOString();
