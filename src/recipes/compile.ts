@@ -87,9 +87,18 @@ export const applyParams = (
   return ok(out);
 };
 
+const OPENS_URL: ReadonlySet<string> = new Set(["browser_navigate", "browser_new_tab"]);
+
+// A call that opens a page is on the page it opened; its e.url is the tab it started from, which may be another site.
+const pageOf = (e: JournalEntry): string => {
+  if (!OPENS_URL.has(e.tool)) return e.url;
+  const url = e.args["url"];
+  return typeof url === "string" ? url : (e.change?.url ?? "");
+};
+
 export const siteOf = (entries: ReadonlyArray<JournalEntry>): string => {
   for (const e of entries) {
-    const url = e.tool === "browser_navigate" && typeof e.args["url"] === "string" ? e.args["url"] : e.url;
+    const url = pageOf(e);
     try {
       const host = new URL(url).hostname;
       if (RECIPE_SITE.test(host)) return host;

@@ -132,4 +132,18 @@ describe("siteOf", () => {
 
     assert.equal(site, "unknown-site");
   });
+
+  test("SC63: a task that opens http://127.0.0.1:8765/ in a new tab from a github.com tab is on 127.0.0.1, not the previous tab's github.com", () => {
+    const cases: ReadonlyArray<{ readonly name: string; readonly entries: ReadonlyArray<JournalEntry> }> = [
+      { name: "new_tab with a url", entries: [entry({ tool: "browser_new_tab", url: "https://github.com/", args: { url: "http://127.0.0.1:8765/" } })] },
+      {
+        name: "blank new_tab, then navigate",
+        entries: [
+          entry({ tool: "browser_new_tab", url: "https://github.com/", change: { url: "about:blank", appeared: [] } }),
+          entry({ tool: "browser_navigate", url: "about:blank", args: { url: "http://127.0.0.1:8765/" } }),
+        ],
+      },
+    ];
+    for (const c of cases) assert.equal(siteOf(c.entries), "127.0.0.1", c.name);
+  });
 });
