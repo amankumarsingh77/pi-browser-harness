@@ -46,6 +46,15 @@ and tool-specific guidelines.
   before a mutation to confirm the expected tab when another agent may switch it.
 - Read any appended "Page changes" diff to confirm an interaction. Tools without a
   diff, including \`browser_run_script\`, need explicit state verification.
+- Pages commonly render several near-identical forms in one view (edit dialogs, reply
+  boxes, comment panels, filter bars). Distinguish targets by the enclosing form's
+  \`action\` or a unique field \`id\` — never selector first-match — and confirm the
+  filled/returned value identifies the form you meant before submitting.
+- For irreversible submits (posting, deleting, paying, sending): take
+  \`browser_screenshot\` to confirm the intended target first, then verify the result by
+  its artifact — re-read the page, follow the redirect URL, or query the backend — rather
+  than trusting the DOM you just mutated. \`form.requestSubmit()\` succeeding is not proof
+  the right form submitted.
 - If a tool reports "ref is stale", call \`browser_snapshot\` for fresh refs before
   retrying; do not reuse the stale handle.
 `;

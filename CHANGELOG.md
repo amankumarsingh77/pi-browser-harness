@@ -2,6 +2,35 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **WSL support for a browser running on the Windows side.** Discovery now finds Windows browser
+  profiles through `/mnt`, treats their `DevToolsActivePort` as evidence of a running browser (so
+  `/browser-setup` no longer fails with "No browser instance running" under WSL), and dials the
+  debug port at `127.0.0.1` first, then the Windows host address on the WSL NAT subnet — so it
+  works unchanged under mirrored networking and needs only a one-time `netsh portproxy` in NAT
+  mode. Discovery failures against the Windows host now print the exact portproxy/firewall
+  command with the port already filled in (`src/profile/wsl.ts`).
+- **`/browser-setup` no longer probes for a local browser when `BU_CDP_WS` is set.** An explicit
+  endpoint implies the browser exists; the Linux process probe cannot see browsers on other
+  machines or on the Windows side of WSL and would wrongly refuse setup.
+- **Windows-side browsers using a fixed debug port are detected too.** Chromium writes
+  `DevToolsActivePort` only for ephemeral-port debugging (`--remote-debugging-port=0`) and the
+  `chrome://inspect` toggle — a fixed-port launch writes none. Detection falls back to the
+  Windows process probe (interop `powershell.exe`/`tasklist.exe`), and discovery's failure
+  message names the fixed-port gap with the `BU_CDP_WS` path out.
+- **Fallback-port discovery under WSL dials every candidate host, not just the loopback.** The
+  `BU_CDP_PORTS`/9222 fallback path (which applies when no `DevToolsActivePort` file exists)
+  now probes `127.0.0.1` and the Windows host address like the file-based path already did.
+- **Model guidance for near-identical forms and irreversible submits.** The browser system
+  prompt and the `browser_fill`/`browser_execute_js` guidelines now cover distinguishing
+  sibling forms by form `action`/field `id` (several near-identical forms on one page is
+  common), confirming the target with a screenshot before irreversible submits, and
+  verifying the result by its artifact (redirect URL, backend read) rather than the just-
+  mutated DOM.
+
 ## 0.13.0 — 2026-10-20
 
 ### Fixed

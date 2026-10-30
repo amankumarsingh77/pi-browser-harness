@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../schemas/parse";
 import { browserNameForUserDataDir } from "./paths";
+import { isWSL, wslWindowsBrowserRunning } from "./wsl";
 
 const run = promisify(execFile);
 const EXEC_TIMEOUT_MS = 5_000;
@@ -308,13 +309,41 @@ const winRegistryExecutable = async (): Promise<string | undefined> => {
   return undefined;
 };
 
-export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<RunningBrowser> => {
+export type RunningBrowserDetectDeps = {
+  readonly collectDarwin?: () => Promise<ReadonlyArray<BrowserCandidate>>;
+  readonly collectWin32?: () => Promise<ReadonlyArray<BrowserCandidate>>;
+  readonly collectLinux?: () => Promise<ReadonlyArray<BrowserCandidate>>;
+  readonly isWSL?: () => boolean;
+  readonly wslWindowsBrowserRunning?: () => boolean;
+};
+
+const defaultDetectDeps: Required<RunningBrowserDetectDeps> = {
+  collectDarwin, collectWin32, collectLinux,
+  isWSL, wslWindowsBrowserRunning,
+};
+
+export const detectRunningBrowser = async (
+  preferUserDataDir?: string,
+  deps: RunningBrowserDetectDeps = {},
+): Promise<RunningBrowser> => {
+  const d = { ...defaultDetectDeps, ...deps };
   const candidates =
     process.platform === "darwin"
-      ? await collectDarwin()
+      ? await d.collectDarwin()
       : process.platform === "win32"
-        ? await collectWin32()
-        : await collectLinux();
+        ? await d.collectWin32()
+        : await d.collectLinux();
+  // Under WSL the browser usually runs on Windows; ps//proc legitimately sees nothing. Two
+  // Windows-side signals, in descending order of attachability:
+  //   1. DevToolsActivePort readable through /mnt — running AND debug-attachable. That file is
+  //      only written for ephemeral-port debugging and the chrome://inspect toggle; a fixed-port
+  //      launch writes none.
+  //   2. Windows browser processes via the existing interop probe — merely running, not
+  //      attachable. Setup proceeds and discovery's failure carries the actionable hint.
+  if (candidates.length === 0 && process.platform === "linux" && d.isWSL()) {
+    if (d.wslWindowsBrowserRunning()) return { running: true };
+    if ((await d.collectWin32()).length > 0) return { running: true };
+  }
   if (candidates.length === 0) return { running: false };
 
   const [first, ...rest] = candidates;

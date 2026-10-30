@@ -62,6 +62,7 @@ export const executeJsTool = defineBrowserTool({
     "For click coordinates not already in browser_snapshot: `JSON.stringify(document.querySelector('SELECTOR').getBoundingClientRect())` — beats a screenshot every time.",
     "For 'is this element visible / enabled / checked / focused', a one-liner here beats a screenshot every time.",
     "For iframes, first run `Object.values(document.querySelectorAll('iframe'))` to find the iframe, then pass its targetId.",
+    "JS evaluation is blind to visual state: before an irreversible submit (posting, deleting, paying), take browser_screenshot to confirm the target form — a matching selector is not proof of the right form when several share a name or field ids.",
     "Result must be JSON-serializable (Runtime.evaluate returnByValue=true).",
   ],
   parameters: ExecuteJsArgs,

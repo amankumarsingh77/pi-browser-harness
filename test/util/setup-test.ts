@@ -135,6 +135,21 @@ describe("performSetup", () => {
     assert.equal(c.started(), 0);
   });
 
+  test("an explicit BU_CDP_WS endpoint skips the local browser probe", async () => {
+    process.env["BU_CDP_WS"] = "ws://example.test:9222/devtools/browser/abc";
+    try {
+      const c = await setupClient();
+      const r = await performSetup(c.client, undefined, {
+        isBrowserRunning: () => Promise.resolve(false),
+        ensureDaemon: () => Promise.resolve(true),
+      });
+      assert.ok(r.success);
+      assert.equal(c.started(), 1);
+    } finally {
+      Reflect.deleteProperty(process.env, "BU_CDP_WS");
+    }
+  });
+
   test("a daemon that will not start names the socket path", async () => {
     const c = await setupClient();
     const r = await performSetup(c.client, undefined, { ...ready, ensureDaemon: () => Promise.resolve(false) });

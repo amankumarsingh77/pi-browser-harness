@@ -2,6 +2,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isWSL, wslWindowsProfileDataDirs } from "./wsl";
 
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 
@@ -86,6 +87,7 @@ export const userDataDirCandidates = (): ReadonlyArray<string> => {
       join(home, ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser"),
       join(home, ".var/app/com.microsoft.Edge/config/microsoft-edge"),
     );
+    if (isWSL()) dirs.push(...wslWindowsProfileDataDirs());
   }
 
   return Array.from(new Set(dirs));
