@@ -24,6 +24,12 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **Fallback-port discovery under WSL dials every candidate host, not just the loopback.** The
   `BU_CDP_PORTS`/9222 fallback path (which applies when no `DevToolsActivePort` file exists)
   now probes `127.0.0.1` and the Windows host address like the file-based path already did.
+- **Model guidance for near-identical forms and irreversible submits.** The browser system
+  prompt and the `browser_fill`/`browser_execute_js` guidelines now cover distinguishing
+  sibling forms by form `action`/field `id` (several near-identical forms on one page is
+  common), confirming the target with a screenshot before irreversible submits, and
+  verifying the result by its artifact (redirect URL, backend read) rather than the just-
+  mutated DOM.
 
 ## 0.13.0 — 2026-10-20
 
