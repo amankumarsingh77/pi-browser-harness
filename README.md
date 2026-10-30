@@ -497,6 +497,18 @@ flag, the first dial from a new browser session shows an in-browser **Allow** pr
 `/json/version` endpoint is disabled — both are handled; the WebSocket URL comes from the
 `DevToolsActivePort` file.
 
+Two browser-launch caveats:
+
+- **`chrome://inspect` or `--remote-debugging-port=0` will reliably write the** `DevToolsActivePort`
+  **file that this detection reads; a fixed-port launch (`--remote-debugging-port=9222`) writes
+  none.** With a fixed port the harness still detects the browser via the Windows process probe
+  and proceeds to setup, but discovery has nothing to read — either enable debugging through
+  `chrome://inspect` (which also makes the file), or set `BU_CDP_WS` to
+  `ws://127.0.0.1:<fixed-port>/<path from the browser>`. Note that Chrome-family builds refuse to
+  attach remote debugging to the default profile when it was launched with only a port flag.
+- A Windows-side browser found only as a running process (no file) counts as "running" but is not
+  attachable evidence — discovery still decides that, and its failure message carries the fix.
+
 ### Other
 
 | Symptom | Fix |

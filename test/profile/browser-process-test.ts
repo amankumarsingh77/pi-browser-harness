@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  detectRunningBrowser,
   isLinuxBrowserComm,
   parseProcCmdline,
   parseUserDataDirFlag,
@@ -204,5 +205,56 @@ describe("browser-process parsing and candidate ranking", () => {
       chmodSync(literal, 0o755);
       assert.equal(await spawnableExePath(literal), literal);
     });
+  });
+});
+
+describe("WSL: Windows-side browser detection fallback", () => {
+  const base = {
+    collectLinux: () => Promise.resolve([]),
+    collectWin32: () => Promise.resolve([]),
+    isWSL: () => true,
+  };
+
+  test("a Windows DevToolsActivePort through /mnt counts as running", async () => {
+    const r = await detectRunningBrowser(undefined, { ...base, wslWindowsBrowserRunning: () => true });
+    assert.equal(r.running, true);
+  });
+
+  test("without the file, Windows process evidence via the interop probe counts", async () => {
+    const winProbes: number[] = [];
+    const r = await detectRunningBrowser(undefined, {
+      ...base,
+      wslWindowsBrowserRunning: () => false,
+      collectWin32: () => { winProbes.push(1); return Promise.resolve([{}]); },
+    });
+    assert.equal(r.running, true);
+    assert.equal(winProbes.length, 1);
+  });
+
+  test("neither signal reads as not running", async () => {
+    const r = await detectRunningBrowser(undefined, { ...base, wslWindowsBrowserRunning: () => false });
+    assert.equal(r.running, false);
+  });
+
+  test("linux candidates short-circuit: the Windows signals are not consulted", async () => {
+    let probed = 0;
+    await detectRunningBrowser(undefined, {
+      ...base,
+      collectLinux: () => Promise.resolve([{ exePath: "/opt/chrome" }]),
+      wslWindowsBrowserRunning: () => { probed += 1; return true; },
+      collectWin32: () => { probed += 1; return Promise.resolve([{}]); },
+    });
+    assert.equal(probed, 0);
+  });
+
+  test("non-WSL linux reads as not running without consulting Windows signals", async () => {
+    let probed = 0;
+    const r = await detectRunningBrowser(undefined, {
+      collectLinux: () => Promise.resolve([]),
+      isWSL: () => false,
+      wslWindowsBrowserRunning: () => { probed += 1; return true; },
+    });
+    assert.equal(r.running, false);
+    assert.equal(probed, 0);
   });
 });

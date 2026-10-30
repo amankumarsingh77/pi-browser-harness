@@ -16,6 +16,14 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **`/browser-setup` no longer probes for a local browser when `BU_CDP_WS` is set.** An explicit
   endpoint implies the browser exists; the Linux process probe cannot see browsers on other
   machines or on the Windows side of WSL and would wrongly refuse setup.
+- **Windows-side browsers using a fixed debug port are detected too.** Chromium writes
+  `DevToolsActivePort` only for ephemeral-port debugging (`--remote-debugging-port=0`) and the
+  `chrome://inspect` toggle — a fixed-port launch writes none. Detection falls back to the
+  Windows process probe (interop `powershell.exe`/`tasklist.exe`), and discovery's failure
+  message names the fixed-port gap with the `BU_CDP_WS` path out.
+- **Fallback-port discovery under WSL dials every candidate host, not just the loopback.** The
+  `BU_CDP_PORTS`/9222 fallback path (which applies when no `DevToolsActivePort` file exists)
+  now probes `127.0.0.1` and the Windows host address like the file-based path already did.
 
 ## 0.13.0 — 2026-10-20
 

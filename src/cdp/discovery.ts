@@ -240,17 +240,22 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
 
   if (candidates.length === 0) {
     for (const port of fallbackPorts()) {
-      if (!(await isPortLive(port))) continue;
-      const live = await queryLiveWsUrl(port);
-      if (live) return ok({ wsUrl: live });
+      for (const host of fallbackProbeHosts()) {
+        if (!(await isPortLive(port, host))) continue;
+        const live = await queryLiveWsUrl(port, host);
+        if (live) return ok({ wsUrl: rewriteWsHost(live, host) });
+      }
     }
     const permHint = readErrors.length > 0
       ? `\n\nDevToolsActivePort reads were denied (${readErrors.join(", ")}); if you're running in a sandbox, grant read access to those files or set BU_CDP_WS / BU_CDP_PORTS to bypass file discovery.`
       : "";
-    return err(cdpError(
-      "discovery_failed",
-      `DevToolsActivePort not found in ${dirs.join(", ")} — open chrome://inspect/#remote-debugging (or brave://inspect, edge://inspect) in your browser, tick the checkbox, click Allow, then retry. Or set BU_CDP_WS to a remote browser endpoint.${permHint}`,
-    ));
+    const dirsListed = `DevToolsActivePort not found in ${dirs.join(", ")} — open chrome://inspect/#remote-debugging (or brave://inspect, edge://inspect) in your browser, tick the checkbox, click Allow, then retry. Or set BU_CDP_WS to a remote browser endpoint.`;
+    // Under WSL a fixed-port launch (--remote-debugging-port=<fixed>) writes no file at all —
+    // the checkbox toggle and --remote-debugging-port=0 both do. Name that gap explicitly.
+    const fixedPortHint = isWSL()
+      ? "\n\nWSL note: a browser launched with a fixed port (--remote-debugging-port=<fixed>) does not write DevToolsActivePort. Either enable debugging through chrome://inspect instead (that also makes the file), or set BU_CDP_WS to ws://127.0.0.1:<fixed-port>/<path-from-the-browser>."
+      : "";
+    return err(cdpError("discovery_failed", `${dirsListed}${fixedPortHint}${permHint}`));
   }
 
   const byHostPort = new Map<string, Candidate>();
