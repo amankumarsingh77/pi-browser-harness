@@ -2,6 +2,21 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **WSL support for a browser running on the Windows side.** Discovery now finds Windows browser
+  profiles through `/mnt`, treats their `DevToolsActivePort` as evidence of a running browser (so
+  `/browser-setup` no longer fails with "No browser instance running" under WSL), and dials the
+  debug port at `127.0.0.1` first, then the Windows host address on the WSL NAT subnet — so it
+  works unchanged under mirrored networking and needs only a one-time `netsh portproxy` in NAT
+  mode. Discovery failures against the Windows host now print the exact portproxy/firewall
+  command with the port already filled in (`src/profile/wsl.ts`).
+- **`/browser-setup` no longer probes for a local browser when `BU_CDP_WS` is set.** An explicit
+  endpoint implies the browser exists; the Linux process probe cannot see browsers on other
+  machines or on the Windows side of WSL and would wrongly refuse setup.
+
 ## 0.13.0 — 2026-10-20
 
 ### Fixed

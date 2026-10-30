@@ -403,7 +403,7 @@ listed with each.
 |---|---|
 | `--browser-namespace <name>` | Override the session namespace (default: auto-generated). |
 | `--browser-debug-clicks` | Save annotated click screenshots for debugging. Equivalent to `BH_DEBUG_CLICKS=1`. |
-| `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. The daemon reads this when it starts, so stop a running daemon first. |
+| `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. The daemon reads this when it starts, so stop a running daemon first. Also makes `/browser-setup` skip the local browser probe (useful for browsers on another machine or the Windows side of WSL). |
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
@@ -449,6 +449,55 @@ rather than being copied into the browser prompt.
 ---
 
 ## Troubleshooting
+
+### WSL: browser on the Windows side
+
+When pi runs inside WSL but your browser (Chrome/Brave/Edge) runs on Windows, discovery adapts
+automatically:
+
+- **Browser detection** treats a Windows profile's `DevToolsActivePort` — readable through
+  `/mnt/c/...` — as evidence of a running, debuggable browser (`src/profile/wsl.ts`). No browser
+  process is visible to Linux `ps` there, and none needs to be.
+- **Endpoint discovery** reads the Windows `DevToolsActivePort` through `/mnt` and dials two hosts
+  in order: `127.0.0.1` first (works as-is under WSL2 *mirrored* networking and for browsers bound
+  beyond loopback), then the Windows host address on the WSL NAT subnet (the first-hop gateway).
+
+In NAT mode (the WSL default) the browser binds its debug port to the *Windows* loopback, which
+WSL cannot reach. Pick one of these one-time fixes:
+
+1. **Mirrored networking (recommended, nothing to maintain):** add under `[wsl2]` in
+   `%USERPROFILE%\.wslconfig`:
+
+   ```ini
+   [wsl2]
+   networkingMode=mirrored
+   ```
+
+   then run `wsl --shutdown` and reopen WSL. Windows and WSL now share localhost, and discovery
+   works with no forwarding. Requires Windows 11 22H2+ / WSL 2.0+.
+
+2. **Port forwarding (older WSL/Windows):** from an admin PowerShell on Windows, forward the
+   Windows host address to the browser's loopback port (the error message from discovery prints
+   this line filled in with the port it saw):
+
+   ```powershell
+   netsh interface portproxy add v4tov4 listenaddress=<wsl-gateway-ip> listenport=9222 connectaddress=127.0.0.1 connectport=9222
+   netsh advfirewall firewall add rule name="pi-browser-harness-wsl" dir=in action=allow protocol=TCP localport=9222 remoteip=LocalSubnet
+   ```
+
+   The gateway IP only changes if Windows re-provisions the WSL subnet; if it does, delete and
+   re-add the pair with the new IP (discovery's error message prints it).
+
+3. **Manual override:** set `BU_CDP_WS` to a WebSocket URL reachable from WSL
+   (e.g. `ws://<wsl-gateway-ip>:9222/devtools/browser/<id>` from Brave's `DevToolsActivePort`).
+   With an override set, `/browser-setup` skips the local browser probe entirely.
+
+For browsers whose remote debugging is enabled through `chrome://inspect` rather than a launch
+flag, the first dial from a new browser session shows an in-browser **Allow** prompt and the HTTP
+`/json/version` endpoint is disabled — both are handled; the WebSocket URL comes from the
+`DevToolsActivePort` file.
+
+### Other
 
 | Symptom | Fix |
 |---|---|

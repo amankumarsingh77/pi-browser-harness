@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { parseJson } from "../schemas/parse";
 import { browserNameForUserDataDir } from "./paths";
+import { isWSL, wslWindowsBrowserRunning } from "./wsl";
 
 const run = promisify(execFile);
 const EXEC_TIMEOUT_MS = 5_000;
@@ -315,6 +316,11 @@ export const detectRunningBrowser = async (preferUserDataDir?: string): Promise<
       : process.platform === "win32"
         ? await collectWin32()
         : await collectLinux();
+  // Under WSL the browser usually runs on Windows; ps//proc legitimately sees nothing. A
+  // DevToolsActivePort readable through /mnt is the evidence that a debuggable browser is up.
+  if (candidates.length === 0 && process.platform === "linux" && isWSL() && wslWindowsBrowserRunning()) {
+    return { running: true };
+  }
   if (candidates.length === 0) return { running: false };
 
   const [first, ...rest] = candidates;

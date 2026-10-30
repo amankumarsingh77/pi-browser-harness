@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { endpointFromEnv, firstReadyPort, parseVersionResponse, type PortProbe } from "../../src/cdp/discovery";
+import { endpointFromEnv, firstReadyPort, parseVersionResponse, rewriteWsHost, type PortProbe } from "../../src/cdp/discovery";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
 
@@ -84,5 +84,68 @@ describe("firstReadyPort", () => {
   test("no candidates is an immediate failure", async () => {
     const r = await firstReadyPort([], { probe: live(1), deadlineMs: 1_000 });
     assert.equal(r.success, false);
+  });
+
+  test("a candidate's host is passed through to the probe and the winner carries it", async () => {
+    const probedHosts: Array<string | undefined> = [];
+    const liveAt = (host: string): PortProbe => (_port, h) => {
+      probedHosts.push(h);
+      return Promise.resolve(h === host ? ok(undefined) : err(cdpError("discovery_failed", "refused")));
+    };
+    const r = await firstReadyPort(
+      [{ port: 9222, host: "127.0.0.1" }, { port: 9222, host: "172.21.48.1" }],
+      { probe: liveAt("172.21.48.1"), deadlineMs: 1_000, intervalMs: 20 },
+    );
+    assert.equal(r.success, true);
+    assert.equal(r.data.host, "172.21.48.1");
+    assert.ok(probedHosts.includes("127.0.0.1"));
+    assert.ok(probedHosts.includes("172.21.48.1"));
+  });
+
+  test("same port on different hosts are distinct race participants", async () => {
+    const r = await firstReadyPort(
+      [{ port: 7 }, { port: 7, host: "gateway" }],
+      { probe: (_p, h) => Promise.resolve(h === "gateway"
+        ? err(cdpError("discovery_failed", "refused on gateway"))
+        : ok(undefined)), deadlineMs: 500, intervalMs: 20 },
+    );
+    assert.equal(r.success, true);
+    assert.equal(r.data.host, undefined);
+  });
+
+  test("failure labels distinguish hosts for the same port", async () => {
+    const r = await firstReadyPort(
+      [{ port: 7, host: "127.0.0.1" }, { port: 7, host: "gateway" }],
+      { probe: () => Promise.resolve(err(cdpError("discovery_failed", "refused"))), deadlineMs: 100, intervalMs: 20 },
+    );
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /127\.0\.0\.1:7, gateway:7/);
+  });
+});
+
+describe("rewriteWsHost", () => {
+  test("a loopback url is re-dialed at the bridge host", () => {
+    assert.equal(
+      rewriteWsHost("ws://127.0.0.1:9222/devtools/browser/abc", "172.21.48.1"),
+      "ws://172.21.48.1:9222/devtools/browser/abc",
+    );
+  });
+
+  test("localhost is rewritten too", () => {
+    assert.equal(rewriteWsHost("ws://localhost:9222/x", "172.21.48.1"), "ws://172.21.48.1:9222/x");
+  });
+
+  test("a loopback host leaves the url untouched", () => {
+    const url = "ws://127.0.0.1:9222/devtools/browser/abc";
+    assert.equal(rewriteWsHost(url, "127.0.0.1"), url);
+    assert.equal(rewriteWsHost(url, "localhost"), url);
+  });
+
+  test("an already-remote hostname is left alone", () => {
+    assert.equal(rewriteWsHost("ws://devbox:9222/x", "172.21.48.1"), "ws://devbox:9222/x");
+  });
+
+  test("an unparseable url is returned unchanged", () => {
+    assert.equal(rewriteWsHost("not a url", "172.21.48.1"), "not a url");
   });
 });

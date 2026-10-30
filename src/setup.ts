@@ -5,6 +5,7 @@ import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
 import { isBrowserRunning } from "./profile/browser-process";
 import { promptForProfileIfUnset } from "./profile/command";
 import { type Result, err, ok } from "./util/result";
+import { endpointFromEnv } from "./cdp/discovery";
 
 // The machine probes setup runs before touching the client. Each defaults to the real implementation.
 export type SetupDeps = {
@@ -33,7 +34,9 @@ export async function performSetup(
   ctx?: ExtensionContext,
   deps: SetupDeps = {},
 ): Promise<SetupResult> {
-  const chromeRunning = await (deps.isBrowserRunning ?? isBrowserRunning)();
+  // An explicit BU_CDP_WS endpoint implies a browser exists; the local ps probe cannot know
+  // about browsers on other machines (or on the Windows side of WSL) and would wrongly refuse setup.
+  const chromeRunning = endpointFromEnv() !== undefined || await (deps.isBrowserRunning ?? isBrowserRunning)();
   if (!chromeRunning) {
     return err("No browser instance running. Please open your browser and then run /browser-setup.");
   }
