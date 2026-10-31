@@ -1,7 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createFakeClient, axNode } from "./fake-client";
-import { interactiveDiff } from "../../src/domains/ref-resolve";
+import { interactiveDiff, refreshRefs } from "../../src/domains/ref-resolve";
 import { ok } from "../../src/util/result";
 import type { RefSignature } from "../../src/domains/ref-signature";
 
@@ -79,5 +79,19 @@ describe("ref stability across a mutation", () => {
       assert.equal(seen.has(backendId), false, `${ref} duplicates another ref's element`);
       seen.add(backendId);
     }
+  });
+
+  test("a link after 1,200 buttons, past the old 1,000-node cap, is still indexed", async () => {
+    const ids = Array.from({ length: 1200 }, (_, i) => String(i + 2));
+    const buttons = ids.map((id, i) => axNode(id, "button", `B${i}`, { parentId: "1", backendDOMNodeId: 1000 + i }));
+    const releases = axNode("9999", "link", "Releases", { parentId: "1", backendDOMNodeId: 5000 });
+    const fake = await createFakeClient({
+      canned: { "Accessibility.getFullAXTree": ok({ nodes: [axNode("1", "RootWebArea", "", { childIds: [...ids, "9999"] }), ...buttons, releases] }) },
+    });
+
+    const r = await refreshRefs(fake.client);
+
+    assert.ok(r.success);
+    assert.ok([...r.data.cur.values()].some((s) => s.role === "link" && s.name === "Releases"));
   });
 });
