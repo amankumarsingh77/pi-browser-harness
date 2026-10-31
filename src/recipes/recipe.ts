@@ -40,7 +40,14 @@ export const RECIPE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // A host (name, IPv4, bracketed IPv6) or unknown-site. The site is a directory under the recipe root, so it may
 // never hold a path separator or be "." or "..".
 export const RECIPE_SITE = /^(?!\.{1,2}$)[a-z0-9._\-[\]:]{1,253}$/;
-const PARAM_REF = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
+// The forms a param's value takes in a URL, by the name a recipe writes after "|": {{topic|underscore}} fills
+// "Grace Hopper" as "Grace_Hopper". A plain {{topic}} is the value as typed.
+export const PARAM_FORMS: ReadonlyMap<string, (value: string) => string> = new Map([
+  ["url", (v: string) => encodeURIComponent(v)],
+  ["plus", (v: string) => encodeURIComponent(v).replace(/%20/g, "+")],
+  ["underscore", (v: string) => v.replace(/ /g, "_")],
+]);
+const PARAM_REF = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)(?:\|([a-z]+))?\}\}/g;
 const LOCATOR_KEYS: ReadonlySet<string> = new Set(["role", "name", "nth", "css", "x", "y"]);
 const STEP_META_KEYS: ReadonlySet<string> = new Set(["expect", "fragile", "writes"]);
 // For these actions x/y are the tool's own coordinates, not where an element is.
@@ -70,6 +77,17 @@ const FileSchema = Type.Object({
 const fileValidator = Compile(FileSchema);
 
 export const paramRefs = (value: string): ReadonlyArray<string> => [...value.matchAll(PARAM_REF)].map((m) => m[1] ?? "");
+
+const unknownForm = (value: string): string | undefined =>
+  [...value.matchAll(PARAM_REF)].map((m) => m[2]).find((f) => f !== undefined && !PARAM_FORMS.has(f));
+
+export const fillParams = (s: string, params: Readonly<Record<string, string>>): string =>
+  s.replace(PARAM_REF, (whole, name: string, form: string | undefined) => {
+    const value = params[name];
+    if (value === undefined) return whole;
+    if (form === undefined) return value;
+    return PARAM_FORMS.get(form)?.(value) ?? whole;
+  });
 
 const isJsonScalar = (v: unknown): v is string | number | boolean =>
   typeof v === "string" || typeof v === "number" || typeof v === "boolean";
@@ -113,6 +131,8 @@ const decodeStep = (raw: Readonly<Record<string, unknown>>, n: number, declared:
     if (typeof v !== "string") continue;
     const unknown = paramRefs(v).find((p) => !declared.has(p));
     if (unknown !== undefined) return err(`step ${n}: {{${unknown}}} is not a declared param`);
+    const form = unknownForm(v);
+    if (form !== undefined) return err(`step ${n}: "|${form}" is not a param form; use one of ${[...PARAM_FORMS.keys()].join(", ")}`);
   }
   const locator = coordinates ? undefined : locatorOf(body);
   const expect = expectOf(raw["expect"]);

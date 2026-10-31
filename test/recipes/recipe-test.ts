@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { type Recipe, parseRecipe, stringifyRecipe } from "../../src/recipes/recipe";
+import { type Recipe, fillParams, parseRecipe, stringifyRecipe } from "../../src/recipes/recipe";
 
 const HEADER = `name: vendor-invoices
 site: billing.test
@@ -53,6 +53,11 @@ describe("recipe file format", () => {
       steps: `steps:\n  - navigate: { url: "https://billing.test/" }\n  - reload: {}\n  - go_back: {}\n  - fill: { css: "#y", value: "{{year}}" }\n`,
       step: 4,
     },
+    {
+      what: "step 1 uses a {{month|shout}} form that does not exist",
+      steps: `steps:\n  - navigate: { url: "https://billing.test/?m={{month|shout}}" }\n`,
+      step: 1,
+    },
   ];
   for (const c of invalid) {
     test(`SC21: a file where ${c.what} is rejected with a message naming step ${c.step}`, () => {
@@ -62,6 +67,12 @@ describe("recipe file format", () => {
       assert.match(parsed.error, new RegExp(`^step ${c.step}:`));
     });
   }
+
+  test("SC100: topic=Grace Hopper fills {{topic}}, {{topic|underscore}}, {{topic|plus}} and {{topic|url}} in their own forms", () => {
+    const filled = fillParams("{{topic}} /wiki/{{topic|underscore}} ?q={{topic|plus}} ?s={{topic|url}}", { topic: "Grace Hopper" });
+
+    assert.equal(filled, "Grace Hopper /wiki/Grace_Hopper ?q=Grace+Hopper ?s=Grace%20Hopper");
+  });
 
   test("SC53: a file whose site is \"../x\" is rejected before any step is read", () => {
     const parsed = parseRecipe(HEADER.replace("site: billing.test", 'site: "../x"') + `steps:\n  - reload: {}\n`);

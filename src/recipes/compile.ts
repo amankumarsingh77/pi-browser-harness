@@ -1,7 +1,7 @@
 import { type Result, err, ok } from "../util/result";
 import type { JsonObject } from "../util/tool";
 import type { JournalEntry, Locator } from "./journal";
-import { RECIPE_SITE, type RecipeStep, type StepExpect } from "./recipe";
+import { PARAM_FORMS, RECIPE_SITE, type RecipeStep, type StepExpect } from "./recipe";
 import { MESSAGE_ROLES } from "./recordable";
 
 const MAX_EXPECT_APPEARED = 3;
@@ -78,8 +78,17 @@ export const compileSteps = (entries: ReadonlyArray<JournalEntry>): Result<Reado
   return ok(steps);
 };
 
+// The value as typed becomes {{name}}; its URL forms ("Alan_Turing", "Alan+Turing", "Alan%20Turing") become
+// {{name|form}}, so a replay writes the new value the same way.
 const template = (s: string, pairs: ReadonlyArray<readonly [string, string]>): string =>
-  pairs.reduce((acc, [name, value]) => acc.split(value).join(`{{${name}}}`), s);
+  pairs.reduce((acc, [name, value]) => {
+    let out = acc.split(value).join(`{{${name}}}`);
+    for (const [form, apply] of PARAM_FORMS) {
+      const shaped = apply(value);
+      if (shaped !== value) out = out.split(shaped).join(`{{${name}|${form}}}`);
+    }
+    return out;
+  }, s);
 
 const templateArgs = (args: JsonObject, pairs: ReadonlyArray<readonly [string, string]>): JsonObject => {
   const out: Record<string, JsonObject[string]> = {};
@@ -112,7 +121,8 @@ export const applyParams = (
     ...(s.expect !== undefined ? { expect: templateExpect(s.expect, pairs) } : {}),
   }));
   for (const [name, value] of pairs) {
-    const used = out.some((s) => JSON.stringify(s).includes(`{{${name}}}`));
+    const placeholder = new RegExp(`\\{\\{${name}(\\|[a-z]+)?\\}\\}`);
+    const used = out.some((s) => placeholder.test(JSON.stringify(s)));
     if (!used) return err(`param ${name}: the value "${value}" does not appear in the task's steps`);
   }
   return ok(out);

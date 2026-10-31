@@ -239,6 +239,22 @@ describe("applyParams", () => {
     assert.equal(r.data[1]?.args["value"], "{{month}}");
   });
 
+  test("SC99: topic=Alan Turing becomes {{topic|underscore}} in /wiki/Alan_Turing, {{topic|plus}} in q=Alan+Turing and {{topic|url}} in s=Alan%20Turing", () => {
+    const r = applyParams(
+      [
+        { action: "type", args: { text: "Alan Turing" } },
+        { action: "click", args: {}, locator: { role: "button", name: "Search", nth: 0 }, expect: { url: "https://w.test/wiki/Alan_Turing" } },
+        { action: "navigate", args: { url: "https://w.test/find?q=Alan+Turing&s=Alan%20Turing" } },
+      ],
+      { topic: "Alan Turing" },
+    );
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.equal(r.data[0]?.args["text"], "{{topic}}");
+    assert.equal(r.data[1]?.expect?.url, "https://w.test/wiki/{{topic|underscore}}");
+    assert.equal(r.data[2]?.args["url"], "https://w.test/find?q={{topic|plus}}&s={{topic|url}}");
+  });
+
   test("SC74: param repo=nodejs/node becomes {{repo}} in a new tab's expected URL and in an expected element's name, not only in its args", () => {
     const r = applyParams(
       [
