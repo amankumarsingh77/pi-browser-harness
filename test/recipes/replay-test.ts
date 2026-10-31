@@ -222,4 +222,21 @@ describe("recipe replay", () => {
     assert.equal(outcome.failure.authWall, true);
     assert.match(outcome.failure.reason, /^auth wall: .*password field/);
   });
+
+  test("SC73: a recipe whose step 1 opens billing.test in a new tab runs from a tab left on github.com", async () => {
+    const started = await clientFor();
+    let url = "https://github.com/";
+    const client = withClient(started.client, {
+      pageInfo: () => Promise.resolve(pageInfoOf({ url })),
+      newTab: (opened) => {
+        url = opened ?? "about:blank";
+        return Promise.resolve(ok("t2"));
+      },
+    });
+    const recipe = recipeOf([{ action: "new_tab", args: { url: "https://billing.test/invoices" } }, clickExport()]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+
+    assert.deepEqual(outcome, { ok: true, steps: 2 });
+  });
 });

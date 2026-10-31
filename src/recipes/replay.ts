@@ -197,6 +197,9 @@ const authWall = async (client: BrowserClient, hosts: ReadonlySet<string>): Prom
   return undefined;
 };
 
+// A step that opens a page leaves the current one behind, so its wall check looks at the page it opened instead.
+const OPENS_PAGE: ReadonlySet<string> = new Set(["navigate", "new_tab"]);
+
 // Runs every step through the tool that recorded it, with no model in the loop. The first step that fails, or whose
 // page does not change the way the recorded run's did, stops the replay.
 export const runRecipe = async (opts: {
@@ -224,7 +227,8 @@ export const runRecipe = async (opts: {
 
   for (const [i, step] of recipe.steps.entries()) {
     const n = i + 1;
-    const wall = await authWall(client, hosts);
+    const opensPage = OPENS_PAGE.has(step.action);
+    const wall = opensPage ? undefined : await authWall(client, hosts);
     if (wall !== undefined) return fail(n, step, `auth wall: ${wall}`, true);
     const run = REPLAYERS.get(step.action);
     if (run === undefined) return fail(n, step, `"${step.action}" is not a replayable action`);
@@ -250,6 +254,8 @@ export const runRecipe = async (opts: {
     if (step.expect !== undefined && !(await waitForExpect(client, step.expect, downloadsBefore, opts.signal))) {
       return fail(n, step, "the page did not change the way the recorded run did");
     }
+    const landed = opensPage ? await authWall(client, hosts) : undefined;
+    if (landed !== undefined) return fail(n, step, `auth wall: ${landed}`, true);
     await journal
       ?.append({
         source: "replay",
