@@ -367,6 +367,14 @@ describe("repairSteps", () => {
     assert.deepEqual(r.data.steps.slice(2), [click("button", "Download CSV")]);
   });
 
+  test("SC108: a repair that closes the tab the recipe's own step 1 opened keeps the close, since the kept steps opened it", () => {
+    const opened: Recipe = { ...recipe, steps: [{ action: "new_tab", args: { url: "https://billing.test/invoices" } }, ...FOUR_STEPS.slice(1)] };
+    const r = repairSteps(opened, [failedAt(3), agentClick("Download CSV"), entry({ tool: "browser_close_tab" })], 3);
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data.steps.slice(2), [click("button", "Download CSV"), { action: "close_tab", args: {} }]);
+  });
+
   test("SC43: with a failure marker at step 3 followed by clicks on Download CSV and Close, steps 1-2 stay and the two clicks replace steps 3-4", () => {
     const r = repairSteps(recipe, [failedAt(3), agentClick("Download CSV"), agentClick("Close")], 3);
 

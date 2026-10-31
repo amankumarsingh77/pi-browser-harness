@@ -107,12 +107,13 @@ export const repairSteps = (
   if (marker === undefined) return err(`no failed replay of ${recipe.name} in this session's journal`);
   if (marker.recipe?.step !== step) return err(`the last failed replay of ${recipe.name} stopped at step ${marker.recipe?.step ?? "?"}, not ${step}`);
   const after = entries.slice(at + 1).filter((e) => e.source === "agent");
-  const compiled = compileSteps(after);
+  const kept = recipe.steps.slice(0, step - 1);
+  const compiled = compileSteps(after, kept.some((s) => s.action === "new_tab"));
   if (!compiled.success) return err(`cannot repair from what was done after the failure: ${compiled.error}`);
   const declared = Object.fromEntries(Object.entries(stringParams(marker.args)).filter(([k]) => k in recipe.params));
   const templated = applyParams(compiled.data, declared);
   const steps = templated.success ? templated.data : compiled.data;
-  return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps], note: leftOutNote(after), params: stringParams(marker.args) });
+  return ok({ steps: [...kept, ...steps], note: leftOutNote(after), params: stringParams(marker.args) });
 };
 
 // Actions that only load or read a page, or wait, and so cannot send data however they were recorded.

@@ -49,9 +49,10 @@ const SETTINGS: ReadonlySet<string> = new Set(["browser_download"]);
 // so replay does not need it and it is left out rather than refusing the save.
 export const isNoEffectScript = (e: JournalEntry): boolean => e.ok && e.tool === "browser_execute_js" && e.readOnly === true;
 
-export const compileSteps = (entries: ReadonlyArray<JournalEntry>): Result<ReadonlyArray<RecipeStep>, string> => {
+// `openedBefore` is true when steps before these, kept from a recipe being repaired, already opened the tab.
+export const compileSteps = (entries: ReadonlyArray<JournalEntry>, openedBefore = false): Result<ReadonlyArray<RecipeStep>, string> => {
   const steps: RecipeStep[] = [];
-  let openedTab = false;
+  let openedTab = openedBefore;
   for (const e of entries) {
     if (!e.ok || SETTINGS.has(e.tool) || isNoEffectScript(e)) continue;
     if (e.password) return err(`${e.tool} typed into a password field; recipes never type credentials, so this task cannot be saved`);
