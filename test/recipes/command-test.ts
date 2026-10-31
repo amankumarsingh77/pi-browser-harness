@@ -22,6 +22,13 @@ describe("/browser-recipe", () => {
     });
   });
 
+  test("SC76: wiki-lookup topic=Grace Hopper keeps the unquoted words that follow a value, so topic is \"Grace Hopper\"", () => {
+    assert.deepEqual(parseCommandArgs("wiki-lookup topic=Grace Hopper lang=en"), {
+      name: "wiki-lookup",
+      params: { topic: "Grace Hopper", lang: "en" },
+    });
+  });
+
   describe("running a recipe", () => {
     let agentDir: string;
     let cwd: string;

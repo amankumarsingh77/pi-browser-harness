@@ -7,19 +7,25 @@ import { approveProjectRecipe, trustWritten } from "./trust";
 
 const TOKEN = /([^\s=]+)="([^"]*)"|(\S+)/g;
 
-// `NAME key=value key="two words"`: the first bare word is the name, a double-quoted value stays whole.
+// `NAME key=value key="two words"`: the first bare word is the name, a double-quoted value stays whole, and the
+// bare words after an unquoted value join it, so `topic=Grace Hopper` is "Grace Hopper", not "Grace".
 export const parseCommandArgs = (raw: string): { readonly name: string | undefined; readonly params: Readonly<Record<string, string>> } => {
   let name: string | undefined;
+  let open: string | undefined;
   const params: Record<string, string> = {};
   for (const m of raw.matchAll(TOKEN)) {
     const [, quotedKey, quotedValue, bare] = m;
     if (quotedKey !== undefined && quotedValue !== undefined) {
       params[quotedKey] = quotedValue;
+      open = undefined;
     } else if (bare?.includes("=") === true) {
       const at = bare.indexOf("=");
-      params[bare.slice(0, at)] = bare.slice(at + 1);
+      open = bare.slice(0, at);
+      params[open] = bare.slice(at + 1);
     } else if (bare !== undefined && name === undefined) {
       name = bare;
+    } else if (bare !== undefined && open !== undefined) {
+      params[open] = `${params[open] ?? ""} ${bare}`;
     }
   }
   return { name, params };
