@@ -71,6 +71,7 @@ export const compileSteps = (entries: ReadonlyArray<JournalEntry>): Result<Reado
       ...(e.locator !== undefined ? { locator: e.locator } : {}),
       ...(expect !== undefined ? { expect } : {}),
       ...(fragile ? { fragile: true } : {}),
+      ...(e.wrote === true ? { writes: true } : {}),
     });
   }
   if (steps.length === 0) return err("the agent's last browser task made no page-changing calls to save");

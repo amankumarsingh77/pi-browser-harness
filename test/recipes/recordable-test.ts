@@ -357,6 +357,18 @@ describe("recipe journal recording", () => {
     assert.equal(other?.replayable, false);
   });
 
+  test("SC98: a click during which the tab sent a POST is journaled wrote: true", async () => {
+    const fake = await createFakeClient({});
+    const client = withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) });
+
+    const finish = await observeCall({ name: "browser_click", concurrency: "serialized", args: { x: 1, y: 1 }, client });
+    fake.emit({ method: "Network.requestWillBeSent", sessionId: "s1", params: { requestId: "r1", request: { method: "POST", url: "https://example.test/save" }, timestamp: 1, type: "XHR" } });
+    await flush();
+    await finish?.({ ok: true });
+
+    assert.equal((await only()).wrote, true);
+  });
+
   test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
     const client = await clientFor({});
 

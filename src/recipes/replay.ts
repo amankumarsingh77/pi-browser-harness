@@ -222,10 +222,12 @@ export const runRecipe = async (opts: {
   readonly recipe: Recipe;
   readonly params: Readonly<Record<string, string>>;
   readonly signal?: AbortSignal;
+  // False for a check run, whose steps and failure must not land in the journal a repair is built from.
+  readonly record?: boolean;
 }): Promise<ReplayOutcome> => {
   const { client, recipe, params } = opts;
   const ctx: ReplayCtx = { client, signal: opts.signal, extensionCtx: opts.extensionCtx };
-  const journal = activeJournal();
+  const journal = opts.record === false ? undefined : activeJournal();
   const hosts = knownHosts(recipe, params);
   // A navigate returns before the next page renders, so a sign-in form can appear only after the check before a
   // step; looking again here keeps it from being reported as an ordinary missing element.

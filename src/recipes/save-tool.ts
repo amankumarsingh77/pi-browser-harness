@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
 import { applyParams, compileSteps, isNoEffectScript, latestTask, siteOf } from "./compile";
@@ -7,6 +8,7 @@ import { type JournalEntry, activeJournal } from "./journal";
 import { RECIPE_NAME, type Recipe, type RecipeStep, stringifyRecipe } from "./recipe";
 import { type StoredRecipe, findRecipe, recipeRoots, saveRecipe } from "./store";
 import { trustWritten } from "./trust";
+import { describeStep, runRecipe } from "./replay";
 
 const SaveArgs = Type.Object({
   name: Type.String({ pattern: RECIPE_NAME.source, description: "Recipe name, lowercase words joined by '-' (e.g. 'vendor-invoices-export')" }),
@@ -19,7 +21,7 @@ const SaveArgs = Type.Object({
   repair_step: Type.Optional(
     Type.Integer({
       minimum: 1,
-      description: "Repair an existing recipe after a failed replay: replace this step through the end with what you did since the failure. Use the step number the failure reported.",
+      description: "Repair an existing recipe after a failed replay: replace this step through the end with what you did since the failure. Use the step number the failure reported. The repaired recipe is replayed before it is written, so finish the task from the page where it failed, without detours.",
     }),
   ),
 });
@@ -65,7 +67,7 @@ export const repairSteps = (
   recipe: Recipe,
   entries: ReadonlyArray<JournalEntry>,
   step: number,
-): Result<{ readonly steps: ReadonlyArray<RecipeStep>; readonly note: string }, string> => {
+): Result<{ readonly steps: ReadonlyArray<RecipeStep>; readonly note: string; readonly params: Readonly<Record<string, string>> }, string> => {
   let at = -1;
   for (let i = entries.length - 1; i >= 0 && at < 0; i--) {
     const e = entries[i];
@@ -80,7 +82,46 @@ export const repairSteps = (
   const declared = Object.fromEntries(Object.entries(stringParams(marker.args)).filter(([k]) => k in recipe.params));
   const templated = applyParams(compiled.data, declared);
   const steps = templated.success ? templated.data : compiled.data;
-  return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps], note: leftOutNote(after) });
+  return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps], note: leftOutNote(after), params: stringParams(marker.args) });
+};
+
+// What running a step again would repeat beyond the page itself.
+const sideEffectsOf = (steps: ReadonlyArray<RecipeStep>): ReadonlyArray<string> =>
+  steps.flatMap((s, i) => {
+    const effects = [
+      ...(s.action === "upload_file" ? ["uploads a file"] : []),
+      ...(s.action === "download" ? ["changes where downloads go"] : []),
+      ...(s.expect?.download === true ? ["starts a download"] : []),
+      ...(s.writes === true ? ["sends data to the site"] : []),
+    ];
+    return effects.length > 0 ? [`step ${i + 1}: ${describeStep(s)} (${effects.join(", ")})`] : [];
+  });
+
+// A repair is built from whatever the agent did after the failure, detours included, so it is replayed from step 1
+// before it is written. A replay repeats side effects, so when the steps have any the user decides; with no UI to
+// ask, the repair is written unchecked and says so.
+const checkRepair = async (
+  client: BrowserClient,
+  ctx: ExtensionContext,
+  recipe: Recipe,
+  params: Readonly<Record<string, string>>,
+  signal: AbortSignal | undefined,
+): Promise<Result<string, string>> => {
+  const effects = sideEffectsOf(recipe.steps);
+  if (effects.length > 0) {
+    const why = `a check runs every step again, including:\n${effects.join("\n")}`;
+    if (!ctx.hasUI) return ok(`Not checked by a replay: ${why}\nRun the recipe to check it.`);
+    const go = await ctx.ui.confirm(`Check the repaired recipe "${recipe.name}" by running it?`, `${why}\n\nChoose No to save it without the check.`);
+    if (!go) return ok("Not checked by a replay: the user chose not to run its steps again.");
+  }
+  const outcome = await runRecipe({ client, extensionCtx: ctx, recipe, params, record: false, ...(signal !== undefined ? { signal } : {}) });
+  if (!outcome.ok) {
+    const f = outcome.failure;
+    return err(
+      `repair not saved: a replay of the repaired recipe stopped at step ${f.step} (${f.action}): ${f.reason}. The steps after the failure did not redo the task from where it stopped. Run the recipe again with browser_run_recipe for a fresh failure, finish the task from that page with browser tools, then repair from the step it reports.`,
+    );
+  }
+  return ok(`Checked: a replay of all ${outcome.steps} steps passed.`);
 };
 
 export const saveRecipeTool = defineBrowserTool({
@@ -96,7 +137,7 @@ export const saveRecipeTool = defineBrowserTool({
   parameters: SaveArgs,
   concurrency: "parallel",
   ensureAlive: false,
-  async handler(args, { extensionCtx }) {
+  async handler(args, { client, extensionCtx, signal }) {
     const journal = activeJournal();
     if (journal === undefined) return err({ kind: "invalid_state", message: "No browser journal is active in this session." });
     if (args.repair_step !== undefined) {
@@ -109,11 +150,13 @@ export const saveRecipeTool = defineBrowserTool({
         steps: repaired.data.steps,
         lastRun: { at: new Date().toISOString(), result: "ok", repairedStep: args.repair_step },
       };
+      const checked = await checkRepair(client, extensionCtx, recipe, repaired.data.params, signal);
+      if (!checked.success) return err({ kind: "invalid_state", message: checked.error });
       const saved = await confirmAndSave(extensionCtx, stored.data.root, recipe, `Repair recipe "${args.name}" from step ${args.repair_step}?`);
       if (!saved.success) return saved;
       const r = saved.data.recipe;
       return ok({
-        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.${fragileNote(r)}${repaired.data.note}`,
+        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.\n${checked.data}${fragileNote(r)}${repaired.data.note}`,
         details: { name: r.name, version: r.version, path: saved.data.path, steps: r.steps.length },
       });
     }

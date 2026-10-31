@@ -20,6 +20,8 @@ export type RecipeStep = {
   readonly locator?: Locator;
   readonly expect?: StepExpect;
   readonly fragile?: boolean;
+  // The step sent data to the site when it was recorded, so running it again may repeat that (an order, a message).
+  readonly writes?: boolean;
 };
 
 export type LastRun = { readonly at: string; readonly result: "ok" | "failed"; readonly step?: number; readonly repairedStep?: number };
@@ -40,7 +42,7 @@ export const RECIPE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const RECIPE_SITE = /^(?!\.{1,2}$)[a-z0-9._\-[\]:]{1,253}$/;
 const PARAM_REF = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
 const LOCATOR_KEYS: ReadonlySet<string> = new Set(["role", "name", "nth", "css", "x", "y"]);
-const STEP_META_KEYS: ReadonlySet<string> = new Set(["expect", "fragile"]);
+const STEP_META_KEYS: ReadonlySet<string> = new Set(["expect", "fragile", "writes"]);
 // For these actions x/y are the tool's own coordinates, not where an element is.
 const COORDINATE_ACTIONS: ReadonlySet<string> = new Set(["scroll", "drag_and_drop"]);
 
@@ -120,6 +122,7 @@ const decodeStep = (raw: Readonly<Record<string, unknown>>, n: number, declared:
     ...(locator !== undefined ? { locator } : {}),
     ...(expect !== undefined ? { expect } : {}),
     ...(raw["fragile"] === true ? { fragile: true } : {}),
+    ...(raw["writes"] === true ? { writes: true } : {}),
   });
 };
 
@@ -160,6 +163,7 @@ const encodeStep = (s: RecipeStep): Record<string, JsonValue> => ({
   [s.action]: { ...(s.locator ?? {}), ...s.args },
   ...(s.expect !== undefined && Object.keys(s.expect).length > 0 ? { expect: s.expect } : {}),
   ...(s.fragile === true ? { fragile: true } : {}),
+  ...(s.writes === true ? { writes: true } : {}),
 });
 
 export const stringifyRecipe = (r: Recipe): string =>

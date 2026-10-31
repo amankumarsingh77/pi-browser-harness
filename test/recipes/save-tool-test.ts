@@ -7,10 +7,33 @@ import { type JournalEntry, type NewEntry, activeJournal, createJournal, setActi
 import { type Recipe, type RecipeStep, parseRecipe } from "../../src/recipes/recipe";
 import { repairSteps, saveRecipeTool } from "../../src/recipes/save-tool";
 import { recipeRoots, saveRecipe } from "../../src/recipes/store";
-import { createFakeClient } from "../domains/fake-client";
+import type { TabInfo } from "../../src/cdp/types";
+import { ok } from "../../src/util/result";
+import { axNode, createFakeClient } from "../domains/fake-client";
+import { pageInfoOf, withClient } from "../domains/client-overrides";
 import { fakeCtx, fakePi } from "../helpers/fake-pi";
 
-type SaveCall = { readonly confirms: ReadonlyArray<boolean>; readonly args: Readonly<Record<string, unknown>>; readonly cwd?: string };
+type SaveCall = {
+  readonly confirms: ReadonlyArray<boolean>;
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly cwd?: string;
+  // The buttons on billing.test's invoices page, which a repair's check replays against.
+  readonly buttons?: ReadonlyArray<string>;
+};
+
+const resultText = (r: { readonly content: ReadonlyArray<{ readonly type: string }> }): string =>
+  r.content.flatMap((c) => ("text" in c && typeof c.text === "string" ? [c.text] : [])).join("");
+
+const ONE_TAB: ReadonlyArray<TabInfo> = [{ targetId: "t1", title: "Invoices", url: "https://billing.test/invoices", owned: true }];
+const BOX = ok({ model: { content: [100, 200, 140, 200, 140, 220, 100, 220], width: 40, height: 20 } });
+
+const pageWith = (buttons: ReadonlyArray<string>) =>
+  ok({
+    nodes: [
+      axNode("1", "RootWebArea", "", { childIds: buttons.map((_, i) => String(i + 2)) }),
+      ...buttons.map((name, i) => axNode(String(i + 2), "button", name, { parentId: "1", backendDOMNodeId: 50 + i })),
+    ],
+  });
 
 describe("browser_save_recipe", () => {
   let agentDir: string;
@@ -50,14 +73,20 @@ describe("browser_save_recipe", () => {
 
   const save = async (call: SaveCall) => {
     const pi = fakePi();
-    saveRecipeTool.register(pi.pi, (await createFakeClient()).client);
+    const browser = await createFakeClient({
+      canned: { "Accessibility.getFullAXTree": pageWith(call.buttons ?? []), "DOM.getBoxModel": BOX, "Page.navigate": ok({ frameId: "f1" }) },
+      evaluate: () => ok(false),
+    });
+    const client = withClient(browser.client, {
+      listTabs: () => Promise.resolve(ok(ONE_TAB)),
+      pageInfo: () => Promise.resolve(pageInfoOf({ url: "https://billing.test/invoices" })),
+    });
+    saveRecipeTool.register(pi.pi, client);
     const fake = fakeCtx({ confirms: call.confirms, sessionId: "s-1", ...(call.cwd !== undefined ? { cwd: call.cwd } : {}) });
     const run = pi.tool("browser_save_recipe").execute("call-1", call.args, undefined, undefined, fake.ctx);
     return { fake, run };
   };
 
-  const resultText = (r: { readonly content: ReadonlyArray<{ readonly type: string }> }): string =>
-    r.content.flatMap((c) => ("text" in c && typeof c.text === "string" ? [c.text] : [])).join("");
 
   const userFile = (): string => join(agentDir, "browser-recipes", "billing.test", "vendor-invoices.yaml");
 
@@ -135,10 +164,11 @@ describe("browser_save_recipe", () => {
       await journal.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { month: "2026-10" }, password: false, url: "https://billing.test/invoices", ok: false, recipe: { name: "vendor-invoices", step: 2 } });
       await journal.append({ source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false, url: "https://billing.test/invoices", ok: true });
 
-      const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", repair_step: 2 }, cwd });
-      await run;
+      const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", repair_step: 2 }, cwd, buttons: ["Download CSV"] });
+      const result = await run;
 
       assert.equal(fake.confirmations.length, 1);
+      assert.match(resultText(result), /Checked: a replay of all 2 steps passed/);
       const repaired = parseRecipe(readFileSync(userFile(), "utf8"));
       assert.ok(repaired.success, repaired.success ? "" : repaired.error);
       assert.equal(repaired.data.version, 2);
@@ -148,6 +178,103 @@ describe("browser_save_recipe", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe("browser_save_recipe repair check", () => {
+  let agentDir: string;
+  let cwd: string;
+  let savedAgentDir: string | undefined;
+
+  const steps: ReadonlyArray<RecipeStep> = [
+    { action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } },
+    { action: "click", args: {}, locator: { role: "button", name: "Export CSV", nth: 0 } },
+  ];
+
+  beforeEach(async () => {
+    agentDir = mkdtempSync(join(tmpdir(), "pi-repair-check-agent-"));
+    cwd = mkdtempSync(join(tmpdir(), "pi-repair-check-cwd-"));
+    savedAgentDir = process.env["PI_CODING_AGENT_DIR"];
+    process.env["PI_CODING_AGENT_DIR"] = agentDir;
+    const journal = createJournal(join(agentDir, "journal"), "s-1");
+    await journal.beginRun();
+    setActiveJournal(journal);
+    await saveRecipe(recipeRoots(cwd).user, {
+      name: "vendor-invoices",
+      site: "billing.test",
+      version: 1,
+      params: { month: { type: "string", example: "2026-09" } },
+      steps,
+      recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+    });
+    await journal.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { month: "2026-10" }, password: false, url: "https://billing.test/invoices", ok: false, recipe: { name: "vendor-invoices", step: 2 } });
+  });
+
+  afterEach(() => {
+    setActiveJournal(undefined);
+    if (savedAgentDir === undefined) Reflect.deleteProperty(process.env, "PI_CODING_AGENT_DIR");
+    else process.env["PI_CODING_AGENT_DIR"] = savedAgentDir;
+    rmSync(agentDir, { recursive: true, force: true });
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  const repairCall = async (confirms: ReadonlyArray<boolean>, buttons: ReadonlyArray<string>) => {
+    const pi = fakePi();
+    const fake = await createFakeClient({
+      canned: { "Accessibility.getFullAXTree": pageWith(buttons), "DOM.getBoxModel": BOX, "Page.navigate": ok({ frameId: "f1" }) },
+      evaluate: () => ok(false),
+    });
+    const client = withClient(fake.client, {
+      listTabs: () => Promise.resolve(ok(ONE_TAB)),
+      pageInfo: () => Promise.resolve(pageInfoOf({ url: "https://billing.test/invoices" })),
+    });
+    saveRecipeTool.register(pi.pi, client);
+    const ctx = fakeCtx({ confirms, sessionId: "s-1", cwd });
+    const run = pi.tool("browser_save_recipe").execute("call-1", { name: "vendor-invoices", repair_step: 2 }, undefined, undefined, ctx.ctx);
+    return { ctx, run };
+  };
+
+  const repair = async (confirms: ReadonlyArray<boolean>, buttons: ReadonlyArray<string>) => {
+    const { ctx, run } = await repairCall(confirms, buttons);
+    return { ctx, result: await run };
+  };
+
+  const fileText = (): string => readFileSync(join(agentDir, "browser-recipes", "billing.test", "vendor-invoices.yaml"), "utf8");
+
+  test("SC95: a repair whose steps fail on replay, because the clicked \"Download CSV\" is not on the page, is not written and says to run the recipe again", async () => {
+    await activeJournal()?.append({ source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false, url: "https://billing.test/invoices", ok: true });
+    const before = (await activeJournal()?.entries())?.length;
+
+    const { run } = await repairCall([true], ["Export CSV"]);
+
+    await assert.rejects(run, /stopped at step 2.*Download CSV.*browser_run_recipe/s);
+    assert.match(fileText(), /version: 1/);
+    assert.equal((await activeJournal()?.entries())?.length, before, "the check must not add a failure marker the next repair would start from");
+  });
+
+  test("SC96: a repair whose new step starts a download asks before the check, and No saves it unchecked, saying so", async () => {
+    await activeJournal()?.append({
+      source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false,
+      url: "https://billing.test/invoices", ok: true, change: { appeared: [], download: true },
+    });
+
+    const { ctx, result } = await repair([false, true], ["Download CSV"]);
+
+    assert.match(ctx.confirmations[0]?.message ?? "", /step 2: click button "Download CSV" \(starts a download\)/);
+    assert.match(fileText(), /version: 2/);
+    assert.match(resultText(result), /Not checked by a replay/);
+  });
+
+  test("SC97: a click that sent a POST while it was recorded is saved with writes: true, and a repair holding it asks before the check", async () => {
+    await activeJournal()?.append({
+      source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false,
+      url: "https://billing.test/invoices", ok: true, wrote: true,
+    });
+
+    const { ctx } = await repair([false, true], ["Download CSV"]);
+
+    assert.match(ctx.confirmations[0]?.message ?? "", /step 2: click button "Download CSV" \(sends data to the site\)/);
+    assert.match(fileText(), /writes: true/);
   });
 });
 

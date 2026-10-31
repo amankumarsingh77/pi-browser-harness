@@ -273,10 +273,11 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
       try {
         const printAfter = script && outcome.ok ? await readFingerprint(client) : undefined;
         const change = outcome.ok ? await observeChange(client, before) : undefined;
+        const wrote = client.session().writeRequestCount() > writesBefore;
         const readOnly =
           printBefore !== undefined &&
           printAfter === printBefore &&
-          client.session().writeRequestCount() === writesBefore &&
+          !wrote &&
           change !== undefined &&
           (change.url === undefined || change.url === url) &&
           change.dialog === undefined &&
@@ -294,6 +295,7 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
           ...(outcome.error !== undefined ? { error: outcome.error } : {}),
           ...(change !== undefined ? { change } : {}),
           ...(readOnly ? { readOnly: true } : {}),
+          ...(wrote ? { wrote: true } : {}),
         });
         return outcome.ok && mode !== undefined ? await saveHint(journal) : undefined;
       } catch {

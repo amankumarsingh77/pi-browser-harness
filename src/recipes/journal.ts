@@ -37,6 +37,8 @@ export type JournalEntry = {
   // Set on a browser_execute_js that was measured to change nothing: same page, form values, storage and URL, and
   // no request that could change server state. Saving leaves such a call out.
   readonly readOnly?: boolean;
+  // The tab sent a request that can change server state (a POST, PUT, DELETE...) while the call ran.
+  readonly wrote?: boolean;
   readonly recipe?: { readonly name: string; readonly step: number };
 };
 
