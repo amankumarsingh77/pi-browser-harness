@@ -283,6 +283,7 @@ export const COMMANDS = {
         returnByValue: Type.Optional(Type.Boolean()),
         awaitPromise: Type.Optional(Type.Boolean()),
         userGesture: Type.Optional(Type.Boolean()),
+        replMode: Type.Optional(Type.Boolean()),
       },
       { additionalProperties: true },
     ),

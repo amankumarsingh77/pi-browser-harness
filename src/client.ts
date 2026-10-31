@@ -14,6 +14,7 @@ import { ensureHarnessWindow, openHarnessTab } from "./cdp/target-factory";
 import { seedProfileWindow } from "./profile/bind";
 import type { ProfilePin } from "./profile/store";
 import type { DaemonStatus, DialogInfo, PageInfo, PageInfoResult, TabInfo } from "./cdp/types";
+import { pageExpression } from "./util/js-source";
 
 export type BrowserClientOptions = {
   readonly namespace: string;
@@ -244,13 +245,9 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
-    // Wrap only when the trimmed source *starts with* `return` — matching the substring anywhere silently turned expressions mentioning it into `undefined`.
-    const trimmed = expression.trim();
-    const isReturnStatement = /^return[\s(]/.test(trimmed);
-    const wrapped = isReturnStatement ? `(function(){${expression}})()` : expression;
-    const r = sessionId
-      ? await session.callOnTarget("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true }, sessionId)
-      : await session.call("Runtime.evaluate", { expression: wrapped, returnByValue: true, awaitPromise: true });
+    // REPL mode lets a later call declare the same const or let again, as the console does.
+    const params = { expression: pageExpression(expression), returnByValue: true, awaitPromise: true, replMode: true };
+    const r = sessionId ? await session.callOnTarget("Runtime.evaluate", params, sessionId) : await session.call("Runtime.evaluate", params);
     if (!r.success) return r;
     if (r.data.exceptionDetails !== undefined) {
       return err(cdpError("remote_error", `JS evaluation failed: ${JSON.stringify(r.data.exceptionDetails)}`, "Runtime.evaluate"));

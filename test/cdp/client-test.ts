@@ -81,3 +81,16 @@ describe("BrowserClient.ensureAlive", () => {
     assert.equal(stub.calls.filter((c) => c.method === "Target.attachToTarget").length, attachesBefore + 1);
   });
 });
+
+describe("BrowserClient.evaluateJs", () => {
+  test("sends a body with statements before its return wrapped in an async function, in REPL mode", async () => {
+    const { stub, client } = await started();
+    stub.calls.length = 0;
+
+    await client.evaluateJs("const t = document.title; return t");
+
+    const [sent] = stub.calls.filter((c) => c.method === "Runtime.evaluate");
+    assert.equal(sent?.params["expression"], "(async () => {\nconst t = document.title; return t\n})()");
+    assert.equal(sent.params["replMode"], true);
+  });
+});
