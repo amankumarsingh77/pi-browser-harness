@@ -236,6 +236,26 @@ describe("/browser-recipe", () => {
       assert.match(message, /step 1: upload \/tmp\/a\\n {2}step 9: navigate to https:\/\/ok\.example/);
     });
 
+    test("SC103: /browser-recipe vendor-invoices month=2026-10 topc=x names the unknown topc and runs no step", async () => {
+      await saveRecipe(recipeRoots(cwd).user, {
+        name: "vendor-invoices",
+        site: "billing.test",
+        version: 1,
+        params: { month: { type: "string", example: "2026-09" } },
+        steps: [{ action: "navigate", args: { url: "https://billing.test/invoices?m={{month}}" } }],
+        recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      });
+      const fake = await createFakeClient({ canned: { "Page.navigate": ok({ frameId: "f1" }) } });
+      const pi = fakePi();
+      registerRecipeCommand(pi.pi, fake.client);
+      const ui = fakeCtx({ cwd });
+
+      await pi.command("browser-recipe").handler("vendor-invoices month=2026-10 topc=x", ui.ctx);
+
+      assert.ok(ui.notices.some((n) => n.type === "error" && n.message.includes('topc') && n.message.includes('month')), JSON.stringify(ui.notices));
+      assert.equal(fake.callsTo("Page.navigate").length, 0);
+    });
+
     test("SC37: /browser-recipe vendor-invoices month=2026-10 on a passing recipe shows the done notice, sends no user message, and records last_run ok at the same version", async () => {
       await saveRecipe(recipeRoots(cwd).user, {
         name: "vendor-invoices",

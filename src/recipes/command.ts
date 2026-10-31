@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
-import { missingParams, runRecipe } from "./replay";
+import { missingParams, runRecipe, unknownParams, unknownParamsMessage } from "./replay";
 import { formatFailureHandoff, listText } from "./run-tool";
 import { findRecipe, listRecipes, recordRun } from "./store";
 import { approveProjectRecipe, trustWritten } from "./trust";
@@ -56,6 +56,11 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
       const stored = await findRecipe(ctx.cwd, name);
       if (!stored.success) {
         ctx.ui.notify(stored.error, "error");
+        return;
+      }
+      const unknown = unknownParams(stored.data.recipe, params);
+      if (unknown.length > 0) {
+        ctx.ui.notify(unknownParamsMessage(stored.data.recipe, unknown), "error");
         return;
       }
       const missing = missingParams(stored.data.recipe, params);

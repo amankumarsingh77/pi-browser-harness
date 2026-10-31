@@ -74,6 +74,20 @@ describe("browser_run_recipe", () => {
     assert.equal(fake.calls.length, 0);
   });
 
+  test("SC104: running vendor-invoices with month and a misspelled topc is refused naming topc, before any CDP call", async () => {
+    await saveRecipe(recipeRoots(cwd).project, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
+    const fake = await createFakeClient();
+
+    const r = await runRecipeTool.handler(
+      { name: "vendor-invoices", params: { month: "2026-10", topc: "x" } },
+      { client: fake.client, signal: undefined, onUpdate: () => undefined, extensionCtx: fakeCtx({ cwd }).ctx },
+    );
+
+    assert.ok(!r.success, "expected the run to be refused");
+    assert.match(r.error.message, /topc/);
+    assert.equal(fake.calls.length, 0);
+  });
+
   test("SC35: a replay started while a serialized tool holds the mutation mutex runs its first step only after the release, and completes", async () => {
     await saveRecipe(recipeRoots(cwd).user, recipeOf("vendor-invoices", "billing.test", NAVIGATE_ONLY));
     const { fake, client } = await navigatingClient();

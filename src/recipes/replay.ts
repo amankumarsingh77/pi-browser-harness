@@ -101,6 +101,15 @@ export const fillExpect = (e: StepExpect, params: Readonly<Record<string, string
 export const missingParams = (recipe: Recipe, params: Readonly<Record<string, string>>): ReadonlyArray<string> =>
   Object.keys(recipe.params).filter((p) => params[p] === undefined);
 
+// A param the recipe does not declare is a typo or the wrong recipe; ignoring it would run with the wrong values.
+export const unknownParams = (recipe: Recipe, params: Readonly<Record<string, string>>): ReadonlyArray<string> =>
+  Object.keys(params).filter((p) => !(p in recipe.params));
+
+export const unknownParamsMessage = (recipe: Recipe, unknown: ReadonlyArray<string>): string => {
+  const declared = Object.keys(recipe.params);
+  return `Recipe ${recipe.name} has no param ${unknown.join(", ")}; ${declared.length > 0 ? `its params are: ${declared.join(", ")}` : "it takes no params"}`;
+};
+
 export const describeStep = (step: RecipeStep): string => {
   const l = step.locator;
   const target = l === undefined ? "" : "role" in l ? ` ${l.role} "${l.name}"` : "css" in l ? ` ${l.css}` : ` at (${l.x}, ${l.y})`;

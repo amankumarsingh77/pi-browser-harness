@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { err, ok } from "../util/result";
 import { defineBrowserTool } from "../util/tool";
 import { RECIPE_NAME, type Recipe } from "./recipe";
-import { type ReplayFailure, describeStep, missingParams, runRecipe } from "./replay";
+import { type ReplayFailure, describeStep, missingParams, runRecipe, unknownParams, unknownParamsMessage } from "./replay";
 import { findRecipe, listRecipes, recordRun } from "./store";
 import { approveProjectRecipe, trustWritten } from "./trust";
 
@@ -93,6 +93,8 @@ export const runRecipeTool = defineBrowserTool({
     const stored = await findRecipe(cwd, args.name);
     if (!stored.success) return err({ kind: "invalid_args", message: stored.error });
     const params = args.params ?? {};
+    const unknown = unknownParams(stored.data.recipe, params);
+    if (unknown.length > 0) return err({ kind: "invalid_args", message: unknownParamsMessage(stored.data.recipe, unknown) });
     const missing = missingParams(stored.data.recipe, params);
     if (missing.length > 0) {
       const hints = missing.map((p) => `${p} (e.g. ${stored.data.recipe.params[p]?.example ?? ""})`).join(", ");
