@@ -139,6 +139,22 @@ describe("applyParams", () => {
     assert.equal(r.data[0]?.args["value"], "{{day}}");
     assert.equal(r.data[1]?.args["value"], "{{month}}");
   });
+
+  test("SC74: param repo=nodejs/node becomes {{repo}} in a new tab's expected URL and in an expected element's name, not only in its args", () => {
+    const r = applyParams(
+      [
+        {
+          action: "new_tab",
+          args: { url: "https://github.com/nodejs/node" },
+          expect: { url: "https://github.com/nodejs/node", appeared: [{ role: "heading", name: "nodejs/node" }] },
+        },
+      ],
+      { repo: "nodejs/node" },
+    );
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data[0]?.expect, { url: "https://github.com/{{repo}}", appeared: [{ role: "heading", name: "{{repo}}" }] });
+  });
 });
 
 describe("siteOf", () => {

@@ -239,4 +239,23 @@ describe("recipe replay", () => {
 
     assert.deepEqual(outcome, { ok: true, steps: 2 });
   });
+
+  test("SC75: a new tab expecting https://billing.test/{{acct}} passes with acct=acme when the tab lands on https://billing.test/acme", async () => {
+    const started = await clientFor();
+    let url = "https://billing.test/";
+    const client = withClient(started.client, {
+      pageInfo: () => Promise.resolve(pageInfoOf({ url })),
+      newTab: (opened) => {
+        url = opened ?? "about:blank";
+        return Promise.resolve(ok("t2"));
+      },
+    });
+    const recipe = recipeOf([
+      { action: "new_tab", args: { url: "https://billing.test/{{acct}}" }, expect: { url: "https://billing.test/{{acct}}", appeared: [{ role: "button", name: "Export CSV" }] } },
+    ]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { acct: "acme" } });
+
+    assert.deepEqual(outcome, { ok: true, steps: 1 });
+  });
 });

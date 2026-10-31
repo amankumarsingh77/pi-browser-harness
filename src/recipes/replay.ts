@@ -85,6 +85,12 @@ export const fillArgs = (args: JsonObject, params: Readonly<Record<string, strin
   return out;
 };
 
+export const fillExpect = (e: StepExpect, params: Readonly<Record<string, string>>): StepExpect => ({
+  ...e,
+  ...(e.url !== undefined ? { url: fill(e.url, params) } : {}),
+  ...(e.appeared !== undefined ? { appeared: e.appeared.map((a) => ({ ...a, name: fill(a.name, params) })) } : {}),
+});
+
 export const missingParams = (recipe: Recipe, params: Readonly<Record<string, string>>): ReadonlyArray<string> =>
   Object.keys(recipe.params).filter((p) => params[p] === undefined);
 
@@ -251,7 +257,7 @@ export const runRecipe = async (opts: {
       release();
     }
     if (!result.success) return fail(n, step, result.error.message);
-    if (step.expect !== undefined && !(await waitForExpect(client, step.expect, downloadsBefore, opts.signal))) {
+    if (step.expect !== undefined && !(await waitForExpect(client, fillExpect(step.expect, params), downloadsBefore, opts.signal))) {
       return fail(n, step, "the page did not change the way the recorded run did");
     }
     const landed = opensPage ? await authWall(client, hosts) : undefined;

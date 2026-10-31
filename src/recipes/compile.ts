@@ -70,6 +70,13 @@ const templateArgs = (args: JsonObject, pairs: ReadonlyArray<readonly [string, s
 const templateLocator = (l: Locator, pairs: ReadonlyArray<readonly [string, string]>): Locator =>
   "role" in l ? { ...l, name: template(l.name, pairs) } : l;
 
+// The page a step lands on carries the param too: a repo's URL, an account's name in a heading.
+const templateExpect = (e: StepExpect, pairs: ReadonlyArray<readonly [string, string]>): StepExpect => ({
+  ...e,
+  ...(e.url !== undefined ? { url: template(e.url, pairs) } : {}),
+  ...(e.appeared !== undefined ? { appeared: e.appeared.map((a) => ({ ...a, name: template(a.name, pairs) })) } : {}),
+});
+
 // Every occurrence of a param's value becomes {{name}}; longer values go first so "2026-09-01" is not split by "2026-09".
 export const applyParams = (
   steps: ReadonlyArray<RecipeStep>,
@@ -82,6 +89,7 @@ export const applyParams = (
     ...s,
     args: templateArgs(s.args, pairs),
     ...(s.locator !== undefined ? { locator: templateLocator(s.locator, pairs) } : {}),
+    ...(s.expect !== undefined ? { expect: templateExpect(s.expect, pairs) } : {}),
   }));
   for (const [name, value] of pairs) {
     const used = out.some((s) => JSON.stringify(s).includes(`{{${name}}}`));
