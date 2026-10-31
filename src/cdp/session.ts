@@ -39,6 +39,19 @@ const NAVIGATES: ReadonlySet<string> = new Set(["Page.navigate", "Page.reload", 
 
 const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
+// A request an extension's code started (a content script's fetch shows up on the page's own network log). It is
+// not the page's doing, so it says nothing about what a call did.
+const fromExtension = (params: unknown): boolean => {
+  const initiator = isRecord(params) ? params["initiator"] : undefined;
+  if (!isRecord(initiator)) return false;
+  if (typeof initiator["url"] === "string" && initiator["url"].startsWith("chrome-extension://")) return true;
+  for (let stack = initiator["stack"]; isRecord(stack); stack = stack["parent"]) {
+    const frames = Array.isArray(stack["callFrames"]) ? stack["callFrames"] : [];
+    if (frames.some((f) => isRecord(f) && typeof f["url"] === "string" && f["url"].startsWith("chrome-extension://"))) return true;
+  }
+  return false;
+};
+
 const requestMethod = (params: unknown): string => {
   const request = isRecord(params) ? params["request"] : undefined;
   const method = isRecord(request) ? request["method"] : undefined;
@@ -68,7 +81,8 @@ export type CdpSession = {
   refMappings(): ReadonlyMap<string, number>;
   // Downloads Chrome has started from the current tab; compare before and after an action to see whether it began one.
   downloadCount(): number;
-  // Requests the current tab has sent with a method that can change server state (anything but GET, HEAD, OPTIONS).
+  // Requests the current tab's page has sent with a method that can change server state (anything but GET, HEAD,
+  // OPTIONS); requests an extension started are not counted.
   writeRequestCount(): number;
   // Sends on the current page session. Params are required only when the method has a required key (see CallArgs).
   call<M extends CdpMethod>(method: M, ...args: CallArgs<M>): Promise<Result<ResultOf<M>, CdpError>>;
@@ -227,7 +241,7 @@ export const createCdpSession = (
         const tab = resolveTab(ev.sessionId);
         if (tab) {
           tab.networkBuffer.ingestRequestWillBeSent(ev.params);
-          if (!SAFE_METHODS.has(requestMethod(ev.params))) tab.writes += 1;
+          if (!SAFE_METHODS.has(requestMethod(ev.params)) && !fromExtension(ev.params)) tab.writes += 1;
         }
         break;
       }

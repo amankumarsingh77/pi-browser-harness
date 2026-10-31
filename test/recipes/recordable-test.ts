@@ -369,6 +369,28 @@ describe("recipe journal recording", () => {
     assert.equal((await only()).wrote, true);
   });
 
+  test("SC107: a POST an extension's content script sends while a click runs is not counted, so the click is not journaled wrote", async () => {
+    const fake = await createFakeClient({});
+    const client = withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) });
+
+    const finish = await observeCall({ name: "browser_click", concurrency: "serialized", args: { x: 1, y: 1 }, client });
+    fake.emit({
+      method: "Network.requestWillBeSent",
+      sessionId: "s1",
+      params: {
+        requestId: "r1",
+        request: { method: "POST", url: "https://extension.flash.co/api/extension/pdp-detector" },
+        timestamp: 1,
+        type: "Fetch",
+        initiator: { type: "script", stack: { callFrames: [{ functionName: "", scriptId: "9", url: "chrome-extension://abcdef/content.js", lineNumber: 1, columnNumber: 1 }] } },
+      },
+    });
+    await flush();
+    await finish?.({ ok: true });
+
+    assert.equal((await only()).wrote, undefined);
+  });
+
   test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
     const client = await clientFor({});
 
