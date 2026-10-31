@@ -21,9 +21,12 @@ const LOADS_PAGE: ReadonlySet<string> = new Set(["browser_navigate", "browser_ne
 // What a replay should see after the step. A new URL, a dialog, a download and a status or alert message are each
 // a direct sign the step worked; elements that appeared are used only when there is none of these, since they are
 // often whatever else the page happened to render.
+// A wait changes nothing; whatever appeared while it waited is the page's own doing, and its success is the check.
+const WAITS: ReadonlySet<string> = new Set(["browser_wait_for", "browser_wait_for_load"]);
+
 const expectOf = (e: JournalEntry): StepExpect | undefined => {
   const c = e.change;
-  if (c === undefined) return undefined;
+  if (c === undefined || WAITS.has(e.tool)) return undefined;
   const url = c.url !== undefined && c.url !== e.url ? c.url : undefined;
   const messages = c.appeared.filter((a) => MESSAGE_ROLES.has(a.role));
   const strong = url !== undefined || c.dialog !== undefined || c.download === true || LOADS_PAGE.has(e.tool);

@@ -186,6 +186,17 @@ describe("compileSteps", () => {
     assert.match(r.error, /close.*did not open/);
   });
 
+  test("SC106: a wait_for_load during which the latest release's link appeared, and a wait_for, carry no expectation: a wait causes nothing", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({ tool: "browser_wait_for_load", change: { appeared: [{ role: "link", name: "2026-10-28, Version 26.13.0 'Lithium' (LTS)" }] } }),
+        entry({ tool: "browser_wait_for", args: { selector: "#month" }, change: { appeared: [{ role: "combobox", name: "Month" }] } }),
+      ]),
+    );
+
+    assert.deepEqual(steps.map((s) => s.expect), [undefined, undefined]);
+  });
+
   test("SC64: a browser_download pointing Chrome's downloads at /tmp/x between two clicks compiles to just the two clicks", () => {
     const steps = okSteps(
       compileSteps([
