@@ -92,7 +92,7 @@ const ESCAPES: Readonly<Record<string, string>> = { "\n": "\\n", "\r": "\\r", "\
 // A param value is the caller's text: a raw newline or terminal escape in it could forge lines of the dialog.
 // eslint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
-const printable = (s: string): string => s.replace(CONTROL, (c) => ESCAPES[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+export const printable = (s: string): string => s.replace(CONTROL, (c) => ESCAPES[c] ?? `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 
 const shownUrl = (url: string): string => {
   const origin = originOf(url);

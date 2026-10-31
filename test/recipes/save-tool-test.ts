@@ -131,6 +131,18 @@ describe("browser_save_recipe", () => {
     }
   });
 
+  test("SC105: a wait for page text holding a newline and a forged \"name: other\" line is shown escaped on one line, after the recipe", async () => {
+    await activeJournal()?.append({ source: "agent", replayable: true, password: false, ok: true, tool: "browser_wait_for", args: { text: "Done\n\nname: other" }, url: "https://billing.test/invoices" });
+
+    const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", params: { month: "2026-09" } } });
+    await run;
+
+    const message = fake.confirmations[0]?.message ?? "";
+    assert.match(message, /step 4: waits for the text "Done\\n\\nname: other"/);
+    assert.equal(message.split("\n").filter((l) => l.startsWith("name: ")).length, 1, "only the recipe's own name line");
+    assert.ok(message.indexOf("name: vendor-invoices") < message.indexOf("step 4: waits"), "the notes come after the recipe");
+  });
+
   test("SC23: when the user declines the confirm, the tool fails saying so and no recipe file is written", async () => {
     const { run } = await save({ confirms: [false], args: { name: "vendor-invoices", params: { month: "2026-09" } } });
 

@@ -7,7 +7,7 @@ import { applyParams, compileSteps, isNoEffectScript, latestTask, siteOf } from 
 import { type JournalEntry, activeJournal } from "./journal";
 import { RECIPE_NAME, type Recipe, type RecipeStep, stringifyRecipe } from "./recipe";
 import { type StoredRecipe, findRecipe, recipeRoots, saveRecipe } from "./store";
-import { trustWritten } from "./trust";
+import { printable, trustWritten } from "./trust";
 import { describeStep, runRecipe } from "./replay";
 
 const SaveArgs = Type.Object({
@@ -26,7 +26,7 @@ const SaveArgs = Type.Object({
   ),
 });
 
-// The user sees exactly what will be written, after any notes on it; without a UI the agent's call is the
+// The user sees exactly what will be written, then any notes on it; without a UI the agent's call is the
 // confirmation.
 export const confirmAndSave = async (
   ctx: ExtensionContext,
@@ -36,7 +36,7 @@ export const confirmAndSave = async (
   notes = "",
 ): Promise<Result<StoredRecipe, ToolErr>> => {
   if (ctx.hasUI) {
-    const yes = await ctx.ui.confirm(title, `${notes}${stringifyRecipe(recipe)}`);
+    const yes = await ctx.ui.confirm(title, `${stringifyRecipe(recipe)}${notes === "" ? "" : `\n${notes}`}`);
     if (!yes) return err({ kind: "invalid_state", message: "The user declined to save the recipe; nothing was written." });
   }
   const saved = await saveRecipe(root, recipe);
@@ -57,6 +57,12 @@ const leftOutNote = (entries: ReadonlyArray<JournalEntry>): string => {
     : `\nLeft out ${n} browser_execute_js call${n === 1 ? "" : "s"} that changed nothing on the page; if one of them did something the task needs, redo it with browser tools and save again.`;
 };
 
+const MAX_QUOTED = 120;
+
+// Page text in the dialog is quoted on one line and cut short: a newline in it could forge lines of the dialog,
+// and a long one could push the recipe out of view.
+const quoted = (text: string): string => `"${printable(text.length > MAX_QUOTED ? `${text.slice(0, MAX_QUOTED)}…` : text)}"`;
+
 const PLACEHOLDER = /\{\{[a-zA-Z_][a-zA-Z0-9_]*(?:\|[a-z]+)?\}\}/g;
 
 // Text a step matches that the recorded run's page showed, which another run's page may not: a wait for page text
@@ -66,17 +72,17 @@ export const runSpecificText = (steps: ReadonlyArray<RecipeStep>): ReadonlyArray
   steps.flatMap((s, i) => {
     const at = `step ${i + 1}`;
     const text = s.args["text"];
-    const waits = s.action === "wait_for" && typeof text === "string" && text.match(PLACEHOLDER) === null ? [`${at}: waits for the text "${text}"`] : [];
+    const waits = s.action === "wait_for" && typeof text === "string" && text.match(PLACEHOLDER) === null ? [`${at}: waits for the text ${quoted(text)}`] : [];
     const names = [...(s.locator !== undefined && "name" in s.locator ? [s.locator.name] : []), ...(s.expect?.appeared ?? []).map((a) => a.name)];
     const mixed = names.filter((n) => n.match(PLACEHOLDER) !== null && n.replace(PLACEHOLDER, "").trim() !== "");
-    return [...waits, ...mixed.map((n) => `${at}: ${describeStep(s)} matches "${n}"`)];
+    return [...waits, ...mixed.map((n) => `${at}: ${printable(describeStep(s))} matches ${quoted(n)}`)];
   });
 
 const specificNote = (steps: ReadonlyArray<RecipeStep>): string => {
   const found = runSpecificText(steps);
   return found.length === 0
     ? ""
-    : `These steps match text from this run's page, which another run's page may not show; replace them with steps that do not depend on it if so:\n${found.join("\n")}\n\n`;
+    : `These steps match text from this run's page, which another run's page may not show; replace them with steps that do not depend on it if so:\n${found.join("\n")}\n`;
 };
 
 const isFailureMarker = (e: JournalEntry, name: string): boolean =>
