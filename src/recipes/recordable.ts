@@ -50,6 +50,7 @@ export const NON_REPLAYABLE: ReadonlySet<string> = new Set([
 
 const IGNORED: ReadonlySet<string> = new Set(["browser_setup", "browser_web_search", "browser_save_recipe", "browser_run_recipe"]);
 
+// Args a ref-mode tool turns into its locator, so the step need not keep them.
 const HANDLE_KEYS: ReadonlySet<string> = new Set(["ref", "selector", "x", "y"]);
 const MAX_APPEARED = 5;
 
@@ -178,10 +179,12 @@ const numberArg = (args: Readonly<Record<string, unknown>>, key: string): number
   return typeof v === "number" ? v : undefined;
 };
 
-const plainArgs = (args: Readonly<Record<string, unknown>>, redact: boolean): JsonObject => {
+// A ref is a handle into this session only, so it is never kept; selector and x/y are the step itself for a tool
+// with no locator, such as browser_wait_for or browser_scroll.
+const plainArgs = (args: Readonly<Record<string, unknown>>, redact: boolean, located: boolean): JsonObject => {
   const out: Record<string, string | number | boolean> = {};
   for (const [k, v] of Object.entries(args)) {
-    if (HANDLE_KEYS.has(k) || k === "fields") continue;
+    if (k === "ref" || k === "fields" || (located && HANDLE_KEYS.has(k))) continue;
     if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = v;
   }
   if (redact) {
@@ -246,7 +249,7 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
           source: "agent",
           tool: name,
           replayable: mode !== undefined,
-          args: plainArgs(args, password),
+          args: plainArgs(args, password, mode === "ref"),
           password,
           url,
           ok: outcome.ok,

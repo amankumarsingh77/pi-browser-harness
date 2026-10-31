@@ -297,4 +297,16 @@ describe("recipe journal recording", () => {
 
     assert.deepEqual(notes, [undefined, undefined, undefined]);
   });
+
+  test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
+    const client = await clientFor({});
+
+    await observe({ client, name: "browser_wait_for", concurrency: "parallel", args: { selector: "#month" } });
+    await observe({ client, name: "browser_scroll", args: { x: 10, y: 20, deltaY: 300 } });
+
+    const [wait, scroll] = await journal.entries();
+    assert.deepEqual(wait?.args, { selector: "#month" });
+    assert.equal(wait.locator, undefined);
+    assert.deepEqual(scroll?.args, { x: 10, y: 20, deltaY: 300 });
+  });
 });
