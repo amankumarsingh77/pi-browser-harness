@@ -74,6 +74,17 @@ describe("browser_save_recipe", () => {
     assert.match(resultText(result), new RegExp(userFile().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
+  test("SC80: a save after a browser_execute_js that changed nothing writes the 3 steps and says one call was left out", async () => {
+    await activeJournal()?.append({ source: "agent", replayable: false, password: false, ok: true, tool: "browser_execute_js", args: {}, url: "https://billing.test/invoices", change: { appeared: [] } });
+
+    const result = await (await save({ confirms: [true], args: { name: "vendor-invoices", params: { month: "2026-09" } } })).run;
+
+    const parsed = parseRecipe(readFileSync(userFile(), "utf8"));
+    assert.ok(parsed.success, parsed.success ? "" : parsed.error);
+    assert.equal(parsed.data.steps.length, 3);
+    assert.match(resultText(result), /Left out 1 browser_execute_js call that changed nothing/);
+  });
+
   test("SC23: when the user declines the confirm, the tool fails saying so and no recipe file is written", async () => {
     const { run } = await save({ confirms: [false], args: { name: "vendor-invoices", params: { month: "2026-09" } } });
 
@@ -171,6 +182,14 @@ describe("repairSteps", () => {
     recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
   };
   const agentClick = (name: string): JournalEntry => entry({ tool: "browser_click", locator: { role: "button", name, nth: 0 } });
+
+  test("SC79: a repair whose agent read the page with a browser_execute_js that changed nothing keeps only the click", () => {
+    const read = entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [] } });
+    const r = repairSteps(recipe, [failedAt(3), read, agentClick("Download CSV")], 3);
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.deepEqual(r.data.steps.slice(2), [click("button", "Download CSV")]);
+  });
 
   test("SC43: with a failure marker at step 3 followed by clicks on Download CSV and Close, steps 1-2 stay and the two clicks replace steps 3-4", () => {
     const r = repairSteps(recipe, [failedAt(3), agentClick("Download CSV"), agentClick("Close")], 3);

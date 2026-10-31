@@ -43,8 +43,31 @@ describe("compileSteps", () => {
     assert.match(r.error, /recipes never type credentials/);
   });
 
-  test("SC17: a task holding a successful browser_execute_js is refused with an error naming browser_execute_js", () => {
-    const r = compileSteps([entry({ tool: "browser_navigate" }), entry({ tool: "browser_execute_js", replayable: false })]);
+  test("SC17: a task holding a browser_execute_js after which a dialog \"Saved\" appeared is refused with an error naming browser_execute_js", () => {
+    const r = compileSteps([
+      entry({ tool: "browser_navigate" }),
+      entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [{ role: "dialog", name: "Saved" }] } }),
+    ]);
+
+    assert.ok(!r.success);
+    assert.match(r.error, /browser_execute_js/);
+  });
+
+  test("SC77: a browser_execute_js that left the URL as it was and made nothing appear is left out, and the two clicks around it compile", () => {
+    const r = compileSteps([
+      entry({ tool: "browser_click", locator: { role: "link", name: "Reports", nth: 0 } }),
+      entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [], url: "https://b.test/" } }),
+      entry({ tool: "browser_click", locator: { role: "button", name: "Export", nth: 0 } }),
+    ]);
+
+    assert.deepEqual(okSteps(r).map((s) => s.locator), [
+      { role: "link", name: "Reports", nth: 0 },
+      { role: "button", name: "Export", nth: 0 },
+    ]);
+  });
+
+  test("SC78: a browser_execute_js after which the page moved to https://b.test/next is still refused", () => {
+    const r = compileSteps([entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [], url: "https://b.test/next" } })]);
 
     assert.ok(!r.success);
     assert.match(r.error, /browser_execute_js/);

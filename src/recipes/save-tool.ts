@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr } from "../util/tool";
-import { applyParams, compileSteps, latestTask, siteOf } from "./compile";
+import { applyParams, compileSteps, isNoEffectScript, latestTask, siteOf } from "./compile";
 import { type JournalEntry, activeJournal } from "./journal";
 import { RECIPE_NAME, type Recipe, type RecipeStep, stringifyRecipe } from "./recipe";
 import { type StoredRecipe, findRecipe, recipeRoots, saveRecipe } from "./store";
@@ -46,6 +46,13 @@ const fragileNote = (recipe: Recipe): string => {
   return steps.length === 0 ? "" : `\nFragile steps (located by coordinates, may break on layout changes): ${steps.join(", ")}`;
 };
 
+const leftOutNote = (entries: ReadonlyArray<JournalEntry>): string => {
+  const n = entries.filter(isNoEffectScript).length;
+  return n === 0
+    ? ""
+    : `\nLeft out ${n} browser_execute_js call${n === 1 ? "" : "s"} that changed nothing on the page; if one of them did something the task needs, redo it with browser tools and save again.`;
+};
+
 const isFailureMarker = (e: JournalEntry, name: string): boolean =>
   e.tool === "browser_run_recipe" && !e.ok && e.recipe?.name === name;
 
@@ -58,7 +65,7 @@ export const repairSteps = (
   recipe: Recipe,
   entries: ReadonlyArray<JournalEntry>,
   step: number,
-): Result<{ readonly steps: ReadonlyArray<RecipeStep> }, string> => {
+): Result<{ readonly steps: ReadonlyArray<RecipeStep>; readonly note: string }, string> => {
   let at = -1;
   for (let i = entries.length - 1; i >= 0 && at < 0; i--) {
     const e = entries[i];
@@ -73,7 +80,7 @@ export const repairSteps = (
   const declared = Object.fromEntries(Object.entries(stringParams(marker.args)).filter(([k]) => k in recipe.params));
   const templated = applyParams(compiled.data, declared);
   const steps = templated.success ? templated.data : compiled.data;
-  return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps] });
+  return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps], note: leftOutNote(after) });
 };
 
 export const saveRecipeTool = defineBrowserTool({
@@ -106,7 +113,7 @@ export const saveRecipeTool = defineBrowserTool({
       if (!saved.success) return saved;
       const r = saved.data.recipe;
       return ok({
-        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.${fragileNote(r)}`,
+        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.${fragileNote(r)}${repaired.data.note}`,
         details: { name: r.name, version: r.version, path: saved.data.path, steps: r.steps.length },
       });
     }
@@ -129,7 +136,7 @@ export const saveRecipeTool = defineBrowserTool({
     if (!saved.success) return saved;
     const r = saved.data.recipe;
     return ok({
-      text: `Saved recipe ${r.name} v${r.version} (${r.steps.length} steps) to ${saved.data.path}${fragileNote(r)}`,
+      text: `Saved recipe ${r.name} v${r.version} (${r.steps.length} steps) to ${saved.data.path}${fragileNote(r)}${leftOutNote(task)}`,
       details: { name: r.name, version: r.version, path: saved.data.path, steps: r.steps.length },
     });
   },
