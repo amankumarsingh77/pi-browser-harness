@@ -130,7 +130,8 @@ const urlOf = async (client: BrowserClient): Promise<string> => {
 };
 
 export type BeforeCall = {
-  readonly refs: ReadonlyMap<string, RefSignature>;
+  // The page's elements read just before the call; undefined when that read failed, and then none are recorded.
+  readonly refs: ReadonlyMap<string, RefSignature> | undefined;
   readonly downloads: number;
   // Undefined when the messages could not be read before the call; then none are recorded.
   readonly messages: ReadonlyArray<LiveMessage> | undefined;
@@ -154,10 +155,11 @@ export const observeChange = async (client: BrowserClient, before: BeforeCall): 
   const dialog = info.success && info.data.kind === "dialog" ? info.data.dialog.type : undefined;
   const url = info.success && info.data.kind === "page" ? info.data.url : undefined;
   const refreshed = await refreshRefs(client);
-  const had = new Set([...before.refs.values()].map(keyOf));
-  const elements = refreshed.success
-    ? [...refreshed.data.cur.values()].filter((sig) => sig.name !== "" && !had.has(keyOf(sig))).map((sig) => ({ role: sig.role, name: sig.name }))
-    : [];
+  const had = new Set([...(before.refs ?? new Map<string, RefSignature>()).values()].map(keyOf));
+  const elements =
+    refreshed.success && before.refs !== undefined
+      ? [...refreshed.data.cur.values()].filter((sig) => sig.name !== "" && !had.has(keyOf(sig))).map((sig) => ({ role: sig.role, name: sig.name }))
+      : [];
   // Messages go first: a toast is the clearest sign an action worked, and the cap must not crowd it out.
   const appeared = [...(await newMessages(client, before.messages)), ...elements].slice(0, MAX_APPEARED);
   const download = client.session().downloadCount() > before.downloads;
@@ -219,6 +221,9 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
   const known = mode !== undefined || NON_REPLAYABLE.has(name);
   if (!known && concurrency === "parallel") return undefined;
   try {
+    // Read the page now, not from the agent's last snapshot: that one may be cut short or from another tab, and
+    // everything missing from it would look like it appeared after this call. Refs the agent holds keep their names.
+    const baseline = await refreshRefs(client);
     const ref = stringArg(args, "ref");
     const selector = stringArg(args, "selector");
     const x = numberArg(args, "x");
@@ -238,7 +243,7 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
     }
     const url = await urlOf(client);
     const before: BeforeCall = {
-      refs: new Map(client.session().refSignatures()),
+      refs: baseline.success ? baseline.data.cur : undefined,
       downloads: client.session().downloadCount(),
       messages: await readLiveMessages(client),
     };

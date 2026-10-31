@@ -164,10 +164,10 @@ describe("recipe journal recording", () => {
       refs: [{ ref: "e1", backendId: 11, sig: sig("button", "Export") }],
       urls: [BEFORE_URL, "https://example.test/done"],
       canned: {
-        "Accessibility.getFullAXTree": tree(
-          { role: "button", name: "Export", backendId: 11 },
-          { role: "link", name: "Export complete", backendId: 12 },
-        ),
+        "Accessibility.getFullAXTree": [
+          tree({ role: "button", name: "Export", backendId: 11 }),
+          tree({ role: "button", name: "Export", backendId: 11 }, { role: "link", name: "Export complete", backendId: 12 }),
+        ],
       },
     });
 
@@ -296,6 +296,17 @@ describe("recipe journal recording", () => {
     }
 
     assert.deepEqual(notes, [undefined, undefined, undefined]);
+  });
+
+  test("SC83: a browser_execute_js read, after a snapshot that showed only button \"Go\" of a page that also has link \"Docs\", journals that nothing appeared", async () => {
+    const client = await clientFor({
+      refs: [{ ref: "e1", backendId: 11, sig: sig("button", "Go") }],
+      canned: { "Accessibility.getFullAXTree": tree({ role: "button", name: "Go", backendId: 11 }, { role: "link", name: "Docs", backendId: 12 }) },
+    });
+
+    await observe({ client, name: "browser_execute_js", args: { expression: "document.title" } });
+
+    assert.deepEqual((await only()).change?.appeared, []);
   });
 
   test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
