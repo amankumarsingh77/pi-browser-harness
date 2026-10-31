@@ -21,7 +21,7 @@ import { newTabTool } from "../domains/tabs";
 import { type Result, err } from "../util/result";
 import { sleep } from "../util/sleep";
 import type { DefinedBrowserTool, JsonObject, ToolErr, ToolOk } from "../util/tool";
-import { findTarget } from "./find";
+import { findTarget, sameName } from "./find";
 import { activeJournal } from "./journal";
 import type { Recipe, RecipeStep, StepExpect } from "./recipe";
 import { type LiveMessage, MESSAGE_ROLES, readLiveMessages } from "./recordable";
@@ -142,7 +142,7 @@ const anyAppeared = async (client: BrowserClient, appeared: ReadonlyArray<LiveMe
   if (elements.length === 0) return false;
   const refreshed = await refreshRefs(client);
   if (!refreshed.success) return false;
-  return [...refreshed.data.cur.values()].some((s) => elements.some((a) => a.role === s.role && a.name === s.name));
+  return [...refreshed.data.cur.values()].some((s) => elements.some((a) => a.role === s.role && sameName(a.name, s.name)));
 };
 
 const expectHolds = async (client: BrowserClient, e: StepExpect, downloadsBefore: number): Promise<boolean> => {
