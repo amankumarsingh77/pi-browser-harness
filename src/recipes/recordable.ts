@@ -33,6 +33,8 @@ export const REPLAYABLE: ReadonlyMap<string, "ref" | "fields" | "none"> = new Ma
   ["browser_wait_for_load", "none"],
   ["browser_new_tab", "none"],
   ["browser_download", "none"],
+  // Replayable only when it closes the tab the agent is on; see closesCurrentTab.
+  ["browser_close_tab", "none"],
 ]);
 
 // Page-changing calls a recipe cannot replay safely: arbitrary code, or a handle that only means something now.
@@ -40,7 +42,6 @@ export const NON_REPLAYABLE: ReadonlySet<string> = new Set([
   "browser_execute_js",
   "browser_run_script",
   "browser_switch_tab",
-  "browser_close_tab",
   "browser_open_urls",
   "browser_set_headers",
   "browser_clear_headers",
@@ -190,6 +191,14 @@ const numberArg = (args: Readonly<Record<string, unknown>>, key: string): number
 
 // A ref is a handle into this session only, so it is never kept; selector and x/y are the step itself for a tool
 // with no locator, such as browser_wait_for or browser_scroll.
+// A close of the tab the agent is on replays as "close the current tab". A close of any other tab names a target id
+// that only this browser session has, so it cannot be replayed.
+const closesCurrentTab = (client: BrowserClient, args: Readonly<Record<string, unknown>>): boolean => {
+  const current = client.current()?.targetId;
+  const target = stringArg(args, "targetId");
+  return current !== undefined && target !== undefined && target !== "" && current.startsWith(target);
+};
+
 const plainArgs = (args: Readonly<Record<string, unknown>>, redact: boolean, located: boolean): JsonObject => {
   const out: Record<string, string | number | boolean> = {};
   for (const [k, v] of Object.entries(args)) {
@@ -248,6 +257,8 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
       const r = await evalJs(client, FOCUSED_IS_PASSWORD_EXPR);
       password = r.success && r.data === true;
     }
+    const closing = name === "browser_close_tab";
+    const replayable = mode !== undefined && (!closing || closesCurrentTab(client, args));
     const url = await urlOf(client);
     // A script is measured, not judged by what appeared: setting a field's value makes nothing appear.
     const script = name === "browser_execute_js";
@@ -273,8 +284,8 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
         await journal.append({
           source: "agent",
           tool: name,
-          replayable: mode !== undefined,
-          args: plainArgs(args, password, mode === "ref"),
+          replayable,
+          args: closing && replayable ? {} : plainArgs(args, password, mode === "ref"),
           password,
           url,
           ok: outcome.ok,

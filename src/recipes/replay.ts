@@ -17,7 +17,7 @@ import { hasVisiblePasswordField } from "../domains/page/recipe.page";
 import { refreshRefs } from "../domains/ref-resolve";
 import { scrollTool } from "../domains/scroll";
 import { snapshotTool } from "../domains/snapshot";
-import { newTabTool } from "../domains/tabs";
+import { closeTabTool, newTabTool } from "../domains/tabs";
 import { type Result, err } from "../util/result";
 import { sleep } from "../util/sleep";
 import type { DefinedBrowserTool, JsonObject, ToolErr, ToolOk } from "../util/tool";
@@ -50,6 +50,13 @@ const replayer = <S extends TSchema, D extends TSchema>(tool: DefinedBrowserTool
   };
 };
 
+// A recipe closes only the tab it is on: saving accepts a close only after the task's own new_tab.
+const closeCurrentTab: Replayer = (_args, ctx) =>
+  closeTabTool.handler(
+    { targetId: ctx.client.current()?.targetId ?? "" },
+    { client: ctx.client, signal: ctx.signal, extensionCtx: ctx.extensionCtx, onUpdate: () => undefined },
+  );
+
 const REPLAYERS: ReadonlyMap<string, Replayer> = new Map([
   ["click", replayer(clickTool)],
   ["fill", replayer(fillTool)],
@@ -71,6 +78,7 @@ const REPLAYERS: ReadonlyMap<string, Replayer> = new Map([
   ["wait_for_load", replayer(waitForLoadTool)],
   ["new_tab", replayer(newTabTool)],
   ["download", replayer(downloadTool)],
+  ["close_tab", closeCurrentTab],
 ]);
 
 const EXPECT_TIMEOUT_MS = 5_000;

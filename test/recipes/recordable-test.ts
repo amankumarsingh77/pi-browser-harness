@@ -345,6 +345,18 @@ describe("recipe journal recording", () => {
     assert.equal((await only()).readOnly, undefined);
   });
 
+  test("SC91: closing the current tab t1 is journaled replayable with no target id, and closing another tab t2 is not replayable", async () => {
+    const client = await clientFor({});
+
+    await observe({ client, name: "browser_close_tab", args: { targetId: "t1" } });
+    await observe({ client, name: "browser_close_tab", args: { targetId: "t2" } });
+
+    const [current, other] = await journal.entries();
+    assert.equal(current?.replayable, true);
+    assert.deepEqual(current.args, {});
+    assert.equal(other?.replayable, false);
+  });
+
   test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
     const client = await clientFor({});
 

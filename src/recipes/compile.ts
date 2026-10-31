@@ -48,10 +48,15 @@ export const isNoEffectScript = (e: JournalEntry): boolean => e.ok && e.tool ===
 
 export const compileSteps = (entries: ReadonlyArray<JournalEntry>): Result<ReadonlyArray<RecipeStep>, string> => {
   const steps: RecipeStep[] = [];
+  let openedTab = false;
   for (const e of entries) {
     if (!e.ok || SETTINGS.has(e.tool) || isNoEffectScript(e)) continue;
     if (e.password) return err(`${e.tool} typed into a password field; recipes never type credentials, so this task cannot be saved`);
     if (!e.replayable) return err(`${e.tool} cannot be replayed; redo the task without it, or leave it out of the recipe`);
+    if (e.tool === "browser_new_tab") openedTab = true;
+    if (e.tool === "browser_close_tab" && !openedTab) {
+      return err("browser_close_tab closes a tab the task did not open, so a replay would close the user's tab; leave the tab open, or start the task with browser_new_tab");
+    }
     const expect = expectOf(e);
     if (e.tool === "browser_fill_form") {
       for (const f of e.fields ?? []) {

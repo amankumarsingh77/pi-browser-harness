@@ -258,4 +258,20 @@ describe("recipe replay", () => {
 
     assert.deepEqual(outcome, { ok: true, steps: 1 });
   });
+
+  test("SC94: a close_tab step closes the tab the recipe is on", async () => {
+    const started = await clientFor();
+    const closed: string[] = [];
+    const client = withClient(started.client, {
+      closeTab: (targetId) => {
+        closed.push(targetId);
+        return Promise.resolve(ok(undefined));
+      },
+    });
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe: recipeOf([{ action: "close_tab", args: {} }]), params: {} });
+
+    assert.deepEqual(outcome, { ok: true, steps: 1 });
+    assert.deepEqual(closed, ["t1"]);
+  });
 });

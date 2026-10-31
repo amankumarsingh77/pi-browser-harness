@@ -167,6 +167,25 @@ describe("compileSteps", () => {
     assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "menuitem", name: "Rename" }, { role: "menuitem", name: "Delete" }] });
   });
 
+  test("SC92: a task that opened a tab, clicked, then closed that tab compiles the close as a close_tab step with no args", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({ tool: "browser_new_tab", args: { url: "https://b.test/" } }),
+        entry({ tool: "browser_click", locator: { role: "link", name: "Reports", nth: 0 } }),
+        entry({ tool: "browser_close_tab" }),
+      ]),
+    );
+
+    assert.deepEqual(steps.at(-1), { action: "close_tab", args: {} });
+  });
+
+  test("SC93: a task that closes the current tab without having opened one is refused, since replay would close the user's tab", () => {
+    const r = compileSteps([entry({ tool: "browser_click", locator: { role: "link", name: "Reports", nth: 0 } }), entry({ tool: "browser_close_tab" })]);
+
+    assert.ok(!r.success);
+    assert.match(r.error, /close.*did not open/);
+  });
+
   test("SC64: a browser_download pointing Chrome's downloads at /tmp/x between two clicks compiles to just the two clicks", () => {
     const steps = okSteps(
       compileSteps([
