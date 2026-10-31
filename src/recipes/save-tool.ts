@@ -85,14 +85,20 @@ export const repairSteps = (
   return ok({ steps: [...recipe.steps.slice(0, step - 1), ...steps], note: leftOutNote(after), params: stringParams(marker.args) });
 };
 
-// What running a step again would repeat beyond the page itself.
-const sideEffectsOf = (steps: ReadonlyArray<RecipeStep>): ReadonlyArray<string> =>
-  steps.flatMap((s, i) => {
+// Actions that only load or read a page, or wait, and so cannot send data however they were recorded.
+const READS_ONLY: ReadonlySet<string> = new Set(["navigate", "new_tab", "go_back", "go_forward", "wait_for", "wait_for_load", "scroll", "focus", "close_tab"]);
+
+// What running a step again would repeat beyond the page itself. In a recipe saved before steps were marked, any
+// other step may have sent data, so it is listed too: the gate fails closed.
+const sideEffectsOf = (recipe: Recipe): ReadonlyArray<string> =>
+  recipe.steps.flatMap((s, i) => {
+    const unmarked = recipe.writesTracked !== true && !READS_ONLY.has(s.action) && s.writes !== true;
     const effects = [
       ...(s.action === "upload_file" ? ["uploads a file"] : []),
       ...(s.action === "download" ? ["changes where downloads go"] : []),
       ...(s.expect?.download === true ? ["starts a download"] : []),
       ...(s.writes === true ? ["sends data to the site"] : []),
+      ...(unmarked ? ["may send data to the site: saved before this was tracked"] : []),
     ];
     return effects.length > 0 ? [`step ${i + 1}: ${describeStep(s)} (${effects.join(", ")})`] : [];
   });
@@ -107,7 +113,7 @@ const checkRepair = async (
   params: Readonly<Record<string, string>>,
   signal: AbortSignal | undefined,
 ): Promise<Result<string, string>> => {
-  const effects = sideEffectsOf(recipe.steps);
+  const effects = sideEffectsOf(recipe);
   if (effects.length > 0) {
     const why = `a check runs every step again, including:\n${effects.join("\n")}`;
     if (!ctx.hasUI) return ok(`Not checked by a replay: ${why}\nRun the recipe to check it.`);
@@ -173,6 +179,7 @@ export const saveRecipeTool = defineBrowserTool({
       params: Object.fromEntries(Object.entries(params).map(([k, v]) => [k, { type: "string", example: v }])),
       steps: steps.data,
       recorded: { at: new Date().toISOString(), session: extensionCtx.sessionManager.getSessionId() },
+      writesTracked: true,
     };
     const roots = recipeRoots(extensionCtx.cwd);
     const saved = await confirmAndSave(extensionCtx, args.project === true ? roots.project : roots.user, recipe, `Save recipe "${args.name}"?`);

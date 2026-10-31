@@ -34,6 +34,8 @@ export type Recipe = {
   readonly steps: ReadonlyArray<RecipeStep>;
   readonly recorded: { readonly at: string; readonly session: string };
   readonly lastRun?: LastRun;
+  // Saved by a version that marks each step that sent data (`writes`). Without it, an unmarked step may have.
+  readonly writesTracked?: boolean;
 };
 
 export const RECIPE_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -65,6 +67,7 @@ const FileSchema = Type.Object({
   params: Type.Record(Type.String(), Type.Object({ type: Type.Literal("string"), example: Type.String() })),
   steps: Type.Array(Type.Record(Type.String(), Type.Unknown()), { minItems: 1 }),
   recorded: Type.Object({ at: Type.String(), session: Type.String() }),
+  writes_tracked: Type.Optional(Type.Boolean()),
   last_run: Type.Optional(
     Type.Object({
       at: Type.String(),
@@ -173,6 +176,7 @@ export const parseRecipe = (text: string): Result<Recipe, string> => {
     params: raw.params,
     steps,
     recorded: raw.recorded,
+    ...(raw.writes_tracked === true ? { writesTracked: true } : {}),
     ...(lr !== undefined
       ? { lastRun: { at: lr.at, result: lr.result, ...(lr.step !== undefined ? { step: lr.step } : {}), ...(lr.repaired_step !== undefined ? { repairedStep: lr.repaired_step } : {}) } }
       : {}),
@@ -195,6 +199,7 @@ export const stringifyRecipe = (r: Recipe): string =>
       params: r.params,
       steps: r.steps.map(encodeStep),
       recorded: r.recorded,
+      ...(r.writesTracked === true ? { writes_tracked: true } : {}),
       ...(r.lastRun !== undefined
         ? {
             last_run: {

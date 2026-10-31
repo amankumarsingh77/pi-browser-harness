@@ -158,6 +158,7 @@ describe("browser_save_recipe", () => {
           { action: "click", args: {}, locator: { role: "button", name: "Export CSV", nth: 0 } },
         ],
         recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+        writesTracked: true,
       });
       const journal = activeJournal();
       assert.ok(journal !== undefined);
@@ -206,6 +207,7 @@ describe("browser_save_recipe repair check", () => {
       params: { month: { type: "string", example: "2026-09" } },
       steps,
       recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      writesTracked: true,
     });
     await journal.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { month: "2026-10" }, password: false, url: "https://billing.test/invoices", ok: false, recipe: { name: "vendor-invoices", step: 2 } });
   });
@@ -262,6 +264,24 @@ describe("browser_save_recipe repair check", () => {
 
     assert.match(ctx.confirmations[0]?.message ?? "", /step 2: click button "Download CSV" \(starts a download\)/);
     assert.match(fileText(), /version: 2/);
+    assert.match(resultText(result), /Not checked by a replay/);
+  });
+
+  test("SC101: a recipe saved before writes were tracked counts its click as possibly sending data, so the check asks first", async () => {
+    await saveRecipe(recipeRoots(cwd).user, {
+      name: "vendor-invoices",
+      site: "billing.test",
+      version: 1,
+      params: { month: { type: "string", example: "2026-09" } },
+      steps,
+      recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+    });
+    await activeJournal()?.append({ source: "agent", tool: "browser_click", replayable: true, args: {}, locator: { role: "button", name: "Download CSV", nth: 0 }, password: false, url: "https://billing.test/invoices", ok: true });
+
+    const { ctx, result } = await repair([false, true], ["Download CSV"]);
+
+    assert.match(ctx.confirmations[0]?.message ?? "", /step 2: click button "Download CSV" \(may send data to the site: saved before this was tracked\)/);
+    assert.doesNotMatch(ctx.confirmations[0]?.message ?? "", /step 1/);
     assert.match(resultText(result), /Not checked by a replay/);
   });
 
