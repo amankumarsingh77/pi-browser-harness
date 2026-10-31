@@ -110,6 +110,63 @@ describe("compileSteps", () => {
     );
   });
 
+  test("SC84: a new tab that landed on https://github.com/nodejs/node expects only that URL, not the header links that came with the page", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_new_tab",
+          args: { url: "https://github.com/nodejs/node" },
+          url: "https://b.test/",
+          change: { url: "https://github.com/nodejs/node", appeared: [{ role: "link", name: "Homepage (g then d)" }, { role: "button", name: "Open menu" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { url: "https://github.com/nodejs/node" });
+  });
+
+  test("SC85: a click that moved the page to https://b.test/releases expects that URL alone, not the elements of the new page", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_click",
+          locator: { role: "link", name: "Releases", nth: 0 },
+          change: { url: "https://b.test/releases", appeared: [{ role: "link", name: "Skip to content" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { url: "https://b.test/releases" });
+  });
+
+  test("SC86: a click after which status \"Saved\" and button \"Undo\" appeared expects the status alone", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_click",
+          locator: { role: "button", name: "Save", nth: 0 },
+          change: { appeared: [{ role: "status", name: "Saved" }, { role: "button", name: "Undo" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "status", name: "Saved" }] });
+  });
+
+  test("SC87: a click that only opened a menu, with no URL change, message, dialog or download, expects the menu items it showed", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_click",
+          locator: { role: "button", name: "Actions", nth: 0 },
+          change: { appeared: [{ role: "menuitem", name: "Rename" }, { role: "menuitem", name: "Delete" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "menuitem", name: "Rename" }, { role: "menuitem", name: "Delete" }] });
+  });
+
   test("SC64: a browser_download pointing Chrome's downloads at /tmp/x between two clicks compiles to just the two clicks", () => {
     const steps = okSteps(
       compileSteps([

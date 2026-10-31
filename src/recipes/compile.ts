@@ -2,6 +2,7 @@ import { type Result, err, ok } from "../util/result";
 import type { JsonObject } from "../util/tool";
 import type { JournalEntry, Locator } from "./journal";
 import { RECIPE_SITE, type RecipeStep, type StepExpect } from "./recipe";
+import { MESSAGE_ROLES } from "./recordable";
 
 const MAX_EXPECT_APPEARED = 3;
 
@@ -14,12 +15,21 @@ export const latestTask = (entries: ReadonlyArray<JournalEntry>): ReadonlyArray<
   return agent.filter((e) => e.run === last);
 };
 
+// Calls whose effect is the page they land on; the elements of that page say nothing about the step.
+const LOADS_PAGE: ReadonlySet<string> = new Set(["browser_navigate", "browser_new_tab", "browser_go_back", "browser_go_forward", "browser_reload"]);
+
+// What a replay should see after the step. A new URL, a dialog, a download and a status or alert message are each
+// a direct sign the step worked; elements that appeared are used only when there is none of these, since they are
+// often whatever else the page happened to render.
 const expectOf = (e: JournalEntry): StepExpect | undefined => {
   const c = e.change;
   if (c === undefined) return undefined;
-  const appeared = c.appeared.slice(0, MAX_EXPECT_APPEARED);
+  const url = c.url !== undefined && c.url !== e.url ? c.url : undefined;
+  const messages = c.appeared.filter((a) => MESSAGE_ROLES.has(a.role));
+  const strong = url !== undefined || c.dialog !== undefined || c.download === true || LOADS_PAGE.has(e.tool);
+  const appeared = (messages.length > 0 ? messages : strong ? [] : c.appeared).slice(0, MAX_EXPECT_APPEARED);
   const expect: StepExpect = {
-    ...(c.url !== undefined && c.url !== e.url ? { url: c.url } : {}),
+    ...(url !== undefined ? { url } : {}),
     ...(appeared.length > 0 ? { appeared } : {}),
     ...(c.dialog !== undefined ? { dialog: c.dialog } : {}),
     ...(c.download === true ? { download: true } : {}),
