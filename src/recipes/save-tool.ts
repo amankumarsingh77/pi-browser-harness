@@ -108,7 +108,9 @@ export const repairSteps = (
   if (marker.recipe?.step !== step) return err(`the last failed replay of ${recipe.name} stopped at step ${marker.recipe?.step ?? "?"}, not ${step}`);
   const after = entries.slice(at + 1).filter((e) => e.source === "agent");
   const kept = recipe.steps.slice(0, step - 1);
-  const compiled = compileSteps(after, kept.some((s) => s.action === "new_tab"));
+  // Each kept new_tab opens a tab and each kept close_tab closes one; only a tab still open may be closed again.
+  const openTabs = kept.reduce((n, s) => (s.action === "new_tab" ? n + 1 : s.action === "close_tab" ? Math.max(0, n - 1) : n), 0);
+  const compiled = compileSteps(after, openTabs);
   if (!compiled.success) return err(`cannot repair from what was done after the failure: ${compiled.error}`);
   const declared = Object.fromEntries(Object.entries(stringParams(marker.args)).filter(([k]) => k in recipe.params));
   const templated = applyParams(compiled.data, declared);

@@ -49,17 +49,20 @@ const SETTINGS: ReadonlySet<string> = new Set(["browser_download"]);
 // so replay does not need it and it is left out rather than refusing the save.
 export const isNoEffectScript = (e: JournalEntry): boolean => e.ok && e.tool === "browser_execute_js" && e.readOnly === true;
 
-// `openedBefore` is true when steps before these, kept from a recipe being repaired, already opened the tab.
-export const compileSteps = (entries: ReadonlyArray<JournalEntry>, openedBefore = false): Result<ReadonlyArray<RecipeStep>, string> => {
+// `openBefore` counts the tabs that steps before these, kept from a recipe being repaired, opened and left open.
+export const compileSteps = (entries: ReadonlyArray<JournalEntry>, openBefore = 0): Result<ReadonlyArray<RecipeStep>, string> => {
   const steps: RecipeStep[] = [];
-  let openedTab = openedBefore;
+  let openTabs = openBefore;
   for (const e of entries) {
     if (!e.ok || SETTINGS.has(e.tool) || isNoEffectScript(e)) continue;
     if (e.password) return err(`${e.tool} typed into a password field; recipes never type credentials, so this task cannot be saved`);
     if (!e.replayable) return err(`${e.tool} cannot be replayed; redo the task without it, or leave it out of the recipe`);
-    if (e.tool === "browser_new_tab") openedTab = true;
-    if (e.tool === "browser_close_tab" && !openedTab) {
-      return err("browser_close_tab closes a tab the task did not open, so a replay would close the user's tab; leave the tab open, or start the task with browser_new_tab");
+    if (e.tool === "browser_new_tab") openTabs += 1;
+    if (e.tool === "browser_close_tab") {
+      if (openTabs === 0) {
+        return err("browser_close_tab closes a tab the task did not open, so a replay would close the user's tab; leave the tab open, or start the task with browser_new_tab");
+      }
+      openTabs -= 1;
     }
     const expect = expectOf(e);
     if (e.tool === "browser_fill_form") {
