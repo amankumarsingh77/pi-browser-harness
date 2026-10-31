@@ -44,3 +44,32 @@ export function liveMessages(): Array<{ role: string; name: string }> {
   }
   return out;
 }
+
+// A hash of everything a script could change on the page: its markup, the live values of its form fields (which
+// the markup does not show), its storage and its URL. Two equal hashes around a script mean it only read the page.
+export function pageFingerprint(): string {
+  const parts: string[] = [location.href, document.documentElement.outerHTML];
+  for (const el of Array.from(document.querySelectorAll("input,textarea,select"))) {
+    if (el instanceof HTMLInputElement) parts.push(`${el.value}\u0001${String(el.checked)}`);
+    else if (el instanceof HTMLTextAreaElement) parts.push(el.value);
+    else if (el instanceof HTMLSelectElement) parts.push(String(el.selectedIndex));
+  }
+  for (const store of [() => localStorage, () => sessionStorage]) {
+    try {
+      const s = store();
+      for (let i = 0; i < s.length; i++) {
+        const key = s.key(i) ?? "";
+        parts.push(`${key}\u0001${s.getItem(key) ?? ""}`);
+      }
+    } catch {
+      parts.push("storage unavailable");
+    }
+  }
+  let hash = 0x811c9dc5;
+  const text = parts.join("\u0000");
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${hash.toString(16)}:${text.length}`;
+}

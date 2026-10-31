@@ -309,6 +309,42 @@ describe("recipe journal recording", () => {
     assert.deepEqual((await only()).change?.appeared, []);
   });
 
+  // A page whose fingerprint reads `prints` in turn (the last repeats); every other page script reads as false.
+  const fingerprinted = async (prints: ReadonlyArray<string>) => {
+    const left = [...prints];
+    const fake = await createFakeClient({
+      evaluate: (expression) => (expression.includes("pageFingerprint") ? ok((left.length > 1 ? left.shift() : left[0]) ?? "") : ok(false)),
+    });
+    return { fake, client: withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) }) };
+  };
+
+  test("SC88: a browser_execute_js that leaves the page's fingerprint as it was is journaled readOnly", async () => {
+    const { client } = await fingerprinted(["f1"]);
+
+    await observe({ client, name: "browser_execute_js", args: { expression: "document.title" } });
+
+    assert.equal((await only()).readOnly, true);
+  });
+
+  test("SC89: a browser_execute_js after which the fingerprint changed, as when it set a field's value, is not readOnly", async () => {
+    const { client } = await fingerprinted(["f1", "f2"]);
+
+    await observe({ client, name: "browser_execute_js", args: { expression: "document.querySelector('#q').value = 'x'" } });
+
+    assert.equal((await only()).readOnly, undefined);
+  });
+
+  test("SC90: a browser_execute_js during which the tab sent a POST is not readOnly, though the page looks the same", async () => {
+    const { fake, client } = await fingerprinted(["f1"]);
+
+    const finish = await observeCall({ name: "browser_execute_js", concurrency: "serialized", args: { expression: "fetch('/api', { method: 'POST' })" }, client });
+    fake.emit({ method: "Network.requestWillBeSent", sessionId: "s1", params: { requestId: "r1", request: { method: "POST", url: "https://example.test/api" }, timestamp: 1, type: "Fetch" } });
+    await flush();
+    await finish?.({ ok: true });
+
+    assert.equal((await only()).readOnly, undefined);
+  });
+
   test("SC72: browser_wait_for on #month and browser_scroll at (10, 20) keep their selector and point, since neither has a locator", async () => {
     const client = await clientFor({});
 

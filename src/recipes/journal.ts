@@ -34,6 +34,9 @@ export type JournalEntry = {
   readonly ok: boolean;
   readonly error?: string;
   readonly change?: ObservedChange;
+  // Set on a browser_execute_js that was measured to change nothing: same page, form values, storage and URL, and
+  // no request that could change server state. Saving leaves such a call out.
+  readonly readOnly?: boolean;
   readonly recipe?: { readonly name: string; readonly step: number };
 };
 

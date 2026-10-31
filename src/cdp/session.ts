@@ -1,4 +1,5 @@
 import { map, type Result, err, ok } from "../util/result";
+import { isRecord } from "../util/guards";
 import { type CdpError, cdpError } from "./errors";
 import type { CdpEvent, DialogInfo, RefSignature } from "./types";
 import { type OwnershipRegistry, reconcileOwnership } from "./ownership";
@@ -27,11 +28,20 @@ type TabSession = {
   readonly networkBuffer: NetworkBuffer;
   readonly consoleBuffer: ConsoleBuffer;
   downloads: number;
+  writes: number;
   refMap: ReadonlyMap<string, number>;
   refSig: ReadonlyMap<string, RefSignature>;
 };
 
 type PageTarget = { readonly targetId: string; readonly type: string };
+
+const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
+
+const requestMethod = (params: unknown): string => {
+  const request = isRecord(params) ? params["request"] : undefined;
+  const method = isRecord(request) ? request["method"] : undefined;
+  return typeof method === "string" ? method.toUpperCase() : "";
+};
 
 const ENABLED_DOMAINS: ReadonlyArray<string> = ["Page", "DOM", "Runtime", "Network", "Accessibility", "Log"];
 
@@ -56,6 +66,8 @@ export type CdpSession = {
   refMappings(): ReadonlyMap<string, number>;
   // Downloads Chrome has started from the current tab; compare before and after an action to see whether it began one.
   downloadCount(): number;
+  // Requests the current tab has sent with a method that can change server state (anything but GET, HEAD, OPTIONS).
+  writeRequestCount(): number;
   // Sends on the current page session. Params are required only when the method has a required key (see CallArgs).
   call<M extends CdpMethod>(method: M, ...args: CallArgs<M>): Promise<Result<ResultOf<M>, CdpError>>;
   // Sends on an explicit session id (a borrowed or background tab). Params always come first because the session id follows them.
@@ -101,6 +113,7 @@ export const createCdpSession = (
     networkBuffer: createNetworkBuffer(),
     consoleBuffer: createConsoleBuffer(),
     downloads: 0,
+    writes: 0,
     refMap: new Map(),
     refSig: new Map(),
   });
@@ -210,7 +223,10 @@ export const createCdpSession = (
       }
       case "Network.requestWillBeSent": {
         const tab = resolveTab(ev.sessionId);
-        if (tab) tab.networkBuffer.ingestRequestWillBeSent(ev.params);
+        if (tab) {
+          tab.networkBuffer.ingestRequestWillBeSent(ev.params);
+          if (!SAFE_METHODS.has(requestMethod(ev.params))) tab.writes += 1;
+        }
         break;
       }
       case "Network.responseReceived": {
@@ -450,6 +466,9 @@ export const createCdpSession = (
     },
     downloadCount() {
       return currentTab()?.downloads ?? 0;
+    },
+    writeRequestCount() {
+      return currentTab()?.writes ?? 0;
     },
     call(method, ...args) {
       const [params, opts] = args;

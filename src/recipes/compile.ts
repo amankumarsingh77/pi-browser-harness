@@ -42,20 +42,9 @@ const isPoint = (l: Locator | undefined): boolean => l !== undefined && "x" in l
 // Browser settings, not page actions: a replayed download folder would move the user's Chrome downloads for good.
 const SETTINGS: ReadonlySet<string> = new Set(["browser_download"]);
 
-// A script the agent ran only to read the page: it left the URL as it was and made nothing appear. Replay does not
-// need it, so it is left out rather than blocking the save. A script that changed state no one can see is left out
-// too; its step then fails on replay and the agent repairs it.
-export const isNoEffectScript = (e: JournalEntry): boolean => {
-  const c = e.change;
-  return (
-    e.ok &&
-    e.tool === "browser_execute_js" &&
-    c?.appeared.length === 0 &&
-    (c.url === undefined || c.url === e.url) &&
-    c.dialog === undefined &&
-    c.download !== true
-  );
-};
+// A script the journal measured to change nothing (see JournalEntry.readOnly): the agent only read the page with it,
+// so replay does not need it and it is left out rather than refusing the save.
+export const isNoEffectScript = (e: JournalEntry): boolean => e.ok && e.tool === "browser_execute_js" && e.readOnly === true;
 
 export const compileSteps = (entries: ReadonlyArray<JournalEntry>): Result<ReadonlyArray<RecipeStep>, string> => {
   const steps: RecipeStep[] = [];

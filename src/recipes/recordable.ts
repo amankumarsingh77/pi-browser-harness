@@ -3,7 +3,7 @@ import type { RefSignature } from "../cdp/types";
 import { cdpCall, evalJs } from "../domains/cdp-call";
 import { runOnElement } from "../domains/element-call";
 import { elementFunctionSource, pageFunctionSource } from "../domains/page/inject";
-import { focusedIsPassword, interactiveAt, isPasswordInput, liveMessages } from "../domains/page/recipe.page";
+import { focusedIsPassword, interactiveAt, isPasswordInput, liveMessages, pageFingerprint } from "../domains/page/recipe.page";
 import { refreshRefs } from "../domains/ref-resolve";
 import { safeJs } from "../util/js-template";
 import type { CallObserver, JsonObject } from "../util/tool";
@@ -73,6 +73,13 @@ const FOCUSED_IS_PASSWORD_EXPR = "(" + pageFunctionSource(focusedIsPassword) + "
 const INTERACTIVE_AT_SRC = "(" + pageFunctionSource(interactiveAt) + ")";
 const IS_PASSWORD_FN = elementFunctionSource(isPasswordInput);
 const LIVE_MESSAGES_EXPR = "(" + pageFunctionSource(liveMessages) + ")()";
+const FINGERPRINT_EXPR = "(" + pageFunctionSource(pageFingerprint) + ")()";
+
+// The page's fingerprint, or undefined when it could not be read (a dialog is open, the page is navigating).
+const readFingerprint = async (client: BrowserClient): Promise<string | undefined> => {
+  const r = await evalJs(client, FINGERPRINT_EXPR);
+  return r.success && typeof r.data === "string" ? r.data : undefined;
+};
 
 export type LiveMessage = { readonly role: string; readonly name: string };
 
@@ -242,6 +249,10 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
       password = r.success && r.data === true;
     }
     const url = await urlOf(client);
+    // A script is measured, not judged by what appeared: setting a field's value makes nothing appear.
+    const script = name === "browser_execute_js";
+    const printBefore = script ? await readFingerprint(client) : undefined;
+    const writesBefore = client.session().writeRequestCount();
     const before: BeforeCall = {
       refs: baseline.success ? baseline.data.cur : undefined,
       downloads: client.session().downloadCount(),
@@ -249,7 +260,16 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
     };
     return async (outcome) => {
       try {
+        const printAfter = script && outcome.ok ? await readFingerprint(client) : undefined;
         const change = outcome.ok ? await observeChange(client, before) : undefined;
+        const readOnly =
+          printBefore !== undefined &&
+          printAfter === printBefore &&
+          client.session().writeRequestCount() === writesBefore &&
+          change !== undefined &&
+          (change.url === undefined || change.url === url) &&
+          change.dialog === undefined &&
+          change.download !== true;
         await journal.append({
           source: "agent",
           tool: name,
@@ -262,6 +282,7 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
           ...(fields !== undefined ? { fields } : {}),
           ...(outcome.error !== undefined ? { error: outcome.error } : {}),
           ...(change !== undefined ? { change } : {}),
+          ...(readOnly ? { readOnly: true } : {}),
         });
         return outcome.ok && mode !== undefined ? await saveHint(journal) : undefined;
       } catch {

@@ -53,10 +53,10 @@ describe("compileSteps", () => {
     assert.match(r.error, /browser_execute_js/);
   });
 
-  test("SC77: a browser_execute_js that left the URL as it was and made nothing appear is left out, and the two clicks around it compile", () => {
+  test("SC77: a browser_execute_js journaled readOnly is left out, and the two clicks around it compile", () => {
     const r = compileSteps([
       entry({ tool: "browser_click", locator: { role: "link", name: "Reports", nth: 0 } }),
-      entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [], url: "https://b.test/" } }),
+      entry({ tool: "browser_execute_js", replayable: false, readOnly: true, change: { appeared: [{ role: "link", name: "Docs" }] } }),
       entry({ tool: "browser_click", locator: { role: "button", name: "Export", nth: 0 } }),
     ]);
 
@@ -66,8 +66,8 @@ describe("compileSteps", () => {
     ]);
   });
 
-  test("SC78: a browser_execute_js after which the page moved to https://b.test/next is still refused", () => {
-    const r = compileSteps([entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [], url: "https://b.test/next" } })]);
+  test("SC78: a browser_execute_js not journaled readOnly is refused even when nothing appeared, since it may have set a value", () => {
+    const r = compileSteps([entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [] } })]);
 
     assert.ok(!r.success);
     assert.match(r.error, /browser_execute_js/);

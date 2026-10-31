@@ -74,8 +74,8 @@ describe("browser_save_recipe", () => {
     assert.match(resultText(result), new RegExp(userFile().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
 
-  test("SC80: a save after a browser_execute_js that changed nothing writes the 3 steps and says one call was left out", async () => {
-    await activeJournal()?.append({ source: "agent", replayable: false, password: false, ok: true, tool: "browser_execute_js", args: {}, url: "https://billing.test/invoices", change: { appeared: [] } });
+  test("SC80: a save after a readOnly browser_execute_js writes the 3 steps and says one call was left out", async () => {
+    await activeJournal()?.append({ source: "agent", replayable: false, password: false, ok: true, tool: "browser_execute_js", args: {}, url: "https://billing.test/invoices", readOnly: true });
 
     const result = await (await save({ confirms: [true], args: { name: "vendor-invoices", params: { month: "2026-09" } } })).run;
 
@@ -183,8 +183,8 @@ describe("repairSteps", () => {
   };
   const agentClick = (name: string): JournalEntry => entry({ tool: "browser_click", locator: { role: "button", name, nth: 0 } });
 
-  test("SC79: a repair whose agent read the page with a browser_execute_js that changed nothing keeps only the click", () => {
-    const read = entry({ tool: "browser_execute_js", replayable: false, change: { appeared: [] } });
+  test("SC79: a repair whose agent read the page with a readOnly browser_execute_js keeps only the click", () => {
+    const read = entry({ tool: "browser_execute_js", replayable: false, readOnly: true });
     const r = repairSteps(recipe, [failedAt(3), read, agentClick("Download CSV")], 3);
 
     assert.ok(r.success, r.success ? "" : r.error);
