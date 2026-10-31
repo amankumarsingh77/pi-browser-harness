@@ -26,15 +26,17 @@ const SaveArgs = Type.Object({
   ),
 });
 
-// The user sees exactly what will be written; without a UI the agent's call is the confirmation.
+// The user sees exactly what will be written, after any notes on it; without a UI the agent's call is the
+// confirmation.
 export const confirmAndSave = async (
   ctx: ExtensionContext,
   root: string,
   recipe: Recipe,
   title: string,
+  notes = "",
 ): Promise<Result<StoredRecipe, ToolErr>> => {
   if (ctx.hasUI) {
-    const yes = await ctx.ui.confirm(title, stringifyRecipe(recipe));
+    const yes = await ctx.ui.confirm(title, `${notes}${stringifyRecipe(recipe)}`);
     if (!yes) return err({ kind: "invalid_state", message: "The user declined to save the recipe; nothing was written." });
   }
   const saved = await saveRecipe(root, recipe);
@@ -53,6 +55,28 @@ const leftOutNote = (entries: ReadonlyArray<JournalEntry>): string => {
   return n === 0
     ? ""
     : `\nLeft out ${n} browser_execute_js call${n === 1 ? "" : "s"} that changed nothing on the page; if one of them did something the task needs, redo it with browser tools and save again.`;
+};
+
+const PLACEHOLDER = /\{\{[a-zA-Z_][a-zA-Z0-9_]*(?:\|[a-z]+)?\}\}/g;
+
+// Text a step matches that the recorded run's page showed, which another run's page may not: a wait for page text
+// with no param in it, and an element name holding a param next to other words. Saving cannot prove a recipe fits
+// other values, so these are shown for the user and the agent to judge, not refused.
+export const runSpecificText = (steps: ReadonlyArray<RecipeStep>): ReadonlyArray<string> =>
+  steps.flatMap((s, i) => {
+    const at = `step ${i + 1}`;
+    const text = s.args["text"];
+    const waits = s.action === "wait_for" && typeof text === "string" && text.match(PLACEHOLDER) === null ? [`${at}: waits for the text "${text}"`] : [];
+    const names = [...(s.locator !== undefined && "name" in s.locator ? [s.locator.name] : []), ...(s.expect?.appeared ?? []).map((a) => a.name)];
+    const mixed = names.filter((n) => n.match(PLACEHOLDER) !== null && n.replace(PLACEHOLDER, "").trim() !== "");
+    return [...waits, ...mixed.map((n) => `${at}: ${describeStep(s)} matches "${n}"`)];
+  });
+
+const specificNote = (steps: ReadonlyArray<RecipeStep>): string => {
+  const found = runSpecificText(steps);
+  return found.length === 0
+    ? ""
+    : `These steps match text from this run's page, which another run's page may not show; replace them with steps that do not depend on it if so:\n${found.join("\n")}\n\n`;
 };
 
 const isFailureMarker = (e: JournalEntry, name: string): boolean =>
@@ -158,11 +182,12 @@ export const saveRecipeTool = defineBrowserTool({
       };
       const checked = await checkRepair(client, extensionCtx, recipe, repaired.data.params, signal);
       if (!checked.success) return err({ kind: "invalid_state", message: checked.error });
-      const saved = await confirmAndSave(extensionCtx, stored.data.root, recipe, `Repair recipe "${args.name}" from step ${args.repair_step}?`);
+      const notes = specificNote(recipe.steps);
+      const saved = await confirmAndSave(extensionCtx, stored.data.root, recipe, `Repair recipe "${args.name}" from step ${args.repair_step}?`, notes);
       if (!saved.success) return saved;
       const r = saved.data.recipe;
       return ok({
-        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.\n${checked.data}${fragileNote(r)}${repaired.data.note}`,
+        text: `Repaired recipe ${r.name}: steps ${args.repair_step}–${r.steps.length} replaced, now v${r.version}; previous version kept in .history/.\n${checked.data}${fragileNote(r)}${repaired.data.note}${notes === "" ? "" : `\n${notes.trimEnd()}`}`,
         details: { name: r.name, version: r.version, path: saved.data.path, steps: r.steps.length },
       });
     }
@@ -182,11 +207,12 @@ export const saveRecipeTool = defineBrowserTool({
       writesTracked: true,
     };
     const roots = recipeRoots(extensionCtx.cwd);
-    const saved = await confirmAndSave(extensionCtx, args.project === true ? roots.project : roots.user, recipe, `Save recipe "${args.name}"?`);
+    const notes = specificNote(recipe.steps);
+    const saved = await confirmAndSave(extensionCtx, args.project === true ? roots.project : roots.user, recipe, `Save recipe "${args.name}"?`, notes);
     if (!saved.success) return saved;
     const r = saved.data.recipe;
     return ok({
-      text: `Saved recipe ${r.name} v${r.version} (${r.steps.length} steps) to ${saved.data.path}${fragileNote(r)}${leftOutNote(task)}`,
+      text: `Saved recipe ${r.name} v${r.version} (${r.steps.length} steps) to ${saved.data.path}${fragileNote(r)}${leftOutNote(task)}${notes === "" ? "" : `\n${notes.trimEnd()}`}`,
       details: { name: r.name, version: r.version, path: saved.data.path, steps: r.steps.length },
     });
   },

@@ -114,6 +114,23 @@ describe("browser_save_recipe", () => {
     assert.match(resultText(result), /Left out 1 browser_execute_js call that changed nothing/);
   });
 
+  test("SC102: a save holding a wait for \"Exported 42 rows\" and a link named \"{{month}} statement for Acme\" lists both in the dialog and the result as text that may not fit another run", async () => {
+    const journal = activeJournal();
+    await journal?.append({ source: "agent", replayable: true, password: false, ok: true, tool: "browser_wait_for", args: { text: "Exported 42 rows" }, url: "https://billing.test/invoices" });
+    await journal?.append({
+      source: "agent", replayable: true, password: false, ok: true, tool: "browser_click", args: {},
+      locator: { role: "link", name: "2026-09 statement for Acme", nth: 0 }, url: "https://billing.test/invoices",
+    });
+
+    const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", params: { month: "2026-09" } } });
+    const result = await run;
+
+    for (const text of [fake.confirmations[0]?.message ?? "", resultText(result)]) {
+      assert.match(text, /step 4: waits for the text "Exported 42 rows"/);
+      assert.match(text, /step 5: .*"\{\{month\}\} statement for Acme"/);
+    }
+  });
+
   test("SC23: when the user declines the confirm, the tool fails saying so and no recipe file is written", async () => {
     const { run } = await save({ confirms: [false], args: { name: "vendor-invoices", params: { month: "2026-09" } } });
 
