@@ -94,3 +94,17 @@ describe("BrowserClient.evaluateJs", () => {
     assert.equal(sent.params["replMode"], true);
   });
 });
+
+describe("BrowserClient.pageInfo after a navigation command", () => {
+  test("a Page.navigate that returns before Page.frameNavigated arrives still makes the next pageInfo read the page again", async () => {
+    const { stub, client } = await started({ "Page.navigate": ok({ frameId: "f1" }) });
+    const evaluations = (): number => stub.calls.filter((c) => c.method === "Runtime.evaluate").length;
+    await client.pageInfo();
+    const before = evaluations();
+
+    await client.session().call("Page.navigate", { url: "https://two.test/" });
+    await client.pageInfo();
+
+    assert.equal(evaluations(), before + 1);
+  });
+});

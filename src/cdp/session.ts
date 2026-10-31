@@ -35,6 +35,8 @@ type TabSession = {
 
 type PageTarget = { readonly targetId: string; readonly type: string };
 
+const NAVIGATES: ReadonlySet<string> = new Set(["Page.navigate", "Page.reload", "Page.navigateToHistoryEntry"]);
+
 const SAFE_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"]);
 
 const requestMethod = (params: unknown): string => {
@@ -302,6 +304,12 @@ export const createCdpSession = (
       sessionId: sid,
       ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     });
+    // A navigation command can return before its Page.frameNavigated event arrives, and a page info cached just
+    // before it would then still describe the page it left.
+    if (NAVIGATES.has(method)) {
+      const tab = resolveTab(sid ?? undefined);
+      if (tab) tab.pageInfoDirty = true;
+    }
     if (!raw.success) return raw;
     return decodeResult(method, raw.data);
   };
