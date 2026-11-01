@@ -101,6 +101,29 @@ const shownUrl = (url: string): string => {
 
 // What a project recipe can do outside the page: where it goes, which local files it sends, what it downloads. Shown
 // with this run's params filled in, since a {{placeholder}} hides exactly what the user is approving.
+// Hosts on this machine or its private network: a read sent there can reach services the internet cannot.
+const PRIVATE_V4 = /^(?:127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.)/;
+export const isPrivateHost = (host: string): boolean => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  return (
+    h === "localhost" ||
+    h.endsWith(".localhost") ||
+    h.endsWith(".local") ||
+    h.endsWith(".internal") ||
+    PRIVATE_V4.test(h) ||
+    h === "::1" ||
+    h === "::" ||
+    /^f[cd][0-9a-f]{2}:/.test(h) ||
+    h.startsWith("fe80:") ||
+    h.startsWith("::ffff:")
+  );
+};
+
+const READ_VERBS: ReadonlyMap<string, string> = new Map([
+  ["http_get", "fetch outside the browser"],
+  ["read_page", "read in a tab of its own"],
+]);
+
 const approvalBody = (stored: StoredRecipe, params: Readonly<Record<string, string>>, scoped: boolean): string => {
   const { recipe } = stored;
   const lines = recipe.steps.flatMap((s, i) => {
@@ -111,6 +134,12 @@ const approvalBody = (stored: StoredRecipe, params: Readonly<Record<string, stri
     const lands = s.expect?.url !== undefined ? fill(s.expect.url, params) : undefined;
     if (s.action === "navigate" && typeof url === "string") return [`${at} navigate to ${shownUrl(url)}`];
     if (s.action === "new_tab" && typeof url === "string") return [`${at} open a new tab at ${shownUrl(url)}`];
+    const verb = READ_VERBS.get(s.action);
+    if (verb !== undefined && typeof url === "string") {
+      const host = hostOf(url);
+      const local = host !== undefined && isPrivateHost(host) ? " (a local or private-network address)" : "";
+      return [`${at} ${verb} ${shownUrl(url)}${local}`];
+    }
     if (s.action === "upload_file" && typeof file === "string") return [`${at} upload ${file}`];
     if (s.action === "download") return [`${at} ${describeStep(s)}${typeof args["downloadPath"] === "string" ? ` to ${args["downloadPath"]}` : ""}`];
     if (lands !== undefined && hostOf(lands) !== recipe.site) return [`${at} ${describeStep(s)}, landing on ${shownUrl(lands)}`];

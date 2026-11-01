@@ -214,6 +214,23 @@ describe("/browser-recipe", () => {
       assert.doesNotMatch(message, /\{\{file\}\}/);
     });
 
+    test("SC128: approving a project recipe lists each http_get and read_page URL, and flags one aimed at the local network", async () => {
+      const message = await approvalText(
+        [
+          { action: "http_get", args: { url: "https://api.example.org/{{id}}" } },
+          { action: "http_get", args: { url: "http://169.254.169.254/latest/meta-data/" } },
+          { action: "read_page", args: { url: "http://localhost:8080/admin" } },
+        ],
+        { id: { type: "string", example: "1" } },
+        "qa-proj-hidden id=42",
+      );
+
+      assert.match(message, /step 1: fetch outside the browser https:\/\/api\.example\.org\/42/);
+      assert.doesNotMatch(message, /step 1: .*private-network/);
+      assert.match(message, /step 2: fetch outside the browser http:\/\/169\.254\.169\.254\/latest\/meta-data\/.*\(a local or private-network address\)/);
+      assert.match(message, /step 3: read in a tab of its own http:\/\/localhost:8080\/admin.*\(a local or private-network address\)/);
+    });
+
     test("SC68: approving a project recipe on billing.test whose click expects to land on https://collect.example.org/done lists that URL, while a same-site expected URL is not listed", async () => {
       const message = await approvalText(
         [
