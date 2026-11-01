@@ -2,7 +2,7 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
-## Unreleased
+## 0.14.0 — 2026-11-01
 
 ### Added
 
@@ -10,6 +10,17 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **Browser recipes: replay.** `browser_run_recipe` and `/browser-recipe NAME key=value` replay a saved recipe with no model calls, finding each element by role and name and checking each step's recorded outcome. Downloads and status/alert toasts are now recorded, so a step can expect them.
 - **Browser recipes: finish and repair.** A failed replay hands the agent the failed step and a snapshot; the agent finishes the task, then `browser_save_recipe` with `repair_step` rewrites the recipe from that step, keeping the previous version. An auth wall stops the replay without typing anything.
 - **Browser recipes: project recipes need approval.** A recipe from the project's `.pi/browser-recipes/` asks for confirmation, listing its URLs, uploads and downloads, before its first run and again whenever its file changes.
+- **Browser recipes: read steps return data.** `browser_http_get` and `browser_read_page` of a URL are kept as recipe steps, and a replay returns what they fetched: in `browser_run_recipe`'s result, and as a session message from `/browser-recipe` that starts no model turn. A read made with request headers or a tab id is left out.
+- **Browser recipes: bot checks.** A replay waits up to 30s while Cloudflare's "Just a moment..." check is showing; if it never clears, the replay stops and the agent asks the user to complete it.
+
+### Fixed
+
+- **`browser_execute_js` with a top-level `return` returns its value.** Any body with a top-level `return` runs inside an async function that is awaited, and scripts run in REPL mode, so a later call may declare the same `const` or `let` again.
+- **`browser_close_tab` is fast and confirms the close.** Closing the current tab no longer waits 10s, and a tab Chrome keeps open (one closed while still loading) is closed again, or reported as still open, instead of being reported closed.
+- **Every element gets a ref.** `browser_snapshot`'s `maxNodes` caps only what is shown, so a ref the agent read from a long page still resolves.
+- **`browser_page_info` reports the new page right after a navigation**, not the cached previous one.
+- **`browser_web_search` resolves Google `/goto` result links**, and treats every Google TLD as Google's own, not a result.
+- **The agent calls `browser_setup` before it has connected** instead of falling back to `curl`: the prompt now says the `browser_*` tools are available and the browser is just not connected yet.
 
 ## 0.13.0 — 2026-10-20
 
