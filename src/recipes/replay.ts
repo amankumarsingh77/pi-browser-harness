@@ -165,7 +165,7 @@ const samePage = (a: string, b: string): boolean => {
 
 // A message's text often carries a count or a date that differs per run ("Exported 42 rows"), so only its leading
 // words, up to the first one holding a digit and at most two, have to match.
-const messagePrefix = (name: string): string => {
+export const messagePrefix = (name: string): string => {
   const words = name.trim().toLowerCase().split(/\s+/);
   const cut = words.findIndex((w) => /\d/.test(w));
   return words.slice(0, cut === -1 ? words.length : cut).slice(0, 2).join(" ");

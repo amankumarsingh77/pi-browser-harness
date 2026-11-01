@@ -177,6 +177,41 @@ describe("compileSteps", () => {
     assert.deepEqual(steps.map((s) => s.action), ["scroll", "read_page"]);
   });
 
+  test("SC129: a navigate whose page brought a site banner (alert) and a download count (status \"1,151\") expects only its URL", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_navigate",
+          args: { url: "https://www.npmjs.com/package/pkg" },
+          url: "https://github.com/",
+          change: {
+            url: "https://www.npmjs.com/package/pkg",
+            appeared: [
+              { role: "alert", name: "npm tokens that bypass 2FA are being restricted" },
+              { role: "status", name: "1,151" },
+            ],
+          },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { url: "https://www.npmjs.com/package/pkg" });
+  });
+
+  test("SC130: a click after which only status \"1,151\" and button \"Undo\" appeared expects the button, since a count alone matches any status", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_click",
+          locator: { role: "button", name: "Recount", nth: 0 },
+          change: { appeared: [{ role: "status", name: "1,151" }, { role: "button", name: "Undo" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "button", name: "Undo" }] });
+  });
+
   test("SC85: a click that moved the page to https://b.test/releases expects that URL alone, not the elements of the new page", () => {
     const steps = okSteps(
       compileSteps([

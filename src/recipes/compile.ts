@@ -3,6 +3,7 @@ import type { JsonObject } from "../util/tool";
 import type { JournalEntry, Locator } from "./journal";
 import { PARAM_FORMS, RECIPE_SITE, type RecipeStep, type StepExpect } from "./recipe";
 import { MESSAGE_ROLES } from "./recordable";
+import { messagePrefix } from "./replay";
 
 const MAX_EXPECT_APPEARED = 3;
 
@@ -39,9 +40,12 @@ const expectOf = (e: JournalEntry): StepExpect | undefined => {
   const c = e.change;
   if (c === undefined || WAITS.has(e.tool)) return undefined;
   const url = c.url !== undefined && pageKey(c.url) !== pageKey(e.url) ? pageKey(c.url) : undefined;
-  const messages = c.appeared.filter((a) => MESSAGE_ROLES.has(a.role));
+  // A page load brings its banners and counters with it, so its messages say nothing about the step. A message
+  // with no words before its first number ("1,151") would match any message of its role, so it is no check.
+  const messages = LOADS_PAGE.has(e.tool) ? [] : c.appeared.filter((a) => MESSAGE_ROLES.has(a.role) && messagePrefix(a.name) !== "");
   const strong = url !== undefined || c.dialog !== undefined || c.download === true || LOADS_PAGE.has(e.tool);
-  const appeared = (messages.length > 0 ? messages : strong ? [] : c.appeared).slice(0, MAX_EXPECT_APPEARED);
+  const elements = c.appeared.filter((a) => !MESSAGE_ROLES.has(a.role));
+  const appeared = (messages.length > 0 ? messages : strong ? [] : elements).slice(0, MAX_EXPECT_APPEARED);
   const expect: StepExpect = {
     ...(url !== undefined ? { url } : {}),
     ...(appeared.length > 0 ? { appeared } : {}),
