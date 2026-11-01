@@ -287,8 +287,18 @@ downloads. The approval holds for those exact file bytes (kept in
 `~/.pi/agent/browser-harness/trusted-recipes.json`); if the file changes, you are asked again. Without a UI
 an unapproved project recipe does not run.
 
-A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
-be saved.
+Reads are kept too: a `browser_http_get`, or a `browser_read_page` of a URL, becomes a read step, and a
+replay returns what each one fetched (`browser_run_recipe` in its result, `/browser-recipe` as a message in
+the session that starts no model turn). A read made with request headers or a tab id is left out, since
+headers can carry credentials and a tab id means nothing next run. A `browser_execute_js` that changed
+nothing is left out as well, so a replay does not return what it read; read data with `browser_http_get`
+or `browser_read_page` when the recipe should hand it back.
+
+If the site shows Cloudflare's "Just a moment..." check, a replay waits up to 30s for it to clear; if it
+does not, the replay stops and the agent asks you to complete the check in the browser.
+
+A task that typed into a password field, or used a `browser_execute_js` that changed the page or
+`browser_run_script`, cannot be saved.
 
 ---
 

@@ -133,6 +133,36 @@ it by opening tabs elsewhere — a different profile means different accounts.
 
 You're attached to the user's real Chrome — never launch your own. If auth is required, stop and ask the user. If `browser_page_info` returns a dialog, handle it first with `browser_handle_dialog`.
 
+## Saved recipes
+
+`browser_save_recipe` compiles your last browser task into a YAML recipe; `browser_run_recipe` replays one with no model calls. What a recipe keeps:
+
+- **Page actions**: navigate, new_tab, click, fill, select_option, type, press_key, scroll, wait_for, close_tab and the other replayable tools. Each step finds its element by role and name and checks the page changed as it did when recorded.
+- **Reads**: `browser_http_get` and `browser_read_page` with a `url`. A replay returns what each one fetched, so a recipe can hand back data, not only a page. A read with `headers` or a `targetId` is left out.
+- **Left out**: a `browser_execute_js` that changed nothing. A replay does not return what it read, so when the user wants data back, fetch it with `browser_http_get` (an API, a JSON endpoint) or `browser_read_page` before saving.
+- **Refused**: typing into a password field, a `browser_execute_js` that changed the page, `browser_run_script`.
+
+Params replace values you pass: each value must appear, as written, in a step's args or element name (a URL, typed text, a selected label). Its URL forms count too: `{{topic|url}}`, `{{topic|plus}}`, `{{topic|underscore}}`. A value that only appeared in a left-out call cannot be a param.
+
+The file format, for reading a recipe; repair it with `browser_save_recipe` `repair_step`, not by editing it, so the repair is replayed before it is written:
+
+```yaml
+name: npm-downloads
+site: api.npmjs.org
+version: 1
+params:
+  package: { type: string, example: pi-browser-harness }
+steps:
+  - navigate: { url: "https://www.npmjs.com/package/{{package}}" }
+    expect: { url: "https://www.npmjs.com/package/{{package}}" }   # origin and path only
+  - http_get: { url: "https://api.npmjs.org/downloads/range/last-month/{{package}}" }
+  - click: { role: button, name: Export CSV, nth: 0 }              # the element: role+name+nth, or { css: "#export" }
+    expect: { appeared: [{ role: status, name: Exported 42 rows }] }
+recorded: { at: "2026-11-01T15:14:25.918Z", session: 01a197ab }
+```
+
+At a sign-in page or a bot check (Cloudflare's "Just a moment...", waited out for 30s first) the replay stops: ask the user to sign in or complete the check; never do either yourself.
+
 ## Downloads land in the user's context
 
 `browser_download` calls `Browser.setDownloadBehavior` with no `browserContextId`, which Chrome applies to its **default browser context** — the same one the user's own tabs are in. The override redirects the user's manual downloads too, and it lives on the browser connection the daemon keeps open, so it outlives the tab and the pi session. Symptom the user reports: *"I download things in Chrome and nothing appears in Downloads."*
