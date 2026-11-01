@@ -50,9 +50,11 @@ const clientFor = async (
     readonly messages?: ReadonlyArray<{ readonly role: string; readonly name: string }>;
     readonly url?: string;
     readonly passwordShown?: (call: number) => boolean;
+    readonly botCheckShown?: (call: number) => boolean;
   } = {},
 ): Promise<{ readonly fake: FakeClient; readonly client: BrowserClient }> => {
   let passwordChecks = 0;
+  let botChecks = 0;
   const fake = await createFakeClient({
     canned: {
       "Accessibility.getFullAXTree": EXPORT_PAGE,
@@ -64,6 +66,7 @@ const clientFor = async (
     evaluate: (expression) => {
       if (expression.includes("liveMessages")) return ok(opts.messages ?? []);
       if (expression.includes("hasVisiblePasswordField")) return ok(opts.passwordShown?.(++passwordChecks) ?? false);
+      if (expression.includes("_cf_chl_opt")) return ok(opts.botCheckShown?.(++botChecks) ?? false);
       return ok(false);
     },
   });
@@ -192,6 +195,30 @@ describe("recipe replay", () => {
     assert.ok(!outcome.ok, "expected the replay to stop at the auth wall");
     assert.equal(outcome.failure.step, 2);
     assert.equal(outcome.failure.authWall, true);
+    assert.deepEqual(fake.calls.filter((c) => c.method.startsWith("Input.")), []);
+  });
+
+  test("SC110: a Cloudflare check showing for the first two looks after navigate is waited out, and the click after it runs", async () => {
+    const { fake, client } = await clientFor({ botCheckShown: (call) => call <= 2 });
+    const recipe = recipeOf([{ action: "navigate", args: { url: "https://billing.test/invoices" } }, clickExport()]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
+
+    assert.deepEqual(outcome, { ok: true, steps: 2 });
+    assert.ok(fake.callsTo("Input.dispatchMouseEvent").length > 0, "expected the click to run after the check cleared");
+  });
+
+  test("SC111: a Cloudflare check that never clears stops the replay at the navigate step as a bot check, with no Input call sent", async () => {
+    const { fake, client } = await clientFor({ botCheckShown: () => true });
+    const recipe = recipeOf([{ action: "navigate", args: { url: "https://billing.test/invoices" } }, clickExport()]);
+
+    const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" }, botCheckTimeoutMs: 600 });
+
+    assert.ok(!outcome.ok, "expected the replay to stop at the bot check");
+    assert.equal(outcome.failure.step, 1);
+    assert.equal(outcome.failure.botCheck, true);
+    assert.equal(outcome.failure.authWall, false);
+    assert.match(outcome.failure.reason, /^bot check: /);
     assert.deepEqual(fake.calls.filter((c) => c.method.startsWith("Input.")), []);
   });
 

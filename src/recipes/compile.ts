@@ -24,10 +24,21 @@ const LOADS_PAGE: ReadonlySet<string> = new Set(["browser_navigate", "browser_ne
 // A wait changes nothing; whatever appeared while it waited is the page's own doing, and its success is the check.
 const WAITS: ReadonlySet<string> = new Set(["browser_wait_for", "browser_wait_for_load"]);
 
+// Replay compares only a URL's origin and path, so that is all a step keeps: a query or fragment can hold a
+// one-time token (Cloudflare's __cf_chl_rt_tk, a session id) that has no place on disk and means nothing next run.
+export const pageKey = (url: string): string => {
+  try {
+    const u = new URL(url);
+    return u.origin === "null" ? url : `${u.origin}${u.pathname}`;
+  } catch {
+    return url;
+  }
+};
+
 const expectOf = (e: JournalEntry): StepExpect | undefined => {
   const c = e.change;
   if (c === undefined || WAITS.has(e.tool)) return undefined;
-  const url = c.url !== undefined && c.url !== e.url ? c.url : undefined;
+  const url = c.url !== undefined && pageKey(c.url) !== pageKey(e.url) ? pageKey(c.url) : undefined;
   const messages = c.appeared.filter((a) => MESSAGE_ROLES.has(a.role));
   const strong = url !== undefined || c.dialog !== undefined || c.download === true || LOADS_PAGE.has(e.tool);
   const appeared = (messages.length > 0 ? messages : strong ? [] : c.appeared).slice(0, MAX_EXPECT_APPEARED);

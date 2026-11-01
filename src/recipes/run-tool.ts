@@ -23,6 +23,8 @@ export const listText = async (cwd: string): Promise<string> => {
 };
 
 const AUTH_WALL_ADVICE = "Do not sign in or type any credentials. Ask the user to sign in in the browser, then run the recipe again.";
+const BOT_CHECK_ADVICE =
+  "Do not try to get past the check yourself. Ask the user to complete it in the browser window, then run the recipe again.";
 const FAILURE_OPEN = "<recipe-failure>";
 const FAILURE_CLOSE = "</recipe-failure>";
 const CLOSER = /<\/recipe-failure>/i;
@@ -43,6 +45,7 @@ const withoutDoubleBlanks = (lines: ReadonlyArray<string>): string => lines.filt
 export const formatFailure = (recipe: Recipe, params: Readonly<Record<string, string>>, f: ReplayFailure): string => {
   const head = [`Recipe ${recipe.name} stopped at step ${f.step} of ${recipe.steps.length} (${f.action}): ${f.reason}`, `Expected: ${f.expected}`];
   if (f.authWall) return [...head, "", AUTH_WALL_ADVICE, "", "Page now:", f.snapshot].join("\n");
+  if (f.botCheck) return [...head, "", BOT_CHECK_ADVICE].join("\n");
   return withoutDoubleBlanks([...head, paramLine(params), "", ...repairPlan(recipe, f, "the page below"), "", "Page now:", f.snapshot]);
 };
 
@@ -62,7 +65,7 @@ export const formatFailureHandoff = (recipe: Recipe, params: Readonly<Record<str
     `Expected: ${fenced(f.expected)}`,
     FAILURE_CLOSE,
   ];
-  const plan = f.authWall ? [AUTH_WALL_ADVICE] : repairPlan(recipe, f, "the page as browser_snapshot shows it");
+  const plan = f.authWall ? [AUTH_WALL_ADVICE] : f.botCheck ? [BOT_CHECK_ADVICE] : repairPlan(recipe, f, "the page as browser_snapshot shows it");
   return withoutDoubleBlanks([
     `Recipe ${recipe.name} stopped at step ${f.step} of ${recipe.steps.length} (${f.action}).`,
     paramLine(params),

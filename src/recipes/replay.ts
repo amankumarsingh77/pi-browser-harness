@@ -13,7 +13,7 @@ import { dispatchKeyTool, pressKeyTool, typeTool } from "../domains/keyboard";
 import { navigateTool } from "../domains/navigate";
 import { waitForLoadTool, waitForTool } from "../domains/page";
 import { pageFunctionSource } from "../domains/page/inject";
-import { hasVisiblePasswordField } from "../domains/page/recipe.page";
+import { hasVisiblePasswordField, isBotCheck } from "../domains/page/recipe.page";
 import { refreshRefs } from "../domains/ref-resolve";
 import { scrollTool } from "../domains/scroll";
 import { snapshotTool } from "../domains/snapshot";
@@ -33,6 +33,8 @@ export type ReplayFailure = {
   readonly expected: string;
   readonly snapshot: string;
   readonly authWall: boolean;
+  // The site kept showing a bot check (Cloudflare's "Just a moment..."), which only the user can get past.
+  readonly botCheck: boolean;
 };
 export type ReplayOutcome = { readonly ok: true; readonly steps: number } | { readonly ok: false; readonly failure: ReplayFailure };
 
@@ -190,6 +192,22 @@ const currentUrl = async (client: BrowserClient): Promise<string> => {
 };
 
 const HAS_PASSWORD_EXPR = "(" + pageFunctionSource(hasVisiblePasswordField) + ")()";
+const IS_BOT_CHECK_EXPR = "(" + pageFunctionSource(isBotCheck) + ")()";
+
+// A bot check usually clears itself in a few seconds in the user's own browser, and then loads the real page.
+const BOT_CHECK_TIMEOUT_MS = 30_000;
+
+// True once no bot check is showing; false when one is still there at the deadline. A page that cannot be read is
+// treated as clear, so the step's own check decides.
+const waitPastBotCheck = async (client: BrowserClient, timeoutMs: number, signal?: AbortSignal): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const r = await evalJs(client, IS_BOT_CHECK_EXPR);
+    if (!r.success || r.data !== true) return true;
+    if (Date.now() >= deadline || signal?.aborted) return false;
+    await sleep(POLL_MS, signal);
+  }
+};
 
 export const hostOf = (url: string): string | undefined => {
   try {
@@ -232,6 +250,8 @@ export const runRecipe = async (opts: {
   readonly signal?: AbortSignal;
   // False for a check run, whose steps and failure must not land in the journal a repair is built from.
   readonly record?: boolean;
+  // How long a bot check may stay up after a step before the replay stops; tests shorten it.
+  readonly botCheckTimeoutMs?: number;
 }): Promise<ReplayOutcome> => {
   const { client, recipe, params } = opts;
   const ctx: ReplayCtx = { client, signal: opts.signal, extensionCtx: opts.extensionCtx };
@@ -239,21 +259,21 @@ export const runRecipe = async (opts: {
   const hosts = knownHosts(recipe, params);
   // A navigate returns before the next page renders, so a sign-in form can appear only after the check before a
   // step; looking again here keeps it from being reported as an ordinary missing element.
-  const fail = async (step: number, s: RecipeStep, failure: string, wallFound = false): Promise<ReplayOutcome> => {
-    const wall = wallFound ? undefined : await authWall(client, hosts);
+  const fail = async (step: number, s: RecipeStep, failure: string, found?: "auth" | "bot"): Promise<ReplayOutcome> => {
+    const wall = found !== undefined ? undefined : await authWall(client, hosts);
     const reason = wall !== undefined ? `auth wall: ${wall}` : failure;
-    const isWall = wallFound || wall !== undefined;
+    const kind = found ?? (wall !== undefined ? "auth" : undefined);
     await journal
       ?.append({ source: "replay", tool: "browser_run_recipe", replayable: false, args: { ...params }, password: false, url: await currentUrl(client), ok: false, error: reason, recipe: { name: recipe.name, step } })
       .catch(() => undefined);
-    return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall: isWall } };
+    return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall: kind === "auth", botCheck: kind === "bot" } };
   };
 
   for (const [i, step] of recipe.steps.entries()) {
     const n = i + 1;
     const opensPage = OPENS_PAGE.has(step.action);
     const wall = opensPage ? undefined : await authWall(client, hosts);
-    if (wall !== undefined) return fail(n, step, `auth wall: ${wall}`, true);
+    if (wall !== undefined) return fail(n, step, `auth wall: ${wall}`, "auth");
     const run = REPLAYERS.get(step.action);
     if (run === undefined) return fail(n, step, `"${step.action}" is not a replayable action`);
     const args = fillArgs(step.args, params);
@@ -275,11 +295,14 @@ export const runRecipe = async (opts: {
       release();
     }
     if (!result.success) return fail(n, step, result.error.message);
+    if (!(await waitPastBotCheck(client, opts.botCheckTimeoutMs ?? BOT_CHECK_TIMEOUT_MS, opts.signal))) {
+      return fail(n, step, "bot check: the site kept showing a check that it is not a robot (Cloudflare's \"Just a moment...\")", "bot");
+    }
     if (step.expect !== undefined && !(await waitForExpect(client, fillExpect(step.expect, params), downloadsBefore, opts.signal))) {
       return fail(n, step, "the page did not change the way the recorded run did");
     }
     const landed = opensPage ? await authWall(client, hosts) : undefined;
-    if (landed !== undefined) return fail(n, step, `auth wall: ${landed}`, true);
+    if (landed !== undefined) return fail(n, step, `auth wall: ${landed}`, "auth");
     await journal
       ?.append({
         source: "replay",

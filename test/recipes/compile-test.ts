@@ -125,6 +125,36 @@ describe("compileSteps", () => {
     assert.deepEqual(steps[0]?.expect, { url: "https://github.com/nodejs/node" });
   });
 
+  test("SC113: a navigate that landed on Cloudflare's challenge URL saves the page's origin and path, without the one-time __cf_chl_rt_tk token", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_navigate",
+          args: { url: "https://www.npmjs.com/package/pi-browser-harness" },
+          url: "https://github.com/",
+          change: { url: "https://www.npmjs.com/package/pi-browser-harness?__cf_chl_rt_tk=YiCR2zAg-1793546013-1.0.1.1-48gG#x", appeared: [] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { url: "https://www.npmjs.com/package/pi-browser-harness" });
+  });
+
+  test("SC114: a click that changed only the query string (?page=2) is judged by what appeared, since replay compares origin and path alone", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({
+          tool: "browser_click",
+          url: "https://b.test/list",
+          locator: { role: "link", name: "Next", nth: 0 },
+          change: { url: "https://b.test/list?page=2", appeared: [{ role: "link", name: "Item 21" }] },
+        }),
+      ]),
+    );
+
+    assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "link", name: "Item 21" }] });
+  });
+
   test("SC85: a click that moved the page to https://b.test/releases expects that URL alone, not the elements of the new page", () => {
     const steps = okSteps(
       compileSteps([

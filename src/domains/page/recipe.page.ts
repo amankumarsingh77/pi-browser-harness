@@ -27,6 +27,13 @@ export function hasVisiblePasswordField(): boolean {
   return false;
 }
 
+// A bot check standing in for the page: Cloudflare's "Just a moment..." interstitial defines _cf_chl_opt, which
+// a page it lets through does not. Only Cloudflare's is known; a page could fake it, which only makes replay wait
+// and then stop, never run a step it should not.
+export function isBotCheck(): boolean {
+  return typeof Reflect.get(window, "_cf_chl_opt") === "object";
+}
+
 // Visible status and alert messages (toasts, live regions), which carry no ref, so a recipe can expect one.
 // A live region without one of the message roles is reported as status (polite) or alert (assertive).
 export function liveMessages(): Array<{ role: string; name: string }> {
