@@ -8,6 +8,7 @@ import type { TabInfo } from "../../src/cdp/types";
 import { parseCommandArgs, registerRecipeCommand } from "../../src/recipes/command";
 import { recipeRoots, findRecipe, saveRecipe } from "../../src/recipes/store";
 import { err, ok } from "../../src/util/result";
+import { isRecord } from "../../src/util/guards";
 import { axNode, createFakeClient } from "../domains/fake-client";
 import { pageInfoOf, withClient } from "../domains/client-overrides";
 import { fakeCtx, fakePi } from "../helpers/fake-pi";
@@ -107,6 +108,37 @@ describe("/browser-recipe", () => {
 
       assert.equal(pi.userMessages.length, 1);
       assert.deepEqual(pi.userMessages[0]?.options, { deliverAs: "followUp" });
+    });
+
+    test("SC126: a /browser-recipe run whose http_get step read data shows that data in the session without starting a model turn", async () => {
+      await saveRecipe(recipeRoots(cwd).user, {
+        name: "npm-downloads",
+        site: "api.npmjs.org",
+        version: 1,
+        params: { package: { type: "string", example: "pkg" } },
+        steps: [{ action: "http_get", args: { url: "https://api.npmjs.org/downloads/range/last-month/{{package}}" } }],
+        recorded: { at: "2026-10-01T00:00:00.000Z", session: "s-rec" },
+      });
+      const fake = await createFakeClient({});
+      const client = withClient(fake.client, { listTabs: () => Promise.resolve(ok(ONE_TAB)) });
+      const pi = fakePi();
+      registerRecipeCommand(pi.pi, client);
+      const original = globalThis.fetch;
+      globalThis.fetch = () => Promise.resolve(new Response('{"downloads":[{"day":"2026-10-01","downloads":7}]}', { status: 200 }));
+      try {
+        await pi.command("browser-recipe").handler("npm-downloads package=pi-browser-harness", fakeCtx({ cwd }).ctx);
+      } finally {
+        globalThis.fetch = original;
+      }
+
+      assert.deepEqual(pi.userMessages, []);
+      assert.equal(pi.messages.length, 1);
+      const [message] = pi.messages;
+      assert.ok(message);
+      assert.deepEqual(message.options, { triggerTurn: false });
+      const content = isRecord(message.content) ? message.content["content"] : undefined;
+      assert.match(String(content), /--- step 1: http_get https:\/\/api\.npmjs\.org\/downloads\/range\/last-month\/pi-browser-harness ---/);
+      assert.match(String(content), /"downloads":7/);
     });
 
     test("SC55: an untrusted project recipe with an upload_file step asks for confirmation listing the upload path, and runs no step when declined", async () => {

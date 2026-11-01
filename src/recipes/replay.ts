@@ -11,6 +11,8 @@ import { fillTool, focusTool, selectOptionTool, setCheckedTool } from "../domain
 import { goBackTool, goForwardTool, reloadTool } from "../domains/history";
 import { dispatchKeyTool, pressKeyTool, typeTool } from "../domains/keyboard";
 import { navigateTool } from "../domains/navigate";
+import { httpGetTool } from "../domains/network";
+import { readPageTool } from "../domains/readpage/read-page";
 import { waitForLoadTool, waitForTool } from "../domains/page";
 import { pageFunctionSource } from "../domains/page/inject";
 import { hasVisiblePasswordField, isBotCheck } from "../domains/page/recipe.page";
@@ -22,6 +24,7 @@ import { type Result, err } from "../util/result";
 import { sleep } from "../util/sleep";
 import type { DefinedBrowserTool, JsonObject, ToolErr, ToolOk } from "../util/tool";
 import { findTarget, sameName } from "./find";
+import { isRecord } from "../util/guards";
 import { activeJournal } from "./journal";
 import { type Recipe, type RecipeStep, type StepExpect, fillParams } from "./recipe";
 import { type LiveMessage, MESSAGE_ROLES, readLiveMessages } from "./recordable";
@@ -36,7 +39,11 @@ export type ReplayFailure = {
   // The site kept showing a bot check (Cloudflare's "Just a moment..."), which only the user can get past.
   readonly botCheck: boolean;
 };
-export type ReplayOutcome = { readonly ok: true; readonly steps: number } | { readonly ok: false; readonly failure: ReplayFailure };
+// What a read step returned, for the caller to hand on: the data the task was run for.
+export type ReplayOutput = { readonly step: number; readonly action: string; readonly text: string };
+export type ReplayOutcome =
+  | { readonly ok: true; readonly steps: number; readonly outputs: ReadonlyArray<ReplayOutput> }
+  | { readonly ok: false; readonly failure: ReplayFailure };
 
 type ReplayCtx = { readonly client: BrowserClient; readonly signal: AbortSignal | undefined; readonly extensionCtx: ExtensionContext };
 type Replayer = (args: Readonly<Record<string, unknown>>, ctx: ReplayCtx) => Promise<Result<ToolOk<unknown>, ToolErr>>;
@@ -81,7 +88,19 @@ const REPLAYERS: ReadonlyMap<string, Replayer> = new Map([
   ["new_tab", replayer(newTabTool)],
   ["download", replayer(downloadTool)],
   ["close_tab", closeCurrentTab],
+  ["http_get", replayer(httpGetTool)],
+  ["read_page", replayer(readPageTool)],
 ]);
+
+// Steps that read data without touching the agent's tab: http_get fetches outside the browser and read_page uses a
+// tab of its own. The tab's page says nothing about them, so it is not checked around them.
+export const READ_ACTIONS: ReadonlySet<string> = new Set(["http_get", "read_page"]);
+
+// An HTTP error status is a failed read, though the fetch itself worked.
+const httpError = (details: unknown): string | undefined => {
+  const status = isRecord(details) ? details["status"] : undefined;
+  return typeof status === "number" && status >= 400 ? `the request returned HTTP ${status}` : undefined;
+};
 
 const EXPECT_TIMEOUT_MS = 5_000;
 const POLL_MS = 250;
@@ -116,6 +135,11 @@ export const describeStep = (step: RecipeStep): string => {
   const l = step.locator;
   const target = l === undefined ? "" : "role" in l ? ` ${l.role} "${l.name}"` : "css" in l ? ` ${l.css}` : ` at (${l.x}, ${l.y})`;
   return `${step.action}${target}`;
+};
+
+const describeRead = (step: RecipeStep, args: JsonObject): string => {
+  const url = args["url"];
+  return typeof url === "string" ? `${step.action} ${url}` : step.action;
 };
 
 const describeExpect = (e: StepExpect | undefined): string => {
@@ -259,7 +283,8 @@ export const runRecipe = async (opts: {
   const hosts = knownHosts(recipe, params);
   // A navigate returns before the next page renders, so a sign-in form can appear only after the check before a
   // step; looking again here keeps it from being reported as an ordinary missing element.
-  const fail = async (step: number, s: RecipeStep, failure: string, found?: "auth" | "bot"): Promise<ReplayOutcome> => {
+  // `found` names a wall already seen; "read" marks a read step's failure, which says nothing about the tab's page.
+  const fail = async (step: number, s: RecipeStep, failure: string, found?: "auth" | "bot" | "read"): Promise<ReplayOutcome> => {
     const wall = found !== undefined ? undefined : await authWall(client, hosts);
     const reason = wall !== undefined ? `auth wall: ${wall}` : failure;
     const kind = found ?? (wall !== undefined ? "auth" : undefined);
@@ -269,10 +294,12 @@ export const runRecipe = async (opts: {
     return { ok: false, failure: { step, action: describeStep(s), reason, expected: describeExpect(s.expect), snapshot: await freshSnapshot(ctx), authWall: kind === "auth", botCheck: kind === "bot" } };
   };
 
+  const outputs: ReplayOutput[] = [];
   for (const [i, step] of recipe.steps.entries()) {
     const n = i + 1;
     const opensPage = OPENS_PAGE.has(step.action);
-    const wall = opensPage ? undefined : await authWall(client, hosts);
+    const reads = READ_ACTIONS.has(step.action);
+    const wall = opensPage || reads ? undefined : await authWall(client, hosts);
     if (wall !== undefined) return fail(n, step, `auth wall: ${wall}`, "auth");
     const run = REPLAYERS.get(step.action);
     if (run === undefined) return fail(n, step, `"${step.action}" is not a replayable action`);
@@ -294,8 +321,13 @@ export const runRecipe = async (opts: {
     } finally {
       release();
     }
-    if (!result.success) return fail(n, step, result.error.message);
-    if (!(await waitPastBotCheck(client, opts.botCheckTimeoutMs ?? BOT_CHECK_TIMEOUT_MS, opts.signal))) {
+    if (!result.success) return fail(n, step, result.error.message, reads ? "read" : undefined);
+    if (reads) {
+      const bad = httpError(result.data.details);
+      if (bad !== undefined) return fail(n, step, bad, "read");
+      outputs.push({ step: n, action: describeRead(step, args), text: result.data.text });
+    }
+    if (!reads && !(await waitPastBotCheck(client, opts.botCheckTimeoutMs ?? BOT_CHECK_TIMEOUT_MS, opts.signal))) {
       return fail(n, step, "bot check: the site kept showing a check that it is not a robot (Cloudflare's \"Just a moment...\")", "bot");
     }
     if (step.expect !== undefined && !(await waitForExpect(client, fillExpect(step.expect, params), downloadsBefore, opts.signal))) {
@@ -317,5 +349,5 @@ export const runRecipe = async (opts: {
       })
       .catch(() => undefined);
   }
-  return { ok: true, steps: recipe.steps.length };
+  return { ok: true, steps: recipe.steps.length, outputs };
 };

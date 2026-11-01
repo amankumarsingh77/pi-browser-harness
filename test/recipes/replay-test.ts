@@ -115,7 +115,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
 
-    assert.deepEqual(outcome, { ok: true, steps: 3 });
+    assert.deepEqual(outcome, { ok: true, steps: 3, outputs: [] });
     assert.equal(fake.callsTo("Page.navigate")[0]?.params["url"], "https://billing.test/invoices?m=2026-10");
     const selected = fake.callsTo("Runtime.callFunctionOn")[0]?.params["arguments"];
     assert.deepEqual(selected, [{ value: { wv: null, wl: "2026-10", wi: null } }]);
@@ -161,7 +161,7 @@ describe("recipe replay", () => {
     const silent = await clientFor();
     const failed = await runRecipe({ client: silent.client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
 
-    assert.deepEqual(passed, { ok: true, steps: 1 });
+    assert.deepEqual(passed, { ok: true, steps: 1, outputs: [] });
     assert.ok(!failed.ok, "expected the replay without a download to fail");
     assert.equal(failed.failure.step, 1);
     assert.match(failed.failure.expected, /a download to start/);
@@ -173,7 +173,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
 
-    assert.deepEqual(outcome, { ok: true, steps: 1 });
+    assert.deepEqual(outcome, { ok: true, steps: 1, outputs: [] });
   });
 
   test("SC38c: a recorded status \"Saved\" does not match when no status appears within 5s", async () => {
@@ -204,7 +204,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
 
-    assert.deepEqual(outcome, { ok: true, steps: 2 });
+    assert.deepEqual(outcome, { ok: true, steps: 2, outputs: [] });
     assert.ok(fake.callsTo("Input.dispatchMouseEvent").length > 0, "expected the click to run after the check cleared");
   });
 
@@ -222,6 +222,47 @@ describe("recipe replay", () => {
     assert.deepEqual(fake.calls.filter((c) => c.method.startsWith("Input.")), []);
   });
 
+  // http_get fetches outside the browser, so the test answers it instead of the page.
+  const withFetch = async <T>(status: number, body: string, run: (urls: string[]) => Promise<T>): Promise<T> => {
+    const original = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (input) => {
+      urls.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+      return Promise.resolve(new Response(body, { status, headers: { "content-type": "application/json" } }));
+    };
+    try {
+      return await run(urls);
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  test("SC123: an http_get step fetches its filled URL and its body comes back as the replay's output, with the tab on another site", async () => {
+    const { client } = await clientFor({ url: "https://github.com/" });
+    const recipe = recipeOf([{ action: "http_get", args: { url: "https://api.billing.test/totals/{{month}}" } }]);
+
+    const { outcome, urls } = await withFetch(200, '{"total":42}', async (urls) => ({
+      outcome: await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } }),
+      urls,
+    }));
+
+    assert.deepEqual(urls, ["https://api.billing.test/totals/2026-10"]);
+    assert.ok(outcome.ok, "expected the read to run though the tab is on github.com");
+    assert.deepEqual(outcome.outputs.map((o) => [o.step, o.action]), [[1, "http_get https://api.billing.test/totals/2026-10"]]);
+    assert.match(outcome.outputs.map((o) => o.text).join(""), /\{"total":42\}/);
+  });
+
+  test("SC124: an http_get answered with HTTP 404 fails its step as a failed read, not as an auth wall", async () => {
+    const { client } = await clientFor({ url: "https://github.com/" });
+    const recipe = recipeOf([{ action: "http_get", args: { url: "https://api.billing.test/totals/{{month}}" } }]);
+
+    const outcome = await withFetch(404, "not found", () => runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } }));
+
+    assert.ok(!outcome.ok, "expected the 404 to fail the step");
+    assert.equal(outcome.failure.reason, "the request returned HTTP 404");
+    assert.equal(outcome.failure.authWall, false);
+  });
+
   test("SC40: a recipe on billing.test that navigates to sso.billing.test stops as an auth wall on login.other.test but runs on sso.billing.test", async () => {
     const recipe = recipeOf([{ action: "navigate", args: { url: "https://sso.billing.test/login" } }]);
     const elsewhere = await clientFor({ url: "https://login.other.test/signin" });
@@ -233,7 +274,7 @@ describe("recipe replay", () => {
     assert.ok(!stopped.ok, "expected the replay on login.other.test to stop");
     assert.equal(stopped.failure.authWall, true);
     assert.match(stopped.failure.reason, /login\.other\.test/);
-    assert.deepEqual(ran, { ok: true, steps: 1 });
+    assert.deepEqual(ran, { ok: true, steps: 1, outputs: [] });
   });
 
   test("SC66: a sign-in form that renders only after the navigate step returns fails step 2 as an auth wall, not as a missing \"Download statement\" button", async () => {
@@ -264,7 +305,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { month: "2026-10" } });
 
-    assert.deepEqual(outcome, { ok: true, steps: 2 });
+    assert.deepEqual(outcome, { ok: true, steps: 2, outputs: [] });
   });
 
   test("SC75: a new tab expecting https://billing.test/{{acct}} passes with acct=acme when the tab lands on https://billing.test/acme", async () => {
@@ -283,7 +324,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe, params: { acct: "acme" } });
 
-    assert.deepEqual(outcome, { ok: true, steps: 1 });
+    assert.deepEqual(outcome, { ok: true, steps: 1, outputs: [] });
   });
 
   test("SC94: a close_tab step closes the tab the recipe is on", async () => {
@@ -298,7 +339,7 @@ describe("recipe replay", () => {
 
     const outcome = await runRecipe({ client, extensionCtx: fakeCtx().ctx, recipe: recipeOf([{ action: "close_tab", args: {} }]), params: {} });
 
-    assert.deepEqual(outcome, { ok: true, steps: 1 });
+    assert.deepEqual(outcome, { ok: true, steps: 1, outputs: [] });
     assert.deepEqual(closed, ["t1"]);
   });
 });

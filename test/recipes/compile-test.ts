@@ -155,6 +155,28 @@ describe("compileSteps", () => {
     assert.deepEqual(steps[0]?.expect, { appeared: [{ role: "link", name: "Item 21" }] });
   });
 
+  test("SC118: a navigate, an http_get and a headers-bearing read compile to the navigate and the http_get, with no expectation on the read", () => {
+    const steps = okSteps(
+      compileSteps([
+        entry({ tool: "browser_navigate", args: { url: "https://www.npmjs.com/package/pkg" }, change: { url: "https://www.npmjs.com/package/pkg", appeared: [] } }),
+        entry({ tool: "browser_http_get", read: true, args: { url: "https://api.npmjs.org/downloads/range/last-month/pkg" } }),
+        entry({ tool: "browser_http_get", read: true, replayable: false, args: {} }),
+      ]),
+    );
+
+    assert.deepEqual(steps.map((s) => [s.action, s.args, s.expect]), [
+      ["navigate", { url: "https://www.npmjs.com/package/pkg" }, { url: "https://www.npmjs.com/package/pkg" }],
+      ["http_get", { url: "https://api.npmjs.org/downloads/range/last-month/pkg" }, undefined],
+    ]);
+  });
+
+  test("SC119: the same read made twice keeps only the later one", () => {
+    const read: Pick<JournalEntry, "tool" | "read" | "args"> = { tool: "browser_read_page", read: true, args: { url: "https://w.test/wiki/Ada" } };
+    const steps = okSteps(compileSteps([entry(read), entry({ tool: "browser_scroll", args: { direction: "down" } }), entry(read)]));
+
+    assert.deepEqual(steps.map((s) => s.action), ["scroll", "read_page"]);
+  });
+
   test("SC85: a click that moved the page to https://b.test/releases expects that URL alone, not the elements of the new page", () => {
     const steps = okSteps(
       compileSteps([
@@ -250,6 +272,23 @@ describe("applyParams", () => {
     { action: "click", args: {}, locator: { role: "link", name: "2026-09 statement", nth: 0 } },
   ];
 
+  test("SC120: a refused param lists every value the steps hold, by step, so the agent can pick one that is there", () => {
+    const r = applyParams(steps, { start: "2026-09-28" });
+
+    assert.ok(!r.success, "expected start=2026-09-28 to be refused");
+    assert.match(r.error, /param start: the value "2026-09-28" does not appear/);
+    assert.match(r.error, /step 1 navigate url: "https:\/\/b\.test\/invoices\?m=2026-09"/);
+    assert.match(r.error, /step 2 select_option label: "2026-09"/);
+    assert.match(r.error, /step 3 click target: "2026-09 statement"/);
+  });
+
+  test("SC121: start=2026-09-28 inside an http_get URL's date range becomes {{start}} there", () => {
+    const r = applyParams([{ action: "http_get", args: { url: "https://api.test/range/2026-09-28:2026-11-01/pkg" } }], { start: "2026-09-28", end: "2026-11-01" });
+
+    assert.ok(r.success, r.success ? "" : r.error);
+    assert.equal(r.data[0]?.args["url"], "https://api.test/range/{{start}}:{{end}}/pkg");
+  });
+
   test("SC13: param month=2026-09 becomes {{month}} in the navigate URL, the select label and the link's name", () => {
     const r = applyParams(steps, { month: "2026-09" });
 
@@ -318,6 +357,12 @@ describe("siteOf", () => {
     const site = siteOf([entry({ tool: "browser_navigate", args: { url: "http://../" } }), entry({ tool: "browser_click", url: "about:blank" })]);
 
     assert.equal(site, "unknown-site");
+  });
+
+  test("SC122: a task that only fetched https://api.npmjs.org/... with http_get from a github.com tab is on api.npmjs.org", () => {
+    const site = siteOf([entry({ tool: "browser_http_get", read: true, url: "https://github.com/", args: { url: "https://api.npmjs.org/downloads/range/last-month/pkg" } })]);
+
+    assert.equal(site, "api.npmjs.org");
   });
 
   test("SC63: a task that opens http://127.0.0.1:8765/ in a new tab from a github.com tab is on 127.0.0.1, not the previous tab's github.com", () => {

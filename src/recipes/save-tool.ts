@@ -52,9 +52,16 @@ const fragileNote = (recipe: Recipe): string => {
 
 const leftOutNote = (entries: ReadonlyArray<JournalEntry>): string => {
   const n = entries.filter(isNoEffectScript).length;
-  return n === 0
-    ? ""
-    : `\nLeft out ${n} browser_execute_js call${n === 1 ? "" : "s"} that changed nothing on the page; if one of them did something the task needs, redo it with browser tools and save again.`;
+  const reads = entries.filter((e) => e.ok && e.read === true && !e.replayable).length;
+  const scripts =
+    n === 0
+      ? ""
+      : `\nLeft out ${n} browser_execute_js call${n === 1 ? "" : "s"} that changed nothing on the page; a replay does not return what they read. If the task needs it, read it with browser_http_get or browser_read_page instead and save again.`;
+  const unkept =
+    reads === 0
+      ? ""
+      : `\nLeft out ${reads} read${reads === 1 ? "" : "s"} that used request headers or a tab id, which a recipe does not keep.`;
+  return `${scripts}${unkept}`;
 };
 
 const MAX_QUOTED = 120;
@@ -119,7 +126,19 @@ export const repairSteps = (
 };
 
 // Actions that only load or read a page, or wait, and so cannot send data however they were recorded.
-const READS_ONLY: ReadonlySet<string> = new Set(["navigate", "new_tab", "go_back", "go_forward", "wait_for", "wait_for_load", "scroll", "focus", "close_tab"]);
+const READS_ONLY: ReadonlySet<string> = new Set([
+  "navigate",
+  "new_tab",
+  "go_back",
+  "go_forward",
+  "wait_for",
+  "wait_for_load",
+  "scroll",
+  "focus",
+  "close_tab",
+  "http_get",
+  "read_page",
+]);
 
 // What running a step again would repeat beyond the page itself. In a recipe saved before steps were marked, any
 // other step may have sent data, so it is listed too: the gate fails closed.
@@ -167,7 +186,7 @@ export const saveRecipeTool = defineBrowserTool({
   name: "browser_save_recipe",
   label: "Save Browser Recipe",
   description:
-    "Save the browser task you just finished as a named, replayable recipe. Compiles the page-changing calls of your most recent browser task from the session journal, turns the given param values into {{params}}, shows the recipe to the user to confirm, and writes a YAML file. Saving over an existing name keeps the previous version.",
+    "Save the browser task you just finished as a named, replayable recipe. Compiles the page-changing calls and the reads (browser_http_get, browser_read_page of a url) of your most recent browser task from the session journal, turns the given param values into {{params}}, shows the recipe to the user to confirm, and writes a YAML file. A replay returns what the reads fetched; a browser_execute_js that only read the page is left out. Saving over an existing name keeps the previous version.",
   promptSnippet: "Save the last browser task as a replayable recipe",
   promptGuidelines: [
     "After finishing a multi-step browser task the user is likely to repeat (an export, a report, a routine check), offer once to save it as a recipe: propose a name and which typed or selected values are params. Do not offer again for the same task.",
@@ -205,7 +224,7 @@ export const saveRecipeTool = defineBrowserTool({
     if (!compiled.success) return err({ kind: "invalid_state", message: compiled.error });
     const params = args.params ?? {};
     const steps = applyParams(compiled.data, params);
-    if (!steps.success) return err({ kind: "invalid_args", message: steps.error });
+    if (!steps.success) return err({ kind: "invalid_args", message: `${steps.error}${leftOutNote(task)}` });
     const recipe: Recipe = {
       name: args.name,
       site: siteOf(task),

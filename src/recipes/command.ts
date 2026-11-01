@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
 import { missingParams, runRecipe, unknownParams, unknownParamsMessage } from "./replay";
-import { formatFailureHandoff, listText } from "./run-tool";
+import { formatFailureHandoff, formatOutputs, listText } from "./run-tool";
 import { findRecipe, listRecipes, recordRun } from "./store";
 import { approveProjectRecipe, trustWritten } from "./trust";
 
@@ -32,7 +32,7 @@ export const parseCommandArgs = (raw: string): { readonly name: string | undefin
 };
 
 // Runs the replay engine directly, so a command run never starts a model turn.
-export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage">, client: BrowserClient): void => {
+export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" | "sendUserMessage" | "sendMessage">, client: BrowserClient): void => {
   pi.registerCommand("browser-recipe", {
     description: "Replay a saved browser recipe with no model calls: /browser-recipe NAME key=value. No name lists recipes.",
     getArgumentCompletions: async (prefix) => {
@@ -80,6 +80,9 @@ export const registerRecipeCommand = (pi: Pick<ExtensionAPI, "registerCommand" |
         await recordRun(stored.data, { at, result: "ok" });
         await trustWritten(stored.data, ctx.cwd);
         ctx.ui.notify(`Recipe ${name} done: ${outcome.steps} steps ✓`, "info");
+        // Shown in the session without starting a model turn; the agent sees it with the user's next message.
+        const data = formatOutputs(outcome.outputs);
+        if (data !== "") pi.sendMessage({ customType: "browser-recipe-output", content: `/browser-recipe ${name}\n${data}`, display: true }, { triggerTurn: false });
         return;
       }
       await recordRun(stored.data, { at, result: "failed", step: outcome.failure.step });

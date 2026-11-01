@@ -61,11 +61,17 @@ const SETTINGS: ReadonlySet<string> = new Set(["browser_download"]);
 export const isNoEffectScript = (e: JournalEntry): boolean => e.ok && e.tool === "browser_execute_js" && e.readOnly === true;
 
 // `openBefore` counts the tabs that steps before these, kept from a recipe being repaired, opened and left open.
+// A read whose args could not be kept (request headers, a tab id) is left out; so is a read the task repeated
+// exactly later, which the later copy covers.
+export const isLeftOutRead = (e: JournalEntry, i: number, entries: ReadonlyArray<JournalEntry>): boolean =>
+  e.read === true &&
+  (!e.replayable || entries.slice(i + 1).some((l) => l.ok && l.read === true && l.tool === e.tool && JSON.stringify(l.args) === JSON.stringify(e.args)));
+
 export const compileSteps = (entries: ReadonlyArray<JournalEntry>, openBefore = 0): Result<ReadonlyArray<RecipeStep>, string> => {
   const steps: RecipeStep[] = [];
   let openTabs = openBefore;
-  for (const e of entries) {
-    if (!e.ok || SETTINGS.has(e.tool) || isNoEffectScript(e)) continue;
+  for (const [i, e] of entries.entries()) {
+    if (!e.ok || SETTINGS.has(e.tool) || isNoEffectScript(e) || isLeftOutRead(e, i, entries)) continue;
     if (e.password) return err(`${e.tool} typed into a password field; recipes never type credentials, so this task cannot be saved`);
     if (!e.replayable) return err(`${e.tool} cannot be replayed; redo the task without it, or leave it out of the recipe`);
     if (e.tool === "browser_new_tab") openTabs += 1;
@@ -124,6 +130,25 @@ const templateExpect = (e: StepExpect, pairs: ReadonlyArray<readonly [string, st
   ...(e.appeared !== undefined ? { appeared: e.appeared.map((a) => ({ ...a, name: template(a.name, pairs) })) } : {}),
 });
 
+const MAX_LISTED_VALUES = 12;
+const MAX_VALUE_CHARS = 100;
+
+// The values a param could be taken from, step by step, so a refused param can be fixed without guessing.
+const valuesIn = (steps: ReadonlyArray<RecipeStep>): string => {
+  const cut = (v: string): string => JSON.stringify(v.length > MAX_VALUE_CHARS ? `${v.slice(0, MAX_VALUE_CHARS)}…` : v);
+  const lines = steps.flatMap((s, i) => [
+    ...Object.entries(s.args).flatMap(([k, v]) => (typeof v === "string" && v !== "" ? [`  step ${i + 1} ${s.action} ${k}: ${cut(v)}`] : [])),
+    ...(s.locator !== undefined && "name" in s.locator ? [`  step ${i + 1} ${s.action} target: ${cut(s.locator.name)}`] : []),
+  ]);
+  if (lines.length === 0) return "No step holds a typed value or URL.";
+  const more = lines.length > MAX_LISTED_VALUES ? [`  … and ${lines.length - MAX_LISTED_VALUES} more`] : [];
+  return [
+    "A param value must appear, exactly as written, in one of these:",
+    ...lines.slice(0, MAX_LISTED_VALUES),
+    ...more,
+  ].join("\n");
+};
+
 // Every occurrence of a param's value becomes {{name}}; longer values go first so "2026-09-01" is not split by "2026-09".
 export const applyParams = (
   steps: ReadonlyArray<RecipeStep>,
@@ -141,14 +166,14 @@ export const applyParams = (
   for (const [name, value] of pairs) {
     const placeholder = new RegExp(`\\{\\{${name}(\\|[a-z]+)?\\}\\}`);
     const used = out.some((s) => placeholder.test(JSON.stringify(s)));
-    if (!used) return err(`param ${name}: the value "${value}" does not appear in the task's steps`);
+    if (!used) return err(`param ${name}: the value "${value}" does not appear in the task's steps. ${valuesIn(steps)}`);
   }
   return ok(out);
 };
 
-const OPENS_URL: ReadonlySet<string> = new Set(["browser_navigate", "browser_new_tab"]);
+const OPENS_URL: ReadonlySet<string> = new Set(["browser_navigate", "browser_new_tab", "browser_http_get", "browser_read_page"]);
 
-// A call that opens a page is on the page it opened; its e.url is the tab it started from, which may be another site.
+// A call that opens or reads a URL is about that URL; its e.url is the tab it started from, which may be another site.
 const pageOf = (e: JournalEntry): string => {
   if (!OPENS_URL.has(e.tool)) return e.url;
   const url = e.args["url"];

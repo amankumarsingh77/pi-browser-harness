@@ -30,6 +30,8 @@ export type FakePi = {
   readonly flagReads: ReadonlyArray<string>;
   // Every message the extension handed to the agent, which starts a model turn, with its delivery options.
   readonly userMessages: ReadonlyArray<RecordedUserMessage>;
+  // Custom messages sent with sendMessage: the first argument is the message, the second its options.
+  readonly messages: ReadonlyArray<RecordedUserMessage>;
   readonly setFlag: (name: string, value: unknown) => void;
   readonly command: (name: string) => RecordedCommand;
   readonly emit: (event: string, payload: unknown, ctx: ExtensionContext) => Promise<unknown>;
@@ -44,6 +46,7 @@ export const fakePi = (): FakePi => {
   const entries: Array<{ readonly customType: string; readonly data: unknown }> = [];
   const flagReads: string[] = [];
   const userMessages: RecordedUserMessage[] = [];
+  const messages: RecordedUserMessage[] = [];
   const flagValues = new Map<string, unknown>();
   const handlers = new Map<string, EventHandler[]>();
 
@@ -67,6 +70,9 @@ export const fakePi = (): FakePi => {
     },
     sendUserMessage: (content: unknown, options?: unknown) => {
       userMessages.push({ content, options });
+    },
+    sendMessage: (content: unknown, options?: unknown) => {
+      messages.push({ content, options });
     },
     on: (event: string, handler: EventHandler) => {
       events.push(event);
@@ -92,6 +98,7 @@ export const fakePi = (): FakePi => {
     entries,
     flagReads,
     userMessages,
+    messages,
     setFlag: (name, value) => {
       flagValues.set(name, value);
     },

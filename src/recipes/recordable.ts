@@ -35,7 +35,54 @@ export const REPLAYABLE: ReadonlyMap<string, "ref" | "fields" | "none"> = new Ma
   ["browser_download", "none"],
   // Replayable only when it closes the tab the agent is on; see closesCurrentTab.
   ["browser_close_tab", "none"],
+  // Reads (see READS): they change nothing, and a replay hands back what they read.
+  ["browser_http_get", "none"],
+  ["browser_read_page", "none"],
 ]);
+
+// Calls that only read data for the agent. A recipe keeps them so a replay returns the data the task was for, not
+// just the page it ended on. The args each may keep: request headers can carry credentials, and a tab id only means
+// something in this browser session, so a read that used either is left out of the recipe.
+export const READS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["browser_http_get", new Set(["url", "timeout"])],
+  ["browser_read_page", new Set(["url"])],
+]);
+
+const readArgs = (name: string, args: Readonly<Record<string, unknown>>): JsonObject | undefined => {
+  const keep = READS.get(name);
+  if (keep === undefined) return undefined;
+  const out: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (v === undefined) continue;
+    if (!keep.has(k) || (typeof v !== "string" && typeof v !== "number")) return undefined;
+    out[k] = v;
+  }
+  return typeof out["url"] === "string" && out["url"] !== "" ? out : undefined;
+};
+
+// A read changes nothing on the page, so it is journaled without measuring the page around it.
+const observeRead = async (journal: Journal, name: string, args: Readonly<Record<string, unknown>>, client: BrowserClient): ReturnType<CallObserver> => {
+  const kept = readArgs(name, args);
+  const url = await urlOf(client);
+  return async (outcome) => {
+    try {
+      await journal.append({
+        source: "agent",
+        tool: name,
+        replayable: kept !== undefined,
+        args: kept ?? {},
+        password: false,
+        url,
+        ok: outcome.ok,
+        read: true,
+        ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+      });
+    } catch {
+      // Journal write failures are dropped; the tool already ran.
+    }
+    return undefined;
+  };
+};
 
 // Page-changing calls a recipe cannot replay safely: arbitrary code, or a handle that only means something now.
 export const NON_REPLAYABLE: ReadonlySet<string> = new Set([
@@ -233,6 +280,7 @@ const fieldsOf = async (client: BrowserClient, args: Readonly<Record<string, unk
 export const observeCall: CallObserver = async ({ name, concurrency, args, client }) => {
   const journal = activeJournal();
   if (journal === undefined || IGNORED.has(name) || !isRecord(args)) return undefined;
+  if (READS.has(name)) return observeRead(journal, name, args, client).catch(() => undefined);
   const mode = REPLAYABLE.get(name);
   const known = mode !== undefined || NON_REPLAYABLE.has(name);
   if (!known && concurrency === "parallel") return undefined;

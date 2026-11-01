@@ -114,6 +114,22 @@ describe("browser_save_recipe", () => {
     assert.match(resultText(result), /Left out 1 browser_execute_js call that changed nothing/);
   });
 
+  test("SC127: a param found only in a left-out script is refused with the steps' values and a pointer to http_get, and nothing is written", async () => {
+    await activeJournal()?.append({ source: "agent", replayable: false, password: false, ok: true, tool: "browser_execute_js", args: {}, url: "https://billing.test/invoices", readOnly: true });
+
+    const { fake, run } = await save({ confirms: [true], args: { name: "vendor-invoices", params: { vendor: "Acme" } } });
+
+    await assert.rejects(run, (e: unknown) => {
+      const message = e instanceof Error ? e.message : String(e);
+      assert.match(message, /param vendor: the value "Acme" does not appear/);
+      assert.match(message, /step 1 navigate url: "https:\/\/billing\.test\/invoices"/);
+      assert.match(message, /read it with browser_http_get or browser_read_page instead/);
+      return true;
+    });
+    assert.deepEqual(fake.confirmations, []);
+    assert.equal(existsSync(userFile()), false);
+  });
+
   test("SC102: a save holding a wait for \"Exported 42 rows\" and a link named \"{{month}} statement for Acme\" lists both in the dialog and the result as text that may not fit another run", async () => {
     const journal = activeJournal();
     await journal?.append({ source: "agent", replayable: true, password: false, ok: true, tool: "browser_wait_for", args: { text: "Exported 42 rows" }, url: "https://billing.test/invoices" });

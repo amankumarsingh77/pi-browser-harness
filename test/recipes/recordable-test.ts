@@ -380,4 +380,36 @@ describe("recipe journal recording", () => {
     assert.equal(wait.locator, undefined);
     assert.deepEqual(scroll?.args, { x: 10, y: 20, deltaY: 300 });
   });
+  test("SC115: a browser_http_get is journaled as a replayable read keeping its url and timeout", async () => {
+    const client = await clientFor({});
+    await observe({ client, name: "browser_http_get", concurrency: "parallel", args: { url: "https://api.test/range/2026-09-28:2026-11-01/pkg", timeout: 20 } });
+
+    const e = await only();
+    assert.equal(e.read, true);
+    assert.equal(e.replayable, true);
+    assert.deepEqual(e.args, { url: "https://api.test/range/2026-09-28:2026-11-01/pkg", timeout: 20 });
+  });
+
+  test("SC116: a browser_http_get with request headers is journaled as a read that cannot be replayed, and keeps none of its args", async () => {
+    const client = await clientFor({});
+    await observe({ client, name: "browser_http_get", concurrency: "parallel", args: { url: "https://api.test/me", headers: { Authorization: "Bearer s3cret" } } });
+
+    const e = await only();
+    assert.equal(e.read, true);
+    assert.equal(e.replayable, false);
+    assert.deepEqual(e.args, {});
+    assert.doesNotMatch(readFileSync(journal.path, "utf8"), /s3cret/);
+  });
+
+  test("SC117: a browser_read_page of a url is a replayable read; one of a tab id is not", async () => {
+    const client = await clientFor({});
+    await observe({ client, name: "browser_read_page", concurrency: "parallel", args: { url: "https://w.test/wiki/Ada" } });
+    await observe({ client, name: "browser_read_page", concurrency: "parallel", args: { targetId: "ABC123" } });
+
+    const entries = await journal.entries();
+    assert.deepEqual(entries.map((e) => [e.read, e.replayable, e.args]), [
+      [true, true, { url: "https://w.test/wiki/Ada" }],
+      [true, false, {}],
+    ]);
+  });
 });
