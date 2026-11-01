@@ -285,9 +285,12 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
   const known = mode !== undefined || NON_REPLAYABLE.has(name);
   if (!known && concurrency === "parallel") return undefined;
   try {
+    // A closed tab has no page to compare: reading it after the close waits out the CDP timeout (10s) on a session
+    // that is gone. Its step needs no page check, so neither side of it is read.
+    const closing = name === "browser_close_tab";
     // Read the page now, not from the agent's last snapshot: that one may be cut short or from another tab, and
     // everything missing from it would look like it appeared after this call. Refs the agent holds keep their names.
-    const baseline = await refreshRefs(client);
+    const baseline = closing ? undefined : await refreshRefs(client);
     const ref = stringArg(args, "ref");
     const selector = stringArg(args, "selector");
     const x = numberArg(args, "x");
@@ -305,7 +308,6 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
       const r = await evalJs(client, FOCUSED_IS_PASSWORD_EXPR);
       password = r.success && r.data === true;
     }
-    const closing = name === "browser_close_tab";
     const replayable = mode !== undefined && (!closing || closesCurrentTab(client, args));
     const url = await urlOf(client);
     // A script is measured, not judged by what appeared: setting a field's value makes nothing appear.
@@ -313,14 +315,14 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
     const printBefore = script ? await readFingerprint(client) : undefined;
     const writesBefore = client.session().writeRequestCount();
     const before: BeforeCall = {
-      refs: baseline.success ? baseline.data.cur : undefined,
+      refs: baseline?.success === true ? baseline.data.cur : undefined,
       downloads: client.session().downloadCount(),
-      messages: await readLiveMessages(client),
+      messages: closing ? undefined : await readLiveMessages(client),
     };
     return async (outcome) => {
       try {
         const printAfter = script && outcome.ok ? await readFingerprint(client) : undefined;
-        const change = outcome.ok ? await observeChange(client, before) : undefined;
+        const change = outcome.ok && !closing ? await observeChange(client, before) : undefined;
         const wrote = client.session().writeRequestCount() > writesBefore;
         const readOnly =
           printBefore !== undefined &&

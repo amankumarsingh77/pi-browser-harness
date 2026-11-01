@@ -327,7 +327,8 @@ export const runRecipe = async (opts: {
       if (bad !== undefined) return fail(n, step, bad, "read");
       outputs.push({ step: n, action: describeRead(step, args), text: result.data.text });
     }
-    if (!reads && !(await waitPastBotCheck(client, opts.botCheckTimeoutMs ?? BOT_CHECK_TIMEOUT_MS, opts.signal))) {
+    // After a close_tab the tab it ran on is gone; looking for a bot check there would wait out the CDP timeout.
+    if (!reads && step.action !== "close_tab" && !(await waitPastBotCheck(client, opts.botCheckTimeoutMs ?? BOT_CHECK_TIMEOUT_MS, opts.signal))) {
       return fail(n, step, "bot check: the site kept showing a check that it is not a robot (Cloudflare's \"Just a moment...\")", "bot");
     }
     if (step.expect !== undefined && !(await waitForExpect(client, fillExpect(step.expect, params), downloadsBefore, opts.signal))) {

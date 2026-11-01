@@ -26,6 +26,10 @@ export const evaluateParams = (
   replMode: true,
 });
 
+const CLOSE_ATTEMPTS = 2;
+const CLOSE_CONFIRM_MS = 2_500;
+const CLOSE_POLL_MS = 100;
+
 export type BrowserClientOptions = {
   readonly namespace: string;
   readonly transport: CdpTransport;
@@ -36,6 +40,8 @@ export type BrowserClientOptions = {
     readonly harnessWindowId?: number;
   };
   readonly profilePin?: ProfilePin | null;
+  // How long one close may take to show in Chrome's target list before it is sent again; tests shorten it.
+  readonly closeConfirmMs?: number;
   readonly onOwnershipChange?: (snapshot: {
     readonly ownedTargetIds: ReadonlyArray<string>;
     readonly harnessWindowTargetId: string | undefined;
@@ -338,11 +344,39 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return ok(tabId);
   };
 
+  // True once Chrome no longer lists the target, false if it still does at the deadline, undefined when the list
+  // cannot be read (then the close is taken at its word, as before).
+  const targetGone = async (targetId: string, timeoutMs: number): Promise<boolean | undefined> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const r = await session.callBrowser("Target.getTargets", {}, { timeoutMs: 2_000 });
+      if (!r.success) return undefined;
+      if (!r.data.targetInfos.some((t) => t.targetId === targetId)) return true;
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, CLOSE_POLL_MS));
+    }
+  };
+
+  // Chrome answers Target.closeTarget with success even when it then keeps the tab: a tab closed while its page is
+  // still loading stays open. So the close is checked against Chrome's own target list and sent once more if the
+  // tab is still there; the tab leaves the owned list only once it is gone, so a tab left open is not lost track of.
   const closeTab = async (targetId: string): Promise<Result<void, CdpError>> => {
-    const r = await session.callBrowser("Target.closeTarget", { targetId });
-    if (!r.success) return r;
-    ownership.remove(targetId);
-    return ok(undefined);
+    for (let attempt = 1; attempt <= CLOSE_ATTEMPTS; attempt++) {
+      const r = await session.callBrowser("Target.closeTarget", { targetId });
+      if (!r.success) return r;
+      const gone = await targetGone(targetId, opts.closeConfirmMs ?? CLOSE_CONFIRM_MS);
+      if (gone !== false) {
+        ownership.remove(targetId);
+        return ok(undefined);
+      }
+    }
+    return err(
+      cdpError(
+        "timeout",
+        `Chrome accepted the close but tab ${targetId} is still open after ${CLOSE_ATTEMPTS} attempts (a page that is still loading can ignore a close); wait for it to load, then close it again`,
+        "Target.closeTarget",
+      ),
+    );
   };
 
   const closeOwnedTabs = async (): Promise<void> => {

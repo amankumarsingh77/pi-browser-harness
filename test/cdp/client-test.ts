@@ -6,7 +6,7 @@ import { ok } from "../../src/util/result";
 
 const PAGE_JSON = JSON.stringify({ url: "https://one.test/", title: "One", w: 1, h: 2, sx: 0, sy: 0, pw: 3, ph: 4 });
 
-const started = async (canned: Canned = {}) => {
+const started = async (canned: Canned = {}, closeConfirmMs?: number) => {
   const stub = createStubTransport({
     "Target.setDiscoverTargets": ok({}),
     "Target.getTargets": ok({
@@ -26,6 +26,7 @@ const started = async (canned: Canned = {}) => {
     transport: stub.transport,
     remote: { cdpUrl: "ws://127.0.0.1:1/devtools/browser/abc", browserId: "abc" },
     initialOwnership: { ownedTargetIds: ["t1"] },
+    ...(closeConfirmMs !== undefined ? { closeConfirmMs } : {}),
   });
   const r = await client.start();
   assert.equal(r.success, true);
@@ -106,5 +107,31 @@ describe("BrowserClient.pageInfo after a navigation command", () => {
     await client.pageInfo();
 
     assert.equal(evaluations(), before + 1);
+  });
+});
+
+describe("BrowserClient.closeTab", () => {
+  test("a tab Chrome no longer lists after the close is closed with one Target.closeTarget and leaves the owned list", async () => {
+    const { stub, client } = await started({ "Target.closeTarget": ok({ success: true }) }, 50);
+
+    // t9 is not among the targets Chrome lists, as after a close that took.
+    client.ownership().add("t9");
+    const r = await client.closeTab("t9");
+
+    assert.equal(r.success, true);
+    assert.equal(stub.calls.filter((c) => c.method === "Target.closeTarget").length, 1);
+    assert.equal(client.owns("t9"), false);
+  });
+
+  test("a tab Chrome still lists after the close (a page still loading) is closed twice, then reported as still open and kept owned", async () => {
+    const { stub, client } = await started({ "Target.closeTarget": ok({ success: true }) }, 50);
+
+    const r = await client.closeTab("t1");
+
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "timeout");
+    assert.match(r.error.message, /tab t1 is still open after 2 attempts/);
+    assert.equal(stub.calls.filter((c) => c.method === "Target.closeTarget").length, 2);
+    assert.equal(client.owns("t1"), true);
   });
 });

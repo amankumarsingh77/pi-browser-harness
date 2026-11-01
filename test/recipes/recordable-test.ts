@@ -357,6 +357,25 @@ describe("recipe journal recording", () => {
     assert.equal(other?.replayable, false);
   });
 
+  test("SC131: closing the current tab reads nothing from the page, before or after, so no call waits on the closed tab", async () => {
+    const scripts: string[] = [];
+    const fake = await createFakeClient({
+      evaluate: (expression) => {
+        scripts.push(expression);
+        return ok(false);
+      },
+    });
+    const client = withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) });
+
+    await observe({ client, name: "browser_close_tab", args: { targetId: "t1" } });
+
+    assert.deepEqual(fake.callsTo("Accessibility.getFullAXTree"), []);
+    assert.deepEqual(scripts.filter((e) => e.includes("liveMessages")), []);
+    const entry = await only();
+    assert.equal(entry.replayable, true);
+    assert.equal(entry.change, undefined);
+  });
+
   test("SC98: a click during which the tab sent a POST is journaled wrote: true", async () => {
     const fake = await createFakeClient({});
     const client = withClient(fake.client, { pageInfo: () => Promise.resolve(pageInfoOf({ url: BEFORE_URL })) });
