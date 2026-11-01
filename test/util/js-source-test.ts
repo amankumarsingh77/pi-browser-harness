@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { pageExpression } from "../../src/util/js-source";
 
-// Evaluates the prepared source the way Runtime.evaluate with awaitPromise does: a returned promise is awaited.
+// Evaluates the prepared source the way Runtime.evaluate in REPL mode does: top-level await is allowed, and only
+// the completion itself is awaited, never a promise it holds.
 const valueOf = async (src: string): Promise<unknown> => {
-  const out: unknown = runInNewContext(pageExpression(src), { document: { title: "Reports" } });
-  return await out;
+  const out: unknown = runInNewContext(`(async () => [${pageExpression(src)}])()`, { document: { title: "Reports" } });
+  const box: unknown = await out;
+  return Array.isArray(box) ? box[0] : undefined;
 };
 
 describe("pageExpression", () => {
@@ -37,6 +39,10 @@ describe("pageExpression", () => {
 
   test("a top-level await with a return is wrapped in an async body", async () => {
     assert.equal(await valueOf("const t = await Promise.resolve(document.title); return t"), "Reports");
+  });
+
+  test("the wrapped body is awaited in the source, since REPL mode does not await a returned promise", () => {
+    assert.match(pageExpression("return 1"), /^await \(async \(\) => \{/);
   });
 
   test("source that does not parse is sent unchanged so the page reports the error", () => {

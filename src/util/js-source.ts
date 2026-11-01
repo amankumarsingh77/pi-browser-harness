@@ -13,8 +13,10 @@ const hasTopLevelReturn = (node: unknown): boolean => {
 };
 
 // The source Runtime.evaluate should run for what the model wrote. A top-level `return`, anywhere in the body,
-// makes it a function body, so it runs inside an async function whose result is awaited. Anything else, including
-// source that does not parse, is sent as written, so the page reports its own error.
+// makes it a function body, so it runs inside an async function. The call is awaited in the source itself: in REPL
+// mode awaitPromise waits only for the REPL's own completion, so a returned promise would come back unresolved
+// (serialized as {}). Anything else, including source that does not parse, is sent as written, so the page reports
+// its own error.
 export const pageExpression = (src: string): string => {
   let program: unknown;
   try {
@@ -22,5 +24,5 @@ export const pageExpression = (src: string): string => {
   } catch {
     return src;
   }
-  return isRecord(program) && hasTopLevelReturn(program["body"]) ? `(async () => {\n${src}\n})()` : src;
+  return isRecord(program) && hasTopLevelReturn(program["body"]) ? `await (async () => {\n${src}\n})()` : src;
 };

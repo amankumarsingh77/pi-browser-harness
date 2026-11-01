@@ -16,6 +16,16 @@ import type { ProfilePin } from "./profile/store";
 import type { DaemonStatus, DialogInfo, PageInfo, PageInfoResult, TabInfo } from "./cdp/types";
 import { pageExpression } from "./util/js-source";
 
+// REPL mode lets a later call declare the same const or let again, as the console does.
+export const evaluateParams = (
+  expression: string,
+): { readonly expression: string; readonly returnByValue: true; readonly awaitPromise: true; readonly replMode: true } => ({
+  expression: pageExpression(expression),
+  returnByValue: true,
+  awaitPromise: true,
+  replMode: true,
+});
+
 export type BrowserClientOptions = {
   readonly namespace: string;
   readonly transport: CdpTransport;
@@ -245,8 +255,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   };
 
   const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
-    // REPL mode lets a later call declare the same const or let again, as the console does.
-    const params = { expression: pageExpression(expression), returnByValue: true, awaitPromise: true, replMode: true };
+    const params = evaluateParams(expression);
     const r = sessionId ? await session.callOnTarget("Runtime.evaluate", params, sessionId) : await session.call("Runtime.evaluate", params);
     if (!r.success) return r;
     if (r.data.exceptionDetails !== undefined) {
