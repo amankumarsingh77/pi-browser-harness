@@ -38,7 +38,7 @@ const prettyJson = (text: string): string => {
 };
 
 const ExecuteJsArgs = Type.Object({
-  expression: Type.String({ description: "JavaScript expression. `return X` is auto-wrapped in an IIFE." }),
+  expression: Type.String({ description: "A JavaScript expression, or a function body: a body with a top-level `return` (after any statements) runs inside an async function and returns that value." }),
   targetId: Type.Optional(Type.String({ description: "Optional iframe targetId; default = current page." })),
 });
 
@@ -55,7 +55,7 @@ export const executeJsTool = defineBrowserTool({
   name: "browser_execute_js",
   label: "Browser Execute JS",
   description:
-    "Surgical reads from the DOM. The cheapest, most precise way to extract a specific element's text, attribute, value, or geometry. Prefer over browser_screenshot for ANY data extraction or coordinate lookup. `return X` is auto-wrapped in an IIFE. Always use safeJs / JSON.stringify when interpolating untrusted strings.",
+    "Surgical reads from the DOM. The cheapest, most precise way to extract a specific element's text, attribute, value, or geometry. Prefer over browser_screenshot for ANY data extraction or coordinate lookup. A body with a top-level `return` runs inside an async function; `const`/`let` names can be declared again in later calls. Always use safeJs / JSON.stringify when interpolating untrusted strings.",
   promptSnippet: "Execute JS in the page — surgical DOM reads (preferred over screenshot)",
   promptGuidelines: [
     "DEFAULT for extracting a specific value: `document.querySelector('.price').innerText`, `input.value`, `el.getAttribute('aria-label')`, etc.",

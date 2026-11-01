@@ -57,6 +57,7 @@ export const EVENTS = {
   ),
   "Page.loadEventFired": ev(Anything),
   "Page.frameNavigated": ev(Anything),
+  "Page.downloadWillBegin": ev(Anything),
 
   "Runtime.consoleAPICalled": ev(
     Type.Object(

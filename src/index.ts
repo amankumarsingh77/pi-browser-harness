@@ -12,8 +12,11 @@ import { createDaemonTransport } from "./daemon/transport";
 import type { CdpTransport } from "./cdp/types";
 import { setDebugClicks } from "./util/debug";
 import { asBoolean, asString } from "./util/guards";
-import type { BrowserTool } from "./util/tool";
+import { type BrowserTool, setCallObserver } from "./util/tool";
 import type { Result } from "./util/result";
+import { activeJournal, createJournal, journalDir, setActiveJournal } from "./recipes/journal";
+import { observeCall } from "./recipes/recordable";
+import { registerRecipeCommand } from "./recipes/command";
 
 export { defineBrowserTool } from "./util/tool";
 export type {
@@ -178,9 +181,17 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
       client.setProfilePin(profilePin);
     }
 
+    setActiveJournal(createJournal(journalDir(), ctx.sessionManager.getSessionId()));
+    setCallObserver(observeCall);
+
     harnessRegistry.register(pi, client);
     registerSetupCommand(pi, client);
     registerProfileCommand(pi, client);
+    registerRecipeCommand(pi, client);
+  });
+
+  pi.on("agent_start", async () => {
+    await activeJournal()?.beginRun();
   });
 
   pi.on("session_shutdown", async () => {

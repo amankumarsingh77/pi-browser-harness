@@ -145,6 +145,25 @@ export const stripInternals = (nodes: ReadonlyArray<SlimNode>): SlimNode[] =>
     return stripped;
   });
 
+// The first `max` nodes in document order, counted the way buildTree's budget counts them. A kept node's ancestors
+// come before it, so they are always kept too.
+export const firstNodes = (nodes: ReadonlyArray<SlimNode>, max: number): ReadonlySet<SlimNode> => {
+  const kept = new Set<SlimNode>();
+  const walk = (ns: ReadonlyArray<SlimNode>): void => {
+    for (const n of ns) {
+      if (kept.size >= max) return;
+      kept.add(n);
+      walk(n.children);
+    }
+  };
+  walk(nodes);
+  return kept;
+};
+
+// A copy of the tree holding only the kept nodes; each node keeps its own fields, refs and boxes included.
+export const keepOnly = (nodes: ReadonlyArray<SlimNode>, kept: ReadonlySet<SlimNode>): SlimNode[] =>
+  nodes.filter((n) => kept.has(n)).map((n) => ({ ...n, children: keepOnly(n.children, kept) }));
+
 export const collectInteractiveTargets = (
   nodes: ReadonlyArray<SlimNode>,
 ): Array<{ node: SlimNode; backendId: number }> => {

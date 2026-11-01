@@ -283,6 +283,7 @@ export const COMMANDS = {
         returnByValue: Type.Optional(Type.Boolean()),
         awaitPromise: Type.Optional(Type.Boolean()),
         userGesture: Type.Optional(Type.Boolean()),
+        replMode: Type.Optional(Type.Boolean()),
       },
       { additionalProperties: true },
     ),
@@ -324,6 +325,10 @@ export const COMMANDS = {
   "DOM.resolveNode": cmd(
     Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
     Type.Object({ object: RemoteObject }),
+  ),
+  "DOM.describeNode": cmd(
+    Type.Object({ objectId: Type.String() }),
+    Type.Object({ node: Type.Object({ backendNodeId: Type.Number() }, { additionalProperties: true }) }),
   ),
   "DOM.setFileInputFiles": cmd(
     Type.Object({

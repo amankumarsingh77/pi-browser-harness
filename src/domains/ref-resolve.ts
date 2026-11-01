@@ -57,7 +57,7 @@ export const refreshRefs = async (client: BrowserClient): Promise<Result<RefRefr
 
   const axRes = await cdpCall(client, "Accessibility.getFullAXTree", {});
   if (!axRes.success) return axRes;
-  const slim = buildTree(axRes.data.nodes, { interestingOnly: true, maxNodes: 1000 });
+  const slim = buildTree(axRes.data.nodes, { interestingOnly: true, maxNodes: Number.POSITIVE_INFINITY });
   const targets = collectInteractiveTargets(slim);
 
   const priorRefs = session.refMappings();

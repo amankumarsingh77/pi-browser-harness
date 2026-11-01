@@ -182,6 +182,8 @@ tabs or navigating the tab to another origin.
 | Tool | Purpose |
 |---|---|
 | `browser_run_script` | Run a temporary script with raw CDP and full Node access. See [Extending](#extending). |
+| `browser_save_recipe` | Save the browser task the agent just finished as a replayable recipe. See [Saved recipes](#saved-recipes). |
+| `browser_run_recipe` | Replay a saved recipe with no model calls, or list recipes when called with no name. |
 | `browser_setup` | Agent-callable setup. Idempotent — how the agent recovers from `not initialized` on its own. |
 
 `browser_snapshot`, `browser_network_requests`, `browser_console`, `browser_execute_js`,
@@ -254,6 +256,39 @@ Modifiers are a bitfield: `1` Alt · `2` Ctrl · `4` Meta/Cmd · `8` Shift.
 browser_press_key({ key: "c", modifiers: 2 })    // Ctrl+C
 browser_press_key({ key: "T", modifiers: 10 })   // Ctrl+Shift+T
 ```
+
+---
+
+## Saved recipes
+
+Every page-changing browser call is journaled to `~/.pi/agent/browser-harness/journal/<session>.jsonl`
+(user-only permissions, pruned after 30 days). Password values are never written.
+
+After a multi-step task the agent offers to save it. `browser_save_recipe` turns that task into a YAML
+file under `~/.pi/agent/browser-recipes/<site>/<name>.yaml` (or `.pi/browser-recipes/` in the project
+with `project: true`), replacing the values you name as params with `{{param}}`. You confirm the recipe
+before it is written. Saving over a name bumps `version` and keeps the old file under `.history/`.
+
+Run one yourself with `/browser-recipe vendor-invoices-export month=2026-10` (no model involved), or ask
+the agent ("run the invoices recipe for October"), which calls `browser_run_recipe`. `/browser-recipe`
+with no name lists recipes; names tab-complete. Each step finds its element by role and name, waits up to
+5s for it, and checks that the page changed the way the recorded run did. A status or alert message the
+recorded run saw counts when its first words match, so "Exported 43 rows" satisfies "Exported 42 rows".
+
+When a step fails, the replay stops and hands the agent the step, what it expected and a fresh snapshot.
+The agent finishes your task from that step first, then calls `browser_save_recipe` with `repair_step`,
+which replaces that step onward with what it just did, bumps `version` and keeps the old file. A failed
+`/browser-recipe` goes to the agent the same way. If the page asks you to sign in, the replay stops and the
+agent asks you to sign in; it never types credentials.
+
+A recipe in the project's `.pi/browser-recipes/` comes from whoever wrote the repo, so it needs your
+approval before its first run: you see its file, site, the URLs it opens, the files it uploads and its
+downloads. The approval holds for those exact file bytes (kept in
+`~/.pi/agent/browser-harness/trusted-recipes.json`); if the file changes, you are asked again. Without a UI
+an unapproved project recipe does not run.
+
+A task that typed into a password field, or used `browser_execute_js` / `browser_run_script`, cannot
+be saved.
 
 ---
 
@@ -398,6 +433,7 @@ listed with each.
 | `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
 | `/browser-status` | Connection state, selected profile, and current page. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
+| `/browser-recipe` | Replay a saved recipe: `/browser-recipe NAME key=value`. No name lists recipes. |
 
 | Flag / variable | Effect |
 |---|---|

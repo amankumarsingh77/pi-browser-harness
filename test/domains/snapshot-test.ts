@@ -180,6 +180,15 @@ describe("browser_snapshot filtering and formats", () => {
     assert.equal(details(r.data.details).truncated, false);
   });
 
+  test("maxNodes caps only what is shown: a link past the cap still gets a ref the session can resolve", async () => {
+    const { client } = await snapshotting();
+    await snapshotTool.handler({ maxNodes: 2 }, handlerContext(client));
+
+    const refs = client.session().refMappings();
+    assert.equal(refs.get("e3"), 12);
+    assert.deepEqual(client.session().refSignatures().get("e3"), { role: "link", name: "Docs", value: "", state: "" });
+  });
+
   test("format:'json' returns the slim structure with refs and boxes but no backend ids", async () => {
     const { client } = await snapshotting();
     const r = await snapshotTool.handler({ format: "json" }, handlerContext(client));

@@ -43,10 +43,10 @@ const fakePi = (): FakePi => {
       if (event === "session_start") onSessionStart = handler;
     },
   };
-  const ctxShape = { sessionManager: { getBranch: () => [] } };
+  const ctxShape = { sessionManager: { getBranch: () => [], getSessionId: () => "registration-test" } };
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- partial fake of pi's wide API
   const pi = shape as unknown as ExtensionAPI;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only getBranch is read during session_start
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only getBranch and getSessionId are read during session_start
   const ctx = ctxShape as unknown as ExtensionContext;
   return {
     pi,
