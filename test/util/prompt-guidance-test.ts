@@ -55,7 +55,14 @@ describe("browser prompt guidance", () => {
     for (const rule of ["ref is stale", "Page changes", "owned Chrome window", "browser_current_tab"]) {
       assert.ok(disconnected.includes(rule), `Disconnected prompt lost: ${rule}`);
     }
-    assert.doesNotMatch(prompt, /Browser is not connected/);
+    assert.doesNotMatch(prompt, /not connected yet/);
+  });
+
+  it("tells the model the browser tools exist before the browser connects, so it calls browser_setup instead of falling back", () => {
+    const disconnected = getBrowserSystemPrompt(false);
+    assert.match(disconnected, /The browser_\* tools are available in this session; the browser is just not connected yet\./);
+    assert.match(disconnected, /Call browser_setup first to connect/);
+    assert.match(disconnected, /do not swap in curl/);
   });
 
   it("keeps script execution safeguards and return contract available", () => {

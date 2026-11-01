@@ -81,10 +81,16 @@ describe("Runtime.evaluate params against real Chrome", { skip: chromePath === u
     page = await openPage(await devtoolsPort(chrome));
   });
 
-  after(() => {
+  // Chrome keeps writing its profile until it exits, so the folder is removed only after that.
+  after(async () => {
     page?.close();
-    chrome?.kill();
-    rmSync(profile, { recursive: true, force: true });
+    const proc = chrome;
+    if (proc?.exitCode === null) {
+      const exited = new Promise((resolve) => proc.once("exit", resolve));
+      proc.kill();
+      await exited;
+    }
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   });
 
   const run = (src: string): Promise<unknown> => {

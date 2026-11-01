@@ -27,7 +27,8 @@ const joinShort = (names: ReadonlyArray<string>): string => names.map(shortToolN
 export function getBrowserSystemPrompt(connected = true, tools: ReadonlyArray<PromptTool> = ALL_TOOLS): string {
   const connectionNotice = connected
     ? ""
-    : "Browser is not connected. Run browser_setup or /browser-setup to connect.\n\n";
+    : // "Not connected" alone read to some models as "no browser tools", and they fell back to curl.
+      "The browser_* tools are available in this session; the browser is just not connected yet. Call browser_setup first to connect (the user can also run /browser-setup), then use the browser_* tools. When the user asks for the browser, do not swap in curl, another fetch tool or another browser tool.\n\n";
   const lanes = laneNames(tools);
   return `
 ## Browser Control
