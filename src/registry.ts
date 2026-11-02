@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "./client";
+import { createRegistrationTracker, registerTools } from "./registration";
 import type { BrowserTool } from "./util/tool";
 import { type Result, err, ok } from "./util/result";
 import { clickTool } from "./domains/click";
@@ -92,8 +93,9 @@ export type ToolRegistry = {
   // Append a batch atomically: a name clash anywhere in it (with the registry or within the batch)
   // rejects the whole call and leaves the registry untouched.
   readonly addAll: (tools: ReadonlyArray<BrowserTool>) => Result<void, RegistryError>;
-  // Register every tool that has not been registered with pi yet. Safe to call on every
-  // session_start: tools added after an earlier call land on the next one.
+  // Register every tool that has not been registered with this pi API yet. Safe to call on
+  // every session_start, and safe across session runtimes: tools added after an earlier call
+  // land on the next one, while a new pi API gets the full tool list again.
   readonly register: (pi: ToolRegistrar, client: BrowserClient) => void;
 };
 
@@ -105,7 +107,7 @@ const duplicateName = (name: string): RegistryError => ({
 export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOOLS): ToolRegistry => {
   const tools: BrowserTool[] = [];
   const names = new Set<string>();
-  const registered = new Set<string>();
+  const registration = createRegistrationTracker();
 
   const addAll = (batch: ReadonlyArray<BrowserTool>): Result<void, RegistryError> => {
     const seen = new Set<string>();
@@ -129,11 +131,9 @@ export const createToolRegistry = (initial: ReadonlyArray<BrowserTool> = ALL_TOO
     add,
     addAll,
     register: (pi, client) => {
-      for (const tool of tools) {
-        if (registered.has(tool.name)) continue;
+      registerTools(registration, pi, tools, (tool) => {
         tool.register(pi, client);
-        registered.add(tool.name);
-      }
+      });
     },
   };
 };
