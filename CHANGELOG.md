@@ -2,6 +2,14 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.16.0 — 2026-11-07
+
+### Added
+
+- **`browser_web_search` falls back across search engines.** With no `engine` given it tries Google, then Bing, DuckDuckGo and Brave, until one returns results, so a Google CAPTCHA or markup change no longer breaks search. `details.engine` says which engine answered and `details.fallbacks` lists the ones that failed first. When every engine fails the error is `all_engines_failed` with each engine's reason; when none found anything it stays `no_results`.
+- **`engine` parameter.** Name one engine (`google`, `bing`, `duckduckgo`, `brave`) to search it alone, with no fallback.
+- **Pluggable engines.** Each engine is a self-contained module mounted into a registry (`createEngineRegistry().mount(engine)`) that is injected into `createWebSearchTool`; mount order is the fallback order. Adding an engine is one module and one `mount`.
+
 ## 0.15.1 — 2026-11-07
 
 - Re-release of 0.15.0, whose npm publish failed (the provenance log returned 502, then rejected the retry as a duplicate). No code changes.
