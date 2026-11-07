@@ -55,8 +55,9 @@ export const evalJs = async (
   client: BrowserClient,
   expression: string,
   sessionId?: string,
+  opts?: { readonly timeoutMs?: number },
 ): Promise<Result<unknown, ToolErr>> => {
-  const r = await client.evaluateJs(expression, sessionId);
+  const r = await client.evaluateJs(expression, sessionId, opts);
   if (!r.success) return err(cdpErrToToolErr(r.error, "Runtime.evaluate"));
   return r;
 };

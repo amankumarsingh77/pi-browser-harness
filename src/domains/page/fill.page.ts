@@ -10,7 +10,7 @@
 export type PageOption = { readonly value: string; readonly text: string };
 
 export type FillOptions = {
-  // browser_fill refuses a <select> (its documented error points at browser_select_option); browser_fill_form fills it.
+  // The recipe-only browser_fill refuses a <select> (its documented error points at browser_select_option); browser_fill_form fills it.
   readonly rejectSelect: boolean;
   readonly focusFirst: boolean;
 };
@@ -37,6 +37,8 @@ export type FormControl = HTMLElement & {
   value?: string;
   checked?: boolean;
   disabled?: boolean;
+  readOnly?: boolean;
+  select?: () => void;
   options?: HTMLOptionsCollection;
 };
 
@@ -136,4 +138,71 @@ export function fillField(el: FormControl | null, value: unknown, opts: FillOpti
   }
 
   return { ok: false, reason: "element is not a fillable field (tag=" + tag + ")", tag: tagName };
+}
+
+// What browser_type learns about its field before typing: whether it can take text, and its value right now.
+export type TypePrep =
+  | { readonly ok: true; readonly kind: "input" | "textarea" | "contenteditable"; readonly value: string; readonly tag: string }
+  | {
+      readonly ok: false;
+      readonly code: "not_element" | "disabled" | "readonly" | "select" | "checkable" | "not_editable";
+      readonly reason: string;
+      readonly tag?: string;
+    };
+
+// Focuses `el` and, when `clear` is set, selects everything in it, so the text typed next replaces the old value the
+// way select-all + typing does for a user. Refuses fields that cannot take typed text, naming the tool that can.
+export function prepareTyping(el: FormControl | null, clear: boolean): TypePrep {
+  if (el?.nodeType !== 1) return { ok: false, code: "not_element", reason: "no element to type into" };
+  const tagName = el.tagName;
+  const tag = tagName.toLowerCase();
+  const type = (el.type ?? "").toLowerCase();
+  if (tag === "select") return { ok: false, code: "select", reason: "element is a <select>", tag: tagName };
+  if (tag === "input" && (type === "checkbox" || type === "radio")) {
+    return { ok: false, code: "checkable", reason: "element is a " + type, tag: tagName };
+  }
+  const editableTag = (tag === "input" && type !== "button" && type !== "submit" && type !== "file" && type !== "image" && type !== "reset")
+    || tag === "textarea";
+  if (!editableTag && !el.isContentEditable) {
+    return { ok: false, code: "not_editable", reason: "element is not a text field (tag=" + tag + ")", tag: tagName };
+  }
+  if (el.disabled) return { ok: false, code: "disabled", reason: "element is disabled", tag: tagName };
+  if (editableTag && el.readOnly === true) {
+    return { ok: false, code: "readonly", reason: "element is read-only", tag: tagName };
+  }
+  try {
+    el.focus();
+  } catch {
+    /* focus throws on some detached or shadow nodes; the caller checks where the text landed */
+  }
+  if (editableTag) {
+    if (clear) {
+      try {
+        el.select?.();
+      } catch {
+        /* select() is a no-op or throws on a few input types (date, color); the caller verifies and falls back */
+      }
+    }
+    return { ok: true, kind: tag === "textarea" ? "textarea" : "input", value: el.value ?? "", tag: tagName };
+  }
+  if (clear) {
+    const sel = window.getSelection();
+    if (sel) {
+      sel.removeAllRanges();
+      const rng = document.createRange();
+      rng.selectNodeContents(el);
+      sel.addRange(rng);
+    }
+  }
+  return { ok: true, kind: "contenteditable", value: el.textContent, tag: tagName };
+}
+
+// The field's value after typing, and whether it still has focus (a blur handler may have moved it elsewhere).
+export type TypedValue = { readonly value: string; readonly focused: boolean };
+
+export function readTypedValue(el: FormControl | null): TypedValue {
+  if (el?.nodeType !== 1) return { value: "", focused: false };
+  const tag = el.tagName.toLowerCase();
+  const value = tag === "input" || tag === "textarea" ? (el.value ?? "") : el.textContent;
+  return { value, focused: document.activeElement === el };
 }

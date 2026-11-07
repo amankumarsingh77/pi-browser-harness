@@ -6,6 +6,8 @@ export type WireRequest = {
   readonly method: string;
   readonly params?: Record<string, unknown>;
   readonly sessionId?: string;
+  // How long the daemon waits for Chrome's answer; see commandTimeoutFor.
+  readonly timeoutMs?: number;
 };
 
 export type WireResponse = {
@@ -71,6 +73,7 @@ const isWireMessage = (v: unknown): v is WireMessage => {
       if (typeof v["id"] !== "number") return false;
       if (typeof v["method"] !== "string") return false;
       if (!isOptionalRecord(v["params"])) return false;
+      if (v["timeoutMs"] !== undefined && typeof v["timeoutMs"] !== "number") return false;
       return isOptionalString(v["sessionId"]);
     }
     case "response": {
@@ -138,3 +141,11 @@ export const CDP_RECONNECT_COOLDOWN_MAX_MS = 5 * 60 * 1000;
 export const DAEMON_RECONNECT_METHOD = "Daemon.reconnect";
 
 export const CDP_COMMAND_TIMEOUT_MS = 10_000;
+
+// The longest a caller may ask the daemon to wait for one command (browser_execute_js's timeoutMs).
+export const CDP_COMMAND_TIMEOUT_MAX_MS = 120_000;
+
+// A request may lengthen the daemon's wait (a long-running script) but never shorten it below the default: short
+// client-side probes already give up on their own, and a shorter daemon timer would only race them.
+export const commandTimeoutFor = (req: { readonly timeoutMs?: number }): number =>
+  Math.min(Math.max(req.timeoutMs ?? CDP_COMMAND_TIMEOUT_MS, CDP_COMMAND_TIMEOUT_MS), CDP_COMMAND_TIMEOUT_MAX_MS);

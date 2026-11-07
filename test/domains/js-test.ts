@@ -82,6 +82,18 @@ describe("browser_execute_js", () => {
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "timeout");
   });
+
+  test("a timeout says the script may have partly run and how to wait longer", async () => {
+    const fake = await createFakeClient({
+      evaluate: () => ({ success: false, error: { kind: "remote_error", message: "Timeout after 30000ms: Runtime.evaluate" } }),
+    });
+    const r = await executeJsTool.handler({ expression: "x" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "timeout");
+    assert.match(r.error.message, /may have partly run/);
+    assert.match(r.error.message, /timeoutMs/);
+    assert.equal(r.error.details?.["timeoutMs"], 30_000);
+  });
 });
 
 describe("browser_execute_js renderResult", () => {

@@ -2,6 +2,19 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Changed
+
+- **`browser_fill` and `browser_type` are one tool: `browser_type`.** Pass a `ref` (or `selector`) and it focuses the field, replaces its value (`clear:false` appends; `text: ""` empties it), types with real input events so autocomplete lists open, and reports the value read back. When typing does not produce the value (date or masked inputs) it sets the value directly and says so. With no ref it types into the focused element, appending as before. Saved recipes with `fill` steps still replay.
+
+### Fixed
+
+- **`browser_click` no longer clicks into nothing.** A ref is scrolled into view (nested scrolling lists included) and measured at click time; a point still outside the viewport, or an `x`/`y` outside it, is refused with the reason. When something covers the element (an overlay, a sticky header) the result says what was clicked instead. An `x`/`y` click names the element it landed on.
+- **`browser_press_key` runs Cmd/Ctrl shortcuts.** Cmd/Ctrl + A, C, X, V, Z, Y now carry Chrome's editing command, so select-all, copy, paste and undo work. Letter keys send the right `code` (`KeyA`) and key code (65).
+- **`browser_execute_js` waits up to 30s by default, and `timeoutMs` (max 120s) raises it.** It used to stop at 10s, mid-way through scripts that loop with waits. A timeout now says the script may have partly run.
+- **`browser_screenshot` says how its pixels map to click coordinates** when the image is not 1:1 with CSS pixels (2× on Retina, or after `maxDim`).
+
 ## 0.14.1 — 2026-11-07
 
 ### Fixed

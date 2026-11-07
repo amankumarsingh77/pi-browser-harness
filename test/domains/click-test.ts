@@ -34,7 +34,7 @@ describe("browser_click by coordinates", () => {
     );
     // The diff reads the tree after the mouse sequence, never before it.
     const order = fake.calls.map((c) => c.method);
-    assert.equal(order.indexOf("Accessibility.getFullAXTree"), 3);
+    assert.ok(order.indexOf("Accessibility.getFullAXTree") > order.lastIndexOf("Input.dispatchMouseEvent"));
   });
 
   test("button and count are forwarded to press and release", async () => {
@@ -173,5 +173,78 @@ describe("browser_click debug overlay", () => {
     const fake = await createFakeClient({ canned: { "Accessibility.getFullAXTree": EMPTY_TREE } });
     await clickTool.handler({ x: 3, y: 4 }, handlerContext(fake.client));
     assert.equal(fake.callsTo("Page.captureScreenshot").length, 0);
+  });
+});
+
+const VIEWPORT_1400x620 = ok({ cssLayoutViewport: { clientWidth: 1400, clientHeight: 620 } });
+const RESOLVED = ok({ object: { type: "object", objectId: "obj" } });
+const hitResult = (onTarget: boolean, hit: string) => ok({ result: { type: "object", value: { onTarget, hit } } });
+
+describe("browser_click keeps clicks inside the viewport", () => {
+  test("x/y outside the viewport is refused before any input is sent, pointing at refs", async () => {
+    const fake = await createFakeClient({ canned: { "Page.getLayoutMetrics": VIEWPORT_1400x620 } });
+    const r = await clickTool.handler({ x: 545, y: 670 }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.match(r.error.message, /outside the 1400x620 viewport/);
+    assert.match(r.error.message, /ref/);
+    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 0);
+  });
+
+  test("an x/y click names the element it landed on", async () => {
+    const fake = await createFakeClient({
+      canned: {
+        "Page.getLayoutMetrics": VIEWPORT_1400x620,
+        "DOM.getNodeForLocation": ok({ backendNodeId: 55 }),
+        "DOM.resolveNode": RESOLVED,
+        "Runtime.callFunctionOn": hitResult(true, 'a "1 Year"'),
+        "Accessibility.getFullAXTree": EMPTY_TREE,
+      },
+    });
+    const r = await clickTool.handler({ x: 530, y: 300 }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(r.data.text, 'Clicked at (530, 300) on a "1 Year"');
+  });
+
+  test("a ref is scrolled into view before it is measured", async () => {
+    const fake = await createFakeClient({
+      refs: [{ ref: "e1", backendId: 101 }],
+      canned: { "DOM.getBoxModel": BOX_40x20_AT_100x200, "Page.getLayoutMetrics": VIEWPORT_1400x620, "Accessibility.getFullAXTree": TREE_WITH_E1 },
+    });
+    const r = await clickTool.handler({ ref: "e1" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    const order = fake.calls.map((c) => c.method);
+    assert.equal(fake.callsTo("DOM.scrollIntoViewIfNeeded")[0]?.params["backendNodeId"], 101);
+    assert.ok(order.indexOf("DOM.scrollIntoViewIfNeeded") < order.indexOf("DOM.getBoxModel"));
+  });
+
+  test("a ref still outside the viewport after scrolling is refused rather than clicked into nothing", async () => {
+    const below = ok({ model: { content: [385, 646, 680, 646, 680, 678, 385, 678], width: 295, height: 32 } });
+    const fake = await createFakeClient({
+      refs: [{ ref: "e125", backendId: 125 }],
+      canned: { "DOM.getBoxModel": below, "Page.getLayoutMetrics": VIEWPORT_1400x620 },
+    });
+    const r = await clickTool.handler({ ref: "e125" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /\[e125\] is at \(533, 662\), outside the 1400x620 viewport/);
+    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 0);
+  });
+
+  test("a covered ref is clicked but the result says what was on top", async () => {
+    const fake = await createFakeClient({
+      refs: [{ ref: "e1", backendId: 101 }],
+      canned: {
+        "DOM.getBoxModel": BOX_40x20_AT_100x200,
+        "Page.getLayoutMetrics": VIEWPORT_1400x620,
+        "DOM.getNodeForLocation": ok({ backendNodeId: 999 }),
+        "DOM.resolveNode": RESOLVED,
+        "Runtime.callFunctionOn": hitResult(false, "div.modal-backdrop"),
+        "Accessibility.getFullAXTree": TREE_WITH_E1,
+      },
+    });
+    const r = await clickTool.handler({ ref: "e1" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.match(r.data.text, /⚠ The point was covered by div\.modal-backdrop/);
+    assert.equal(fake.callsTo("Input.dispatchMouseEvent").length, 3);
   });
 });

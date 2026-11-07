@@ -55,7 +55,7 @@ export const clickTool = defineBrowserTool({
   name: "browser_click",
   label: "Browser Click",
   description:
-    "Click an element. PREFERRED: pass `ref` (e.g. 'e12') from browser_snapshot — it re-resolves the element's position at click time, so it works even after the page re-renders and moves things. Fallback: pass viewport CSS-pixel `x`/`y`. Compositor-level click works through iframes, shadow DOM, and cross-origin content. After clicking, a compact diff of page changes is appended.",
+    "Click an element. PREFERRED: pass `ref` (e.g. 'e12') from browser_snapshot — it scrolls the element into view (inside scrolling lists too), measures it at click time, and warns if something covers it. Fallback: pass viewport CSS-pixel `x`/`y` (refused when outside the viewport; the result names the element that was hit). Compositor-level click works through iframes, shadow DOM, and cross-origin content. After clicking, a compact diff of page changes is appended.",
   promptSnippet: "Click an element by ref (preferred) or pixel coordinates",
   promptGuidelines: [
     "If a click doesn't register, run pi with --browser-debug-clicks (or set BH_DEBUG_CLICKS=1) to get annotated screenshots. For React/Vue components ignoring clicks, try browser_dispatch_key.",
@@ -69,7 +69,10 @@ export const clickTool = defineBrowserTool({
 
     const resolved = await resolveTarget(client, args);
     if (!resolved.success) return resolved;
-    const { x, y, label: target } = resolved.data;
+    const { x, y, label, covered, hit } = resolved.data;
+    const target = label
+      + (hit !== undefined ? ` on ${hit}` : "")
+      + (covered !== undefined ? `\n⚠ The point was covered by ${covered}, so the click went to that element, not [${args.ref ?? ""}]. Close the overlay or scroll, then re-snapshot.` : "");
 
     const clicked = await dispatchClick(client, x, y, button, count);
     if (!clicked.success) return clicked;

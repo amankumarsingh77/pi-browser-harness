@@ -1,6 +1,14 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { CONTROL_ACTIONS, deserialize, serialize, type WireMessage } from "../../src/daemon/protocol";
+import {
+  CDP_COMMAND_TIMEOUT_MAX_MS,
+  CDP_COMMAND_TIMEOUT_MS,
+  CONTROL_ACTIONS,
+  commandTimeoutFor,
+  deserialize,
+  serialize,
+  type WireMessage,
+} from "../../src/daemon/protocol";
 
 const roundTrip = (msg: WireMessage): WireMessage | null => deserialize(serialize(msg));
 
@@ -56,5 +64,21 @@ describe("daemon wire protocol guard", () => {
     assert.equal(deserialize("null"), null);
     assert.equal(parse({ type: "mystery" }), null);
     assert.equal(parse({ type: "request", id: "1", method: "m" }), null);
+  });
+});
+
+describe("per-request command timeout", () => {
+  test("a request may lengthen the daemon's wait, up to the cap, but never shorten it", () => {
+    assert.equal(commandTimeoutFor({}), CDP_COMMAND_TIMEOUT_MS);
+    assert.equal(commandTimeoutFor({ timeoutMs: 2_000 }), CDP_COMMAND_TIMEOUT_MS);
+    assert.equal(commandTimeoutFor({ timeoutMs: 45_000 }), 45_000);
+    assert.equal(commandTimeoutFor({ timeoutMs: 10_000_000 }), CDP_COMMAND_TIMEOUT_MAX_MS);
+  });
+
+  test("timeoutMs survives the wire, and a non-number is rejected", () => {
+    assert.deepEqual(roundTrip({ type: "request", id: 1, method: "Runtime.evaluate", timeoutMs: 45_000 }), {
+      type: "request", id: 1, method: "Runtime.evaluate", timeoutMs: 45_000,
+    });
+    assert.equal(parse({ type: "request", id: 1, method: "Runtime.evaluate", timeoutMs: "soon" }), null);
   });
 });
