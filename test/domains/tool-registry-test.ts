@@ -81,6 +81,19 @@ describe("createToolRegistry", () => {
     assert.deepEqual(pi.names, ["browser_one", "browser_late"]);
   });
 
+  it("registers every tool again with a fresh pi instance, as pi builds one per session", async () => {
+    // pi caches the extension module across /new, resume and in-process subagents, so the same
+    // registry outlives the pi instance it first registered with. Each new instance starts empty.
+    const registry = createToolRegistry([probe("browser_one"), probe("browser_two")]);
+    const client = (await createFakeClient()).client;
+    const first = sink();
+    registry.register(first, client);
+    const second = sink();
+    registry.register(second, client);
+    assert.deepEqual(first.names, ["browser_one", "browser_two"]);
+    assert.deepEqual(second.names, ["browser_one", "browser_two"]);
+  });
+
   it("hands out a copy so callers cannot mutate the registry through tools()", () => {
     const registry = createToolRegistry([probe("browser_one")]);
     const before = registry.tools();
