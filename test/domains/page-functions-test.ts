@@ -13,6 +13,7 @@ import { hitInfo } from "../../src/domains/page/click.page";
 import { liveValue } from "../../src/domains/page/live-value.page";
 import { capturePage } from "../../src/domains/page/read-page.page";
 import { extractSerp } from "../../src/domains/page/serp.page";
+import { google } from "../../src/domains/search/engines/google";
 import { asRecord } from "../../src/util/guards";
 import { callPage, materialise } from "./page-harness";
 
@@ -307,13 +308,32 @@ describe("extractSerp", () => {
       ],
     });
     installDocument(node("BODY", "A title A snippet B title", { children: [search] }), "q - Google", "https://google/");
-    const parsed: unknown = JSON.parse(String(callPage(extractSerp, 7)));
+    const parsed: unknown = JSON.parse(String(callPage(extractSerp, google.selectors, 7)));
     assert.deepEqual(parsed, {
       anchors: [
         { href: "https://google/goto?url=CAES", heading: "A title", snippet: "A snippet", cite: "https://a › x" },
         { href: "https://b/", heading: "B title", snippet: "B snippet", cite: "" },
       ],
       pageText: "A title",
+    });
+  });
+
+  test("finds the link inside a wrapping heading and reads the snippet from the snippet selector", () => {
+    const result = node("DIV", "B title junk B snippet", {
+      attrs: { class: "g" },
+      children: [
+        node("H2", "B title", { children: [node("A", "B title", { href: "https://b.test/" })] }),
+        node("SPAN", "junk"),
+        node("P", " B  snippet "),
+        node("CITE", "https://b.test"),
+      ],
+    });
+    installDocument(node("BODY", "B", { children: [node("DIV", "", { attrs: { id: "r" }, children: [result] })] }), "q", "https://e/");
+    const selectors = { root: "#r", heading: "h2", containers: ["div.g"], snippet: "p", cite: "cite" };
+    const parsed: unknown = JSON.parse(String(callPage(extractSerp, selectors, 100)));
+    assert.deepEqual(parsed, {
+      anchors: [{ href: "https://b.test/", heading: "B title", snippet: "B snippet", cite: "https://b.test" }],
+      pageText: "B",
     });
   });
 

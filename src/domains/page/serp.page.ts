@@ -1,4 +1,5 @@
-// Page-side code for browser_web_search: pulls the organic result anchors off a Google results page. See fill.page.ts for the rules.
+// Page-side code for browser_web_search: pulls the organic result anchors off a search engine's results page, driven
+// by the engine's selectors. See fill.page.ts for the rules.
 
 export type SerpAnchor = {
   readonly href: string;
@@ -12,29 +13,41 @@ export type SerpExtraction = {
   readonly pageText: string;
 };
 
+export type SerpSelectors = {
+  readonly root: string;
+  readonly heading: string;
+  readonly containers: ReadonlyArray<string>;
+  readonly snippet?: string;
+  readonly cite: string;
+};
+
 // Returns the extraction as JSON text (not an object) so the isolated-tab evaluator can keep its string guard.
-export function extractSerp(pageTextLimit: number): string {
-  const main = document.querySelector<HTMLElement>("#search, #rso, #main") ?? document.body;
-  const headings = Array.from(main.querySelectorAll<HTMLElement>("a h3"));
+export function extractSerp(selectors: SerpSelectors, pageTextLimit: number): string {
+  const main = document.querySelector<HTMLElement>(selectors.root) ?? document.body;
+  const headings = Array.from(main.querySelectorAll<HTMLElement>(selectors.heading));
   const seen = new Set<string>();
   const anchors: SerpAnchor[] = [];
-  for (const h3 of headings) {
-    const a = h3.closest<HTMLAnchorElement>("a[href]");
+  for (const heading of headings) {
+    // The heading is the link (DuckDuckGo), sits inside it (Google, Brave) or wraps it (Bing).
+    const a = heading.closest<HTMLAnchorElement>("a[href]") ?? heading.querySelector<HTMLAnchorElement>("a[href]");
     if (!a) continue;
     const href = a.href;
     if (!href || seen.has(href)) continue;
     seen.add(href);
-    const container: HTMLElement | null =
-      a.closest<HTMLElement>("div.g") ??
-      a.closest<HTMLElement>("div[data-hveid]") ??
-      a.parentElement?.parentElement ??
-      a.parentElement;
-    const containerText = container ? container.innerText : "";
-    const heading = h3.innerText || h3.textContent;
-    const snippet = containerText.replace(heading, "").replace(/\s+/g, " ").trim().slice(0, 500);
-    const citeEl = container ? container.querySelector<HTMLElement>("cite") : null;
+    let container: HTMLElement | null = null;
+    for (const selector of selectors.containers) {
+      container = a.closest<HTMLElement>(selector);
+      if (container) break;
+    }
+    container = container ?? a.parentElement?.parentElement ?? a.parentElement;
+    const title = heading.innerText || heading.textContent || "";
+    const snippetEl =
+      selectors.snippet !== undefined && container ? container.querySelector<HTMLElement>(selectors.snippet) : null;
+    const snippetSource = snippetEl ? snippetEl.innerText : container ? container.innerText.replace(title, "") : "";
+    const snippet = snippetSource.replace(/\s+/g, " ").trim().slice(0, 500);
+    const citeEl = container ? container.querySelector<HTMLElement>(selectors.cite) : null;
     const cite = citeEl ? (citeEl.innerText || citeEl.textContent || "").trim() : "";
-    anchors.push({ href, heading, snippet, cite });
+    anchors.push({ href, heading: title, snippet, cite });
   }
   const pageText = document.body.innerText.slice(0, pageTextLimit);
   const extraction: SerpExtraction = { anchors, pageText };

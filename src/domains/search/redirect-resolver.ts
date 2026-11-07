@@ -2,7 +2,7 @@
 // following it. The blob cannot be decoded client-side and the page's <cite> is only a display breadcrumb, so this
 // is the one source of the exact url. Google answers the redirect to a cookie-less GET; HEAD returns 200 instead.
 
-import { isGotoRedirect } from "./google-serp";
+import { isGotoRedirect } from "./engines/google";
 
 const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
