@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { type Canned, createFakeClient, evaluated, type FakeClient, handlerContext } from "./fake-client";
 import { installTheme, renderWith, renderedText, withClient } from "./client-overrides";
 import { createWebSearchTool, parseSerpExtraction, webSearchTool } from "../../src/domains/search/web-search";
-import type { SerpExtraction } from "../../src/domains/search/google-serp";
+import type { SearchEngine, SerpExtraction } from "../../src/domains/search/serp";
+import { createEngineRegistry, defaultEngines } from "../../src/domains/search/engines";
+import { fetchRedirectTarget } from "../../src/domains/search/redirect-resolver";
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
+import { asArrayOf, asRecord } from "../../src/util/guards";
 
 const EXTRACTION: SerpExtraction = {
   anchors: [
@@ -96,11 +99,15 @@ describe("browser_web_search", () => {
     const wall: SerpExtraction = { anchors: [], pageText: "Our systems have detected unusual traffic from your network" };
     const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(wall)) });
     const { client, closed } = closing(fake);
-    const r = await webSearchTool.handler({ query: "x y" }, handlerContext(client));
+    const r = await webSearchTool.handler({ query: "x y", engine: "google" }, handlerContext(client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
     assert.equal(r.error.message, "Google served a CAPTCHA / bot wall");
-    assert.deepEqual(r.error.details, { reason: "captcha", serpUrl: "https://www.google.com/search?q=x%20y&num=10&hl=en" });
+    assert.deepEqual(r.error.details, {
+      reason: "captcha",
+      serpUrl: "https://www.google.com/search?q=x%20y&num=10&hl=en",
+      engine: "google",
+    });
     assert.deepEqual(closed, ["t2"]);
   });
 
@@ -110,7 +117,7 @@ describe("browser_web_search", () => {
       pageText: "Your search did not match any documents",
     };
     const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(empty)) });
-    const r = await webSearchTool.handler({ query: "zzz" }, handlerContext(fake.client));
+    const r = await webSearchTool.handler({ query: "zzz", engine: "google" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
     assert.equal(r.error.message, "found 1 result anchor(s) but none parsed to an external url (Google markup may have changed)");
@@ -118,17 +125,22 @@ describe("browser_web_search", () => {
       reason: "extraction_mismatch",
       anchorCount: 1,
       serpUrl: "https://www.google.com/search?q=zzz&num=10&hl=en",
+      engine: "google",
     });
   });
 
   test("a page with no anchors at all is invalid_state with reason no_results", async () => {
     const empty: SerpExtraction = { anchors: [], pageText: "Your search did not match any documents" };
     const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify(empty)) });
-    const r = await webSearchTool.handler({ query: "zzz" }, handlerContext(fake.client));
+    const r = await webSearchTool.handler({ query: "zzz", engine: "google" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
     assert.equal(r.error.message, "no results found");
-    assert.deepEqual(r.error.details, { reason: "no_results", serpUrl: "https://www.google.com/search?q=zzz&num=10&hl=en" });
+    assert.deepEqual(r.error.details, {
+      reason: "no_results",
+      serpUrl: "https://www.google.com/search?q=zzz&num=10&hl=en",
+      engine: "google",
+    });
   });
 
   test("/goto anchors are resolved through the redirect resolver, and the cite is the fallback", async () => {
@@ -142,6 +154,7 @@ describe("browser_web_search", () => {
     };
     const asked: string[] = [];
     const tool = createWebSearchTool({
+      engines: defaultEngines(),
       resolveRedirect: (href) => {
         asked.push(href);
         if (href.includes("CAESdAHr")) return Promise.resolve("https://www.w3schools.com/typescript/typescript_intro.php");
@@ -162,7 +175,7 @@ describe("browser_web_search", () => {
 
   test("only /goto anchors are sent to the resolver; direct and /url?q= hrefs never are", async () => {
     const asked: string[] = [];
-    const tool = createWebSearchTool({ resolveRedirect: (href) => { asked.push(href); return Promise.resolve(undefined); } });
+    const tool = createWebSearchTool({ engines: defaultEngines(), resolveRedirect: (href) => { asked.push(href); return Promise.resolve(undefined); } });
     const fake = await searching();
     const r = await tool.handler({ query: "q" }, handlerContext(fake.client));
     assert.equal(r.success, true);
@@ -178,6 +191,7 @@ describe("browser_web_search", () => {
       pageText: "results",
     };
     const tool = createWebSearchTool({
+      engines: defaultEngines(),
       resolveRedirect: (href) => (href.endsWith("A") ? Promise.reject(new Error("boom")) : new Promise(() => undefined)),
       resolveBudgetMs: 50,
     });
@@ -190,7 +204,7 @@ describe("browser_web_search", () => {
   test("an extraction of the wrong shape is an internal error that names the mismatch", async () => {
     const fake = await searching({ "Runtime.evaluate": evaluated(JSON.stringify({ anchors: "nope" })) });
     const { client, closed } = closing(fake);
-    const r = await webSearchTool.handler({ query: "q" }, handlerContext(client));
+    const r = await webSearchTool.handler({ query: "q", engine: "google" }, handlerContext(client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "internal");
     assert.match(r.error.message, /^SERP extraction returned an unexpected shape: /);
@@ -199,16 +213,16 @@ describe("browser_web_search", () => {
 
   test("an extraction that is not JSON text is a cdp_error from Runtime.evaluate", async () => {
     const fake = await searching({ "Runtime.evaluate": evaluated(7) });
-    const r = await webSearchTool.handler({ query: "q" }, handlerContext(fake.client));
+    const r = await webSearchTool.handler({ query: "q", engine: "google" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "cdp_error");
-    assert.deepEqual(r.error.details, { method: "Runtime.evaluate" });
+    assert.deepEqual(r.error.details, { method: "Runtime.evaluate", engine: "google" });
   });
 
   test("a navigation failure closes the tab", async () => {
     const fake = await searching({ "Page.navigate": err(cdpError("timeout", "slow")) });
     const { client, closed } = closing(fake);
-    const r = await webSearchTool.handler({ query: "q" }, handlerContext(client));
+    const r = await webSearchTool.handler({ query: "q", engine: "google" }, handlerContext(client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "timeout");
     assert.deepEqual(closed, ["t2"]);
@@ -243,6 +257,168 @@ describe("browser_web_search", () => {
     assert.deepEqual(r.error.details, { method: "Target.createTarget" });
     assert.deepEqual(closed, []);
     assert.equal(fake.callsTo("Page.navigate").length, 0);
+  });
+});
+
+const fakeEngine = (id: string): SearchEngine => ({
+  id,
+  name: id.toUpperCase(),
+  buildUrl: (query) => `https://${id}.test/search?q=${encodeURIComponent(query)}`,
+  selectors: { root: "#r", heading: "h3", containers: ["div"], cite: "cite" },
+  captchaMarkers: ["bot wall"],
+  resultUrl: (anchor) => (anchor.href.includes(".test/search") ? undefined : anchor.href),
+});
+
+const WALL: SerpExtraction = { anchors: [], pageText: "a bot wall" };
+const EMPTY: SerpExtraction = { anchors: [], pageText: "nothing" };
+const HIT: SerpExtraction = { anchors: [{ href: "https://hit.example/", heading: "Hit", snippet: "s" }], pageText: "" };
+
+const ladderTool = createWebSearchTool({
+  engines: createEngineRegistry().mount(fakeEngine("alpha")).mount(fakeEngine("beta")).mount(fakeEngine("gamma")),
+  resolveRedirect: fetchRedirectTarget,
+});
+
+const pages = (...extractions: SerpExtraction[]): Promise<FakeClient> =>
+  searching({ "Runtime.evaluate": extractions.map((e) => evaluated(JSON.stringify(e))) });
+
+describe("browser_web_search fallback ladder", () => {
+  test("walks the engines in mount order and answers from the first that returns results, in one tab", async () => {
+    const fake = await pages(WALL, EMPTY, HIT);
+    const { client, closed } = closing(fake);
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(client));
+    assert.equal(r.success, true);
+    const details = r.data.details;
+    assert.ok(details);
+    assert.deepEqual(fake.callsTo("Page.navigate").map((c) => c.params["url"]), [
+      "https://alpha.test/search?q=q",
+      "https://beta.test/search?q=q",
+      "https://gamma.test/search?q=q",
+    ]);
+    assert.equal(fake.callsTo("Target.createTarget").length, 1);
+    assert.deepEqual(closed, ["t2"]);
+    assert.equal(details.engine, "gamma");
+    assert.deepEqual(details.fallbacks, [
+      { engine: "alpha", kind: "invalid_state", reason: "captcha", message: "ALPHA served a CAPTCHA / bot wall" },
+      { engine: "beta", kind: "invalid_state", reason: "no_results", message: "no results found" },
+    ]);
+    assert.equal(details.render.summary, '1 result(s) · gamma (after alpha, beta failed) · "q"');
+  });
+
+  test("the first engine answering leaves no fallbacks and stops the ladder", async () => {
+    const fake = await pages(HIT);
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    const details = r.data.details;
+    assert.ok(details);
+    assert.equal(details.engine, "alpha");
+    assert.equal(details.fallbacks, undefined);
+    assert.equal(fake.callsTo("Page.navigate").length, 1);
+  });
+
+  test("a navigation failure on one engine falls through to the next", async () => {
+    const fake = await searching({
+      "Page.navigate": [err(cdpError("timeout", "slow")), ok({ frameId: "f" })],
+      "Runtime.evaluate": evaluated(JSON.stringify(HIT)),
+    });
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    const details = r.data.details;
+    assert.ok(details);
+    assert.equal(details.engine, "beta");
+    assert.equal(details.fallbacks?.[0]?.kind, "timeout");
+  });
+
+  test("a named engine is searched alone, with no fallback, and reports its own failure", async () => {
+    const fake = await pages(WALL, HIT);
+    const r = await ladderTool.handler({ query: "q", engine: "beta" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.deepEqual(fake.callsTo("Page.navigate").map((c) => c.params["url"]), ["https://beta.test/search?q=q"]);
+    assert.deepEqual(r.error.details, { reason: "captcha", serpUrl: "https://beta.test/search?q=q", engine: "beta" });
+  });
+
+  test("an unknown engine is invalid_args naming the mounted engines, and no tab is opened", async () => {
+    const fake = await pages(HIT);
+    const r = await ladderTool.handler({ query: "q", engine: "altavista" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_args");
+    assert.equal(r.error.message, 'unknown search engine "altavista"; mounted engines: alpha, beta, gamma');
+    assert.equal(fake.callsTo("Target.createTarget").length, 0);
+  });
+
+  test("when every engine fails it is all_engines_failed with each attempt", async () => {
+    const fake = await pages(WALL, EMPTY, WALL);
+    const { client, closed } = closing(fake);
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.equal(r.error.details?.["reason"], "all_engines_failed");
+    const attempts = asArrayOf(r.error.details["attempts"], asRecord) ?? [];
+    assert.deepEqual(attempts.map((a) => a["engine"]), ["alpha", "beta", "gamma"]);
+    assert.deepEqual(closed, ["t2"]);
+  });
+
+  test("when every engine finds nothing it stays no_results, so the agent rephrases", async () => {
+    const fake = await pages(EMPTY);
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.details?.["reason"], "no_results");
+    assert.match(r.error.message, /^no results found on any engine/);
+  });
+
+  test("a cancelled call stops the ladder instead of trying the next engine", async () => {
+    const ac = new AbortController();
+    const fake = await createFakeClient({
+      canned: {
+        "Target.createTarget": ok({ targetId: "t2" }),
+        "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
+        "Page.navigate": ok({ frameId: "f" }),
+      },
+      evaluate: () => {
+        ac.abort();
+        return ok(false);
+      },
+    });
+    const r = await ladderTool.handler({ query: "q" }, handlerContext(fake.client, ac.signal));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "timeout");
+    assert.equal(fake.callsTo("Page.navigate").length, 1);
+  });
+
+  test("an engine with a readySelector waits for rendered results before extracting", async () => {
+    const polled: string[] = [];
+    const fake = await createFakeClient({
+      canned: {
+        "Target.createTarget": ok({ targetId: "t2" }),
+        "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-iso" })],
+        "Page.navigate": ok({ frameId: "f" }),
+        "Runtime.evaluate": evaluated(JSON.stringify(HIT)),
+      },
+      evaluate: (expression) => {
+        if (expression.includes("querySelector(")) polled.push(expression);
+        return ok(expression.includes("readyState") || polled.length >= 2 ? true : false);
+      },
+    });
+    const tool = createWebSearchTool({
+      engines: createEngineRegistry().mount({ ...fakeEngine("js"), readySelector: "article.result" }),
+      resolveRedirect: fetchRedirectTarget,
+    });
+    const r = await tool.handler({ query: "q" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(polled.length, 2);
+    assert.match(polled[0] ?? "", /document\.querySelector\("article\.result"\) !== null/);
+  });
+
+  test("the engine parameter and description are built from the mounted engines", () => {
+    assert.deepEqual(asRecord(ladderTool.parameters.properties.engine)?.["enum"], ["alpha", "beta", "gamma"]);
+    assert.match(ladderTool.description, /alpha → beta → gamma/);
+    assert.match(webSearchTool.description, /google → bing → duckduckgo → brave/);
+  });
+
+  test("a tool with no mounted engines is a wiring error", () => {
+    assert.throws(
+      () => createWebSearchTool({ engines: createEngineRegistry(), resolveRedirect: fetchRedirectTarget }),
+      /at least one mounted search engine/,
+    );
   });
 });
 

@@ -119,7 +119,7 @@ Three things follow from that:
 
 | Tool | Purpose |
 |---|---|
-| `browser_web_search` | Query → ranked `{title, url, snippet, rank}`, by scraping a real Google SERP in your Chrome. No API key. Links only. |
+| `browser_web_search` | Query → ranked `{title, url, snippet, rank}`, by scraping a real search results page in your Chrome. No API key. Links only. Walks the fallback ladder Google → Bing → DuckDuckGo → Brave until one answers, or searches only the `engine` you name. |
 | `browser_read_page` | Reader mode. A `url` (opened and closed in its own tab) or an owned `targetId` → clean article text, boilerplate stripped. |
 
 Both run in isolated tabs and never disturb your current page.
@@ -245,7 +245,13 @@ browser_network_requests({                          // did a request 4xx/5xx?
 ```
 browser_web_search({ query: "chrome devtools protocol overview", limit: 5 })
 browser_read_page({ url: "<the best result's url>" })
+
+// Search one engine only, with no fallback:
+browser_web_search({ query: "chrome devtools protocol overview", engine: "bing" })
 ```
+
+`details.engine` names the engine that answered, and `details.fallbacks` lists any engines that failed
+first (CAPTCHA, no results, markup change, load failure).
 
 Both tools open their own isolated tab, so neither disturbs the tab you are working in.
 

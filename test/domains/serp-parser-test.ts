@@ -2,7 +2,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifySerp, isGotoRedirect, parseGoogleSerp, urlFromCite, type SerpExtraction } from "../../src/domains/search/google-serp";
+import { classifyGoogleSerp as classifySerp, googleUrlFromCite as urlFromCite, isGotoRedirect, parseGoogleSerp } from "../../src/domains/search/engines/google";
+import type { SerpExtraction } from "../../src/domains/search/serp";
 import { parseSerpExtraction } from "../../src/domains/search/web-search";
 
 const fixture = (name: string): SerpExtraction => {
