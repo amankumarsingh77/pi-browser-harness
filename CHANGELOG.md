@@ -2,6 +2,10 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.15.1 — 2026-11-07
+
+- Re-release of 0.15.0, whose npm publish failed (the provenance log returned 502, then rejected the retry as a duplicate). No code changes.
+
 ## 0.15.0 — 2026-11-07
 
 ### Changed
