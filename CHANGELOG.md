@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.14.1 — 2026-11-07
+
+### Fixed
+
+- **Browser tools load in every session, not just the first.** pi builds a fresh tool list for each session it starts in a running process (`/new`, resume, fork, and in-process subagents), but the harness remembered which tools it had registered for the whole process and skipped them all. Those sessions had no `browser_*` tools while the prompt still said they were available. The harness now registers its tools with each new session.
+
 ## 0.14.0 — 2026-11-01
 
 ### Added
