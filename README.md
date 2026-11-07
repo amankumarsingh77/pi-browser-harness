@@ -18,7 +18,7 @@ no MCP hop, no second browser, no extra API keys.
 | **Browser** | Your running Chrome — real profile, live sessions | Launches a clean instance | Launches a clean instance | Launches a clean instance |
 | **Element targeting** | AX-tree refs (`[eN]`) that re-resolve at action time; coordinate and selector fallbacks | Selectors / AX locators | CSS selectors | LLM-inferred selectors |
 | **Input dispatch** | Compositor-level CDP input — works through iframes, shadow DOM, cross-origin frames | DOM-level | DOM-level | DOM-level |
-| **Framework-safe writes** | `browser_fill` writes via the native setter and fires bubbling events, so controlled inputs keep the value | Native fill | Manual | Native fill |
+| **Framework-safe writes** | `browser_type` types with real input events, reads the value back, and falls back to the native setter when typing doesn't take | Native fill | Manual | Native fill |
 | **Transport** | Native pi extension, in-process | MCP / JSON-RPC round trip | MCP / JSON-RPC round trip | In-process + its own LLM calls |
 | **Extra credentials** | None | None | None | Its own model API key |
 | **Concurrency** | Reads run in parallel; mutations auto-serialize through a shared mutex | Sequential | Sequential | Sequential |
@@ -76,10 +76,12 @@ interactive element carries a stable ref (`[eN]`) plus click coordinates `@(x,y)
 [e12] button   "Create account" @(456,412)
 ```
 
-Pass the ref — not the coordinates — to `browser_click`, `browser_fill`, `browser_select_option`,
+Pass the ref — not the coordinates — to `browser_click`, `browser_type`, `browser_select_option`,
 `browser_focus`, `browser_upload_file`, or `browser_dispatch_key`. Refs are keyed to element
 identity, so they re-resolve position at action time and survive the re-renders that SPA forms
-trigger on every keystroke. Coordinates go stale the moment the layout reflows.
+trigger on every keystroke. Coordinates go stale the moment the layout reflows. `browser_click` by ref
+scrolls the element into view first (inside scrolling lists too) and warns when something covers it;
+an `x`/`y` outside the viewport is refused instead of clicking nothing.
 
 Three things follow from that:
 
@@ -127,10 +129,9 @@ Both run in isolated tabs and never disturb your current page.
 | Tool | Purpose |
 |---|---|
 | `browser_click` | Click by `ref` (preferred) or viewport `x`/`y`. Compositor-level, so iframes and shadow DOM work. |
-| `browser_fill` | Set an input, textarea, or contenteditable. Fires bubbling `input`/`change`, returns the value written. |
 | `browser_select_option` | Choose in a native `<select>` by value, label, or index. Returns available options on no match. |
 | `browser_focus` | Deterministic `.focus()` — no coordinate accuracy needed. |
-| `browser_type` | Type into the focused element. For keystroke-sensitive widgets; prefer `browser_fill` otherwise. |
+| `browser_type` | Enter text into a field by `ref`/selector (replaces its value; `clear:false` appends) or into the focused element. Real input events, so autocomplete opens; returns the value read back. |
 | `browser_press_key` | Press a key with an optional modifier bitfield. |
 | `browser_dispatch_key` | Synthetic DOM `KeyboardEvent` on one element, for pages that ignore raw CDP keys. |
 | `browser_scroll` | Scroll by delta. W3C wheel convention: positive `deltaY` = down. |
@@ -202,7 +203,7 @@ Wait, snapshot once, then act by ref. No screenshots anywhere in this loop.
 ```
 browser_wait_for({ selector: "#email" })
 browser_snapshot()                                  // → [e7] textbox, [e9] combobox, [e12] button
-browser_fill({ ref: "e7", value: "a@b.com" })
+browser_type({ ref: "e7", text: "a@b.com" })
 browser_select_option({ ref: "e9", label: "India" })
 browser_click({ ref: "e12" })                       // re-resolves position even after reflow
 ```
@@ -352,7 +353,7 @@ re-runnable.
 
 Another extension can add its own `browser_*` tools to this harness. Contributed tools share the
 same client, mutation mutex, tab ownership, and lane prompt as the built-ins, so a `serialized` tool
-you add queues behind `browser_click` exactly as `browser_fill` does.
+you add queues behind `browser_click` exactly as `browser_type` does.
 
 Define the tool with `defineBrowserTool` and hand it to `registerBrowserTools` at your extension's
 load time, before pi emits `session_start`. The harness registers it with pi on the next

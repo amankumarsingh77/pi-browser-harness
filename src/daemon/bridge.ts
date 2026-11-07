@@ -1,7 +1,7 @@
 import { isCdpRawMessage } from "../cdp/types";
 import type { CdpRawMessage } from "../cdp/types";
 import type { WireRequest, WireResponse, WireEvent } from "./protocol";
-import { CDP_COMMAND_TIMEOUT_MS, DAEMON_RECONNECT_METHOD } from "./protocol";
+import { DAEMON_RECONNECT_METHOD, commandTimeoutFor } from "./protocol";
 import { asString, isRecord } from "../util/guards";
 import { type ChromeConnectionDependencies, type ConnectionStatus, createChromeConnection } from "./connection";
 
@@ -246,6 +246,7 @@ export const createCdpBridge = (options: ChromeConnectionDependencies = {}): Cdp
       if (sessionId !== undefined) router.release(sessionId);
     }
 
+    const timeoutMs = commandTimeoutFor(req);
     const daemonId = mux.allocate(
       {
         clientId,
@@ -257,8 +258,8 @@ export const createCdpBridge = (options: ChromeConnectionDependencies = {}): Cdp
       (id) =>
         setTimeout(() => {
           mux.take(id);
-          send(clientId, errorResponse(req.id, `Timeout after ${CDP_COMMAND_TIMEOUT_MS}ms: ${req.method}`));
-        }, CDP_COMMAND_TIMEOUT_MS),
+          send(clientId, errorResponse(req.id, `Timeout after ${timeoutMs}ms: ${req.method}`));
+        }, timeoutMs),
     );
 
     const payload: Record<string, unknown> = {

@@ -10,7 +10,6 @@ import { ok } from "../../src/util/result";
 const SERIALIZED = new Set([
   "browser_click",
   "browser_type",
-  "browser_fill",
   "browser_fill_form",
   "browser_set_checked",
   "browser_select_option",

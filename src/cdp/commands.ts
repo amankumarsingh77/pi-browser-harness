@@ -271,6 +271,18 @@ export const COMMANDS = {
     }),
     Type.Object({ data: Type.String(), stream: Type.Optional(Type.String()) }),
   ),
+  "Page.getLayoutMetrics": cmd(
+    Empty,
+    Type.Object(
+      {
+        cssLayoutViewport: Type.Object(
+          { clientWidth: Type.Number(), clientHeight: Type.Number() },
+          { additionalProperties: true },
+        ),
+      },
+      { additionalProperties: true },
+    ),
+  ),
   "Page.handleJavaScriptDialog": cmd(
     Type.Object({ accept: Type.Boolean(), promptText: Type.Optional(Type.String()) }),
     Empty,
@@ -321,6 +333,22 @@ export const COMMANDS = {
         { additionalProperties: true },
       ),
     }),
+  ),
+  "DOM.scrollIntoViewIfNeeded": cmd(
+    Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),
+    Empty,
+  ),
+  "DOM.getNodeForLocation": cmd(
+    Type.Object({
+      x: Type.Integer(),
+      y: Type.Integer(),
+      includeUserAgentShadowDOM: Type.Optional(Type.Boolean()),
+      ignorePointerEventsNone: Type.Optional(Type.Boolean()),
+    }),
+    Type.Object(
+      { backendNodeId: Type.Number(), frameId: Type.Optional(Type.String()), nodeId: Type.Optional(Type.Number()) },
+      { additionalProperties: true },
+    ),
   ),
   "DOM.resolveNode": cmd(
     Type.Object({ nodeId: Type.Optional(Type.Number()), backendNodeId: Type.Optional(Type.Number()) }),

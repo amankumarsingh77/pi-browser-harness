@@ -7,6 +7,11 @@ import { cdpCall, evalJs } from "./cdp-call";
 import { runOnElement } from "./element-call";
 import { elementFunctionSource } from "./page/inject";
 import { dispatchKeyEvent, type KeyEventSpec } from "./page/keyboard.page";
+import { prepareTyping, readTypedValue, type TypePrep, type TypedValue } from "./page/fill.page";
+import { nativeFill } from "./form";
+import { interactiveDiff } from "./ref-resolve";
+import { isRecord } from "../util/guards";
+import type { BrowserClient } from "../client";
 
 const DISPATCH_KEY_FN = elementFunctionSource(dispatchKeyEvent);
 
@@ -19,53 +24,180 @@ const VIRTUAL_KEY_CODES: Readonly<Record<string, number>> = {
   F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
 };
 
-const virtualKeyCode = (key: string): number =>
-  VIRTUAL_KEY_CODES[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
+// Windows virtual-key codes for letters and digits are the upper-case ASCII code ("a" and "A" are both 65).
+export const virtualKeyCode = (key: string): number => {
+  const named = VIRTUAL_KEY_CODES[key];
+  if (named !== undefined) return named;
+  if (/^[a-z0-9]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
+  return key.length === 1 ? key.charCodeAt(0) : 0;
+};
+
+// KeyboardEvent.code: the physical key. Pages that check `code` (shortcut handlers) need "KeyA", not "a".
+export const physicalCode = (key: string): string => {
+  if (/^[a-z]$/i.test(key)) return `Key${key.toUpperCase()}`;
+  if (/^[0-9]$/.test(key)) return `Digit${key}`;
+  if (key === " ") return "Space";
+  return key;
+};
+
+// Chrome only runs an editing shortcut sent over CDP when the event names the command (macOS does not map Cmd+A to
+// select-all for synthetic events), so Ctrl/Cmd + A/C/X/V/Z/Y carry it explicitly.
+export const editingCommands = (key: string, modifiers: number): ReadonlyArray<string> => {
+  const ctrlOrMeta = (modifiers & (2 | 4)) !== 0;
+  if (!ctrlOrMeta || (modifiers & 1) !== 0) return [];
+  const shift = (modifiers & 8) !== 0;
+  switch (key.toLowerCase()) {
+    case "a": return shift ? [] : ["selectAll"];
+    case "c": return shift ? [] : ["copy"];
+    case "x": return shift ? [] : ["cut"];
+    case "v": return shift ? [] : ["paste"];
+    case "z": return shift ? ["redo"] : ["undo"];
+    case "y": return shift ? [] : ["redo"];
+    default: return [];
+  }
+};
 
 const TypeArgs = Type.Object({
-  text: Type.String({ description: "Text to type" }),
+  ref: Type.Optional(
+    Type.String({ description: "Stable element ref from browser_snapshot (e.g. 'e7'). PREFERRED. The field is focused for you." }),
+  ),
+  selector: Type.Optional(Type.String({ description: "CSS selector of the field (fallback when no ref)." })),
+  text: Type.String({ description: "Text to enter. With `clear` (the default when a field is named) it replaces the field's value; \"\" empties it." }),
+  clear: Type.Optional(
+    Type.Boolean({
+      description:
+        "Replace the field's current value (true) or add to it at the cursor (false). Default: true when ref/selector is given, false when typing into the already-focused element.",
+    }),
+  ),
 });
 
-type FocusProbe = { readonly ok: boolean; readonly tag: string | null };
+type TypeTarget = { readonly ref?: string | undefined; readonly selector?: string | undefined };
 
-const isFocusProbe = (v: unknown): v is FocusProbe =>
-  typeof v === "object" && v !== null
-  && "ok" in v && typeof v.ok === "boolean"
-  && "tag" in v && (typeof v.tag === "string" || v.tag === null);
+const PREP_FN = elementFunctionSource(prepareTyping);
+const READ_FN = elementFunctionSource(readTypedValue);
+
+const isTypePrep = (v: unknown): v is TypePrep => {
+  if (!isRecord(v) || typeof v["ok"] !== "boolean") return false;
+  if (v["ok"]) return typeof v["kind"] === "string" && typeof v["value"] === "string" && typeof v["tag"] === "string";
+  return typeof v["code"] === "string" && typeof v["reason"] === "string";
+};
+
+const isTypedValue = (v: unknown): v is TypedValue =>
+  isRecord(v) && typeof v["value"] === "string" && typeof v["focused"] === "boolean";
+
+const hasTarget = (t: TypeTarget): boolean => t.ref !== undefined || t.selector !== undefined;
+
+const labelOf = (t: TypeTarget): string => (t.ref !== undefined ? `[${t.ref}]` : t.selector ?? "the focused element");
+
+// Runs an element function on the named field, or on document.activeElement when none is named.
+const onField = async (
+  client: BrowserClient,
+  t: TypeTarget,
+  fn: string,
+  args: ReadonlyArray<unknown>,
+): Promise<Result<unknown, ToolErr>> => {
+  if (hasTarget(t)) {
+    const r = await runOnElement(client, { ref: t.ref, selector: t.selector, functionDeclaration: fn, args });
+    if (!r.success) return r;
+    if (!r.data.found) return err({ kind: "invalid_state", message: `No element matched: ${labelOf(t)}` });
+    return ok(r.data.value);
+  }
+  return evalJs(client, "(" + fn + ").apply(document.activeElement, " + safeJs`${args}` + ")");
+};
+
+const prepErr = (t: TypeTarget, prep: Extract<TypePrep, { readonly ok: false }>): ToolErr => {
+  const where = labelOf(t);
+  const hint =
+    prep.code === "select" ? " For a <select> use browser_select_option."
+    : prep.code === "checkable" ? " For a checkbox or radio use browser_set_checked."
+    : prep.code === "not_element" ? " Pass the field's ref, or click it first so it has focus."
+    : "";
+  return { kind: "invalid_state", message: `Cannot type into ${where}: ${prep.reason}.${hint}`, details: { code: prep.code, ...(prep.tag !== undefined ? { tag: prep.tag } : {}) } };
+};
+
+// Backspace with the field's content selected deletes it, the way a user empties a field.
+const pressBackspace = async (client: BrowserClient): Promise<Result<void, ToolErr>> => {
+  const key = { key: "Backspace", code: "Backspace", windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 };
+  const down = await cdpCall(client, "Input.dispatchKeyEvent", { type: "keyDown", ...key });
+  if (!down.success) return down;
+  const up = await cdpCall(client, "Input.dispatchKeyEvent", { type: "keyUp", ...key });
+  if (!up.success) return up;
+  return ok(undefined);
+};
 
 export const typeTool = defineBrowserTool({
   name: "browser_type",
   label: "Browser Type",
-  description: "Type text into the currently focused element. Use browser_click first to focus an input field.",
-  promptSnippet: "Type text into the focused element",
+  description:
+    "Enter text into a field the way a user types: focuses it, replaces its value (or appends with clear:false), fires real input events so autocomplete/suggestion lists open and React/Vue controlled inputs update, then reads the value back. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`; with neither, types into the focused element. If typing does not produce the value (date/masked inputs), it falls back to setting the value directly and says so.",
+  promptSnippet: "Type text into a field by ref (preferred), selector, or the focused element",
   promptGuidelines: [
-    "For special keys (Enter, Tab, Escape, arrows), use browser_press_key instead.",
+    "One tool for all text entry: browser_type({ ref, text }) replaces the field's value; pass clear:false to append; text \"\" empties the field.",
+    "Check the value it reports — a page can reformat or reject what was typed.",
+    "Suggestion lists open as you type: after browser_type, run browser_snapshot and browser_click the option's ref.",
+    "For a <select> use browser_select_option; for a checkbox/radio use browser_set_checked.",
+    "For special keys (Enter, Tab, Escape, arrows) use browser_press_key.",
   ],
   parameters: TypeArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const focused = await evalJs(client, safeJs`
-      (() => {
-        const el = document.activeElement;
-        const ok = !!el && el !== document.body &&
-          (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-        return { ok, tag: el ? el.tagName : null };
-      })()
-    `);
-    if (focused.success) {
-      const f: FocusProbe = isFocusProbe(focused.data) ? focused.data : { ok: false, tag: null };
-      if (!f.ok) {
+    const t: TypeTarget = { ref: args.ref, selector: args.selector };
+    const named = hasTarget(t);
+    const clear = args.clear ?? named;
+    const where = labelOf(t);
+
+    const prepRaw = await onField(client, t, PREP_FN, [clear]);
+    if (!prepRaw.success) return prepRaw;
+    if (!isTypePrep(prepRaw.data)) {
+      if (named) return err({ kind: "internal", message: "unexpected page result shape from browser_type", details: { target: where } });
+      return err({
+        kind: "invalid_state",
+        message: "No editable element is focused — typed text would be lost. Pass the field's ref, or click it first.",
+      });
+    }
+    const prep = prepRaw.data;
+    if (!prep.ok) {
+      if (!named && prep.code !== "disabled" && prep.code !== "readonly") {
         return err({
           kind: "invalid_state",
-          message:
-            "No editable element is focused — typed text would be lost. Click the field with browser_click first, or use browser_fill with a selector.",
-          details: { activeElement: f.tag },
+          message: "No editable element is focused — typed text would be lost. Pass the field's ref, or click it first.",
+          details: { activeElement: prep.tag ?? null },
         });
       }
+      return err(prepErr(t, prep));
     }
-    const r = await cdpCall(client, "Input.insertText", { text: args.text });
-    if (!r.success) return r;
-    return ok({ text: `Typed: "${args.text}"` });
+
+    const typed = clear && args.text === "" ? await pressBackspace(client) : await cdpCall(client, "Input.insertText", { text: args.text });
+    if (!typed.success) return typed;
+
+    const readRaw = await onField(client, t, READ_FN, []);
+    const after = readRaw.success && isTypedValue(readRaw.data) ? readRaw.data : undefined;
+    const expected = clear ? args.text : prep.value + args.text;
+    let value = after?.value;
+    let note = "";
+    if (value !== undefined && value !== expected && clear && named && prep.kind !== "contenteditable") {
+      // Typing did not produce the value (a date or masked input, or a handler that swallowed the keys): set it.
+      const filled = await nativeFill(client, t, args.text);
+      if (filled.success && "value" in filled.data) {
+        value = filled.data.value;
+        note = " (typing did not take; value set directly)";
+      }
+    }
+    if (value !== undefined && value !== expected) note += ` ⚠ the field holds ${JSON.stringify(value)}, not what was typed — the page reformatted or rejected it`;
+    if (after !== undefined && !after.focused && note === "") note = " (the field lost focus after typing)";
+
+    const diff = await interactiveDiff(client);
+    const shown = value !== undefined ? ` → value ${JSON.stringify(value)}` : "";
+    return ok({
+      text: `Typed "${args.text}" into ${where}${shown}${note}${diff}`,
+      details: {
+        ...(args.ref !== undefined ? { ref: args.ref } : {}),
+        ...(args.selector !== undefined ? { selector: args.selector } : {}),
+        text: args.text,
+        clear,
+        ...(value !== undefined ? { value } : {}),
+      },
+    });
   },
 });
 
@@ -100,23 +232,26 @@ export const pressKeyTool = defineBrowserTool({
     const code = virtualKeyCode(k);
     const modifiers = args.modifiers ?? 0;
     const isChar = k.length === 1;
+    const physical = physicalCode(k);
+    // A printable character needs a `char` event for the page to receive keypress/textInput and actually insert it; Shift (8) still counts as printable.
+    const hasCommandModifier = (modifiers & (1 | 2 | 4)) !== 0;
+    const commands = editingCommands(k, modifiers);
     const downParams: ParamsOf<"Input.dispatchKeyEvent"> = {
-      type: "keyDown",
+      type: isChar && hasCommandModifier ? "rawKeyDown" : "keyDown",
       key: k,
-      code: k,
+      code: physical,
       modifiers,
       ...(code ? { windowsVirtualKeyCode: code, nativeVirtualKeyCode: code } : {}),
-      ...(isChar ? { text: k, unmodifiedText: k } : {}),
+      ...(isChar && !hasCommandModifier ? { text: k, unmodifiedText: k } : {}),
+      ...(commands.length > 0 ? { commands: [...commands] } : {}),
     };
     const down = await cdpCall(client, "Input.dispatchKeyEvent", downParams);
     if (!down.success) return down;
-    // A printable character needs a `char` event for the page to receive keypress/textInput and actually insert it; Shift (8) still counts as printable.
-    const hasCommandModifier = (modifiers & (1 | 2 | 4)) !== 0;
     if (isChar && !hasCommandModifier) {
       const charEv = await cdpCall(client, "Input.dispatchKeyEvent", { type: "char", text: k, key: k });
       if (!charEv.success) return charEv;
     }
-    const up = await cdpCall(client, "Input.dispatchKeyEvent", { type: "keyUp", key: k, code: k, modifiers });
+    const up = await cdpCall(client, "Input.dispatchKeyEvent", { type: "keyUp", key: k, code: physical, modifiers });
     if (!up.success) return up;
     return ok({ text: `Pressed: ${k}${modifiers ? ` (modifiers=${modifiers})` : ""}` });
   },
@@ -153,7 +288,8 @@ export const dispatchKeyTool = defineBrowserTool({
     const eventType = args.eventType ?? "keydown";
     const target = args.ref ?? args.selector ?? "";
     // Legacy handlers branch on e.keyCode/e.which rather than e.key, so populate both.
-    const code = virtualKeyCode(args.key);
+    // keypress carries the character code ("a" = 97); keydown/keyup carry the key code ("a" = 65).
+    const code = eventType === "keypress" && args.key.length === 1 ? args.key.charCodeAt(0) : virtualKeyCode(args.key);
     if (args.ref !== undefined) {
       // Through runOnElement so the resolved RemoteObject is released after the call.
       const spec: KeyEventSpec = { type: eventType, key: args.key, code };

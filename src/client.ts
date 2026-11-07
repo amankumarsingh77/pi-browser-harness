@@ -59,7 +59,7 @@ export type BrowserClient = {
   stop(): Promise<void>;
   detach(): Promise<void>;
   closeOwnedTabs(): Promise<void>;
-  evaluateJs(expression: string, sessionId?: string): Promise<Result<unknown, CdpError>>;
+  evaluateJs(expression: string, sessionId?: string, opts?: { readonly timeoutMs?: number }): Promise<Result<unknown, CdpError>>;
   pageInfo(): Promise<Result<PageInfoResult, CdpError>>;
   takeDialog(): DialogInfo | null;
   listTabs(includeInternal?: boolean): Promise<Result<ReadonlyArray<TabInfo>, CdpError>>;
@@ -260,9 +260,16 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     return running;
   };
 
-  const evaluateJs = async (expression: string, sessionId?: string): Promise<Result<unknown, CdpError>> => {
+  const evaluateJs = async (
+    expression: string,
+    sessionId?: string,
+    opts?: { readonly timeoutMs?: number },
+  ): Promise<Result<unknown, CdpError>> => {
     const params = evaluateParams(expression);
-    const r = sessionId ? await session.callOnTarget("Runtime.evaluate", params, sessionId) : await session.call("Runtime.evaluate", params);
+    const callOpts = opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {};
+    const r = sessionId
+      ? await session.callOnTarget("Runtime.evaluate", params, sessionId, callOpts)
+      : await session.call("Runtime.evaluate", params, callOpts);
     if (!r.success) return r;
     if (r.data.exceptionDetails !== undefined) {
       return err(cdpError("remote_error", `JS evaluation failed: ${JSON.stringify(r.data.exceptionDetails)}`, "Runtime.evaluate"));

@@ -20,7 +20,7 @@ export const REPLAYABLE: ReadonlyMap<string, "ref" | "fields" | "none"> = new Ma
   ["browser_dispatch_key", "ref"],
   ["browser_upload_file", "ref"],
   ["browser_fill_form", "fields"],
-  ["browser_type", "none"],
+  ["browser_type", "ref"],
   ["browser_press_key", "none"],
   ["browser_navigate", "none"],
   ["browser_go_back", "none"],
@@ -303,8 +303,9 @@ export const observeCall: CallObserver = async ({ name, concurrency, args, clien
     }
     const fields = mode === "fields" ? await fieldsOf(client, args) : undefined;
     let password = fields?.some((f) => f.password) ?? false;
-    if (name === "browser_fill") password = await isPasswordTarget(client, ref, selector);
-    if (name === "browser_type") {
+    if (name === "browser_fill" || (name === "browser_type" && (ref !== undefined || selector !== undefined))) {
+      password = await isPasswordTarget(client, ref, selector);
+    } else if (name === "browser_type") {
       const r = await evalJs(client, FOCUSED_IS_PASSWORD_EXPR);
       password = r.success && r.data === true;
     }

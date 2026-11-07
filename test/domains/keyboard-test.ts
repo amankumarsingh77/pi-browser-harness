@@ -1,25 +1,119 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { createFakeClient, handlerContext } from "./fake-client";
-import { dispatchKeyTool, pressKeyTool, typeTool } from "../../src/domains/keyboard";
+import { axNode, createFakeClient, handlerContext } from "./fake-client";
+import { dispatchKeyTool, editingCommands, physicalCode, pressKeyTool, typeTool, virtualKeyCode } from "../../src/domains/keyboard";
 import { ok } from "../../src/util/result";
 
-const FOCUSED_INPUT = ok({ ok: true, tag: "INPUT" });
+const RESOLVED_NODE = ok({ object: { type: "object", objectId: "obj-1" } });
+const EMPTY_TREE = ok({ nodes: [axNode("1", "RootWebArea", "")] });
+// The seeded ref e1 is still on the page after typing, so the page diff stays empty.
+const TREE_WITH_E1 = ok({
+  nodes: [axNode("1", "RootWebArea", "", { childIds: ["2"] }), axNode("2", "textbox", "e1", { parentId: "1", backendDOMNodeId: 101 })],
+});
+const returned = (value: unknown) => ok({ result: { type: "object", value } });
 
-describe("browser_type", () => {
-  test("inserts the text when an editable element is focused", async () => {
-    const fake = await createFakeClient({ evaluate: () => FOCUSED_INPUT });
-    const r = await typeTool.handler({ text: "hello" }, handlerContext(fake.client));
+const PREP_INPUT = (value = "") => ({ ok: true, kind: "input", value, tag: "INPUT" });
+const READ_BACK = (value: string, focused = true) => ({ value, focused });
+
+// A client with ref e1 on a field; the page functions answer in order: prepare, read back, then (if used) native fill.
+const fieldClient = (...answers: ReadonlyArray<unknown>) =>
+  createFakeClient({
+    refs: [{ ref: "e1", backendId: 101 }],
+    canned: {
+      "DOM.resolveNode": RESOLVED_NODE,
+      "Runtime.callFunctionOn": answers.map(returned),
+      "Accessibility.getFullAXTree": TREE_WITH_E1,
+    },
+  });
+
+describe("browser_type into a named field", () => {
+  test("focuses and selects the field, types with real input events, and reports the value read back", async () => {
+    const fake = await fieldClient(PREP_INPUT("old"), READ_BACK("hello"));
+    const r = await typeTool.handler({ ref: "e1", text: "hello" }, handlerContext(fake.client));
     assert.equal(r.success, true);
-    assert.equal(r.data.text, 'Typed: "hello"');
-    assert.equal(r.data.details, undefined);
-    assert.equal(fake.evaluated.length, 1);
-    assert.match(fake.evaluated[0] ?? "", /document\.activeElement/);
+    assert.equal(r.data.text, 'Typed "hello" into [e1] → value "hello"');
+    assert.deepEqual(r.data.details, { ref: "e1", text: "hello", clear: true, value: "hello" });
+    // The prepare call is told to clear (select all) because a field was named.
+    const prep = fake.callsTo("Runtime.callFunctionOn")[0];
+    assert.deepEqual(prep?.params["arguments"], [{ value: true }]);
     assert.deepEqual(fake.callsTo("Input.insertText")[0]?.params, { text: "hello" });
   });
 
+  test("clear:false appends at the cursor and expects the old value plus the text", async () => {
+    const fake = await fieldClient(PREP_INPUT("Back "), READ_BACK("Back End"));
+    const r = await typeTool.handler({ ref: "e1", text: "End", clear: false }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(r.data.text, 'Typed "End" into [e1] → value "Back End"');
+    assert.deepEqual(fake.callsTo("Runtime.callFunctionOn")[0]?.params["arguments"], [{ value: false }]);
+  });
+
+  test("empty text with clear presses Backspace on the selection instead of inserting nothing", async () => {
+    const fake = await fieldClient(PREP_INPUT("Other"), READ_BACK(""));
+    const r = await typeTool.handler({ ref: "e1", text: "" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(fake.callsTo("Input.insertText").length, 0);
+    const keys = fake.callsTo("Input.dispatchKeyEvent").map((c) => [c.params["type"], c.params["key"]]);
+    assert.deepEqual(keys, [["keyDown", "Backspace"], ["keyUp", "Backspace"]]);
+  });
+
+  test("when typing does not produce the value it falls back to setting it directly, and says so", async () => {
+    const fake = await fieldClient(
+      PREP_INPUT(""),
+      READ_BACK(""),
+      { ok: true, kind: "input", value: "2026-11-07", tag: "INPUT" },
+    );
+    const r = await typeTool.handler({ ref: "e1", text: "2026-11-07" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.match(r.data.text, /→ value "2026-11-07" \(typing did not take; value set directly\)/);
+    assert.equal(fake.callsTo("Runtime.callFunctionOn").length, 3);
+  });
+
+  test("a value the page reformatted is reported with a warning, not as success-as-typed", async () => {
+    const fake = await fieldClient(PREP_INPUT(""), READ_BACK("+91 98765"), { ok: true, kind: "input", value: "+91 98765", tag: "INPUT" });
+    const r = await typeTool.handler({ ref: "e1", text: "98765" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.match(r.data.text, /⚠ the field holds "\+91 98765"/);
+  });
+
+  test("a <select> is refused with a pointer to browser_select_option, and nothing is typed", async () => {
+    const fake = await fieldClient({ ok: false, code: "select", reason: "element is a <select>", tag: "SELECT" });
+    const r = await typeTool.handler({ ref: "e1", text: "x" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "invalid_state");
+    assert.match(r.error.message, /browser_select_option/);
+    assert.equal(fake.callsTo("Input.insertText").length, 0);
+  });
+
+  test("a checkbox is refused with a pointer to browser_set_checked", async () => {
+    const fake = await fieldClient({ ok: false, code: "checkable", reason: "element is a checkbox", tag: "INPUT" });
+    const r = await typeTool.handler({ ref: "e1", text: "true" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /browser_set_checked/);
+  });
+
+  test("an unknown ref is a stale-ref error before anything is typed", async () => {
+    const fake = await createFakeClient();
+    const r = await typeTool.handler({ ref: "e9", text: "x" }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /stale/);
+    assert.equal(fake.callsTo("Input.insertText").length, 0);
+  });
+});
+
+describe("browser_type into the focused element", () => {
+  test("appends by default (no field named) and reports the value", async () => {
+    const answers = [PREP_INPUT("Back "), READ_BACK("Back End")];
+    const fake = await createFakeClient({ evaluate: () => ok(answers.shift()), canned: { "Accessibility.getFullAXTree": EMPTY_TREE } });
+    const r = await typeTool.handler({ text: "End" }, handlerContext(fake.client));
+    assert.equal(r.success, true);
+    assert.equal(r.data.text, 'Typed "End" into the focused element → value "Back End"');
+    assert.match(fake.evaluated[0] ?? "", /document\.activeElement/);
+    assert.match(fake.evaluated[0] ?? "", /\[false\]\)$/);
+    assert.deepEqual(fake.callsTo("Input.insertText")[0]?.params, { text: "End" });
+  });
+
   test("refuses when nothing editable is focused, naming the active element, and types nothing", async () => {
-    const fake = await createFakeClient({ evaluate: () => ok({ ok: false, tag: "BODY" }) });
+    const fake = await createFakeClient({ evaluate: () => ok({ ok: false, code: "not_editable", reason: "not a text field", tag: "BODY" }) });
     const r = await typeTool.handler({ text: "lost" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
@@ -33,21 +127,12 @@ describe("browser_type", () => {
     const r = await typeTool.handler({ text: "x" }, handlerContext(fake.client));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
-    assert.deepEqual(r.error.details, { activeElement: null });
-  });
-
-  test("a failed focus probe does not block typing", async () => {
-    const fake = await createFakeClient({
-      evaluate: () => ({ success: false, error: { kind: "remote_error", message: "probe failed" } }),
-    });
-    const r = await typeTool.handler({ text: "x" }, handlerContext(fake.client));
-    assert.equal(r.success, true);
-    assert.equal(fake.callsTo("Input.insertText").length, 1);
+    assert.equal(fake.callsTo("Input.insertText").length, 0);
   });
 
   test("a failed insert is a cdp_error naming the method", async () => {
     const fake = await createFakeClient({
-      evaluate: () => FOCUSED_INPUT,
+      evaluate: () => ok(PREP_INPUT()),
       canned: { "Input.insertText": { success: false, error: { kind: "remote_error", message: "nope" } } },
     });
     const r = await typeTool.handler({ text: "x" }, handlerContext(fake.client));
@@ -91,9 +176,9 @@ describe("browser_press_key key parsing", () => {
     assert.equal(r.success, true);
     const events = fake.callsTo("Input.dispatchKeyEvent");
     assert.deepEqual(events.map((c) => c.params), [
-      { type: "keyDown", key: "a", code: "a", modifiers: 0, windowsVirtualKeyCode: 97, nativeVirtualKeyCode: 97, text: "a", unmodifiedText: "a" },
+      { type: "keyDown", key: "a", code: "KeyA", modifiers: 0, windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, text: "a", unmodifiedText: "a" },
       { type: "char", text: "a", key: "a" },
-      { type: "keyUp", key: "a", code: "a", modifiers: 0 },
+      { type: "keyUp", key: "a", code: "KeyA", modifiers: 0 },
     ]);
   });
 
@@ -168,7 +253,18 @@ describe("browser_press_key modifiers", () => {
       const fake = await createFakeClient();
       await pressKeyTool.handler({ key: "c", modifiers }, handlerContext(fake.client));
       const types = fake.callsTo("Input.dispatchKeyEvent").map((c) => c.params["type"]);
-      assert.deepEqual(types, ["keyDown", "keyUp"], `modifiers=${modifiers}`);
+      assert.deepEqual(types, ["rawKeyDown", "keyUp"], `modifiers=${modifiers}`);
+      assert.equal(fake.callsTo("Input.dispatchKeyEvent")[0]?.params["text"], undefined, "a shortcut inserts no text");
+    }
+  });
+
+  test("Cmd/Ctrl+A carries the selectAll editing command, which Chrome needs to run the shortcut", async () => {
+    for (const modifiers of [2, 4]) {
+      const fake = await createFakeClient();
+      await pressKeyTool.handler({ key: "a", modifiers }, handlerContext(fake.client));
+      const down = fake.callsTo("Input.dispatchKeyEvent")[0];
+      assert.deepEqual(down?.params["commands"], ["selectAll"], `modifiers=${modifiers}`);
+      assert.equal(down.params["code"], "KeyA");
     }
   });
 
@@ -205,7 +301,7 @@ describe("browser_dispatch_key by selector", () => {
     const r = await dispatchKeyTool.handler({ selector: "#x", key: "a", eventType: "keyup" }, handlerContext(fake.client));
     assert.equal(r.success, true);
     assert.equal(r.data.text, "Dispatched keyup('a') on 1 element(s)");
-    assert.match(fake.evaluated[0] ?? "", /new KeyboardEvent\("keyup", \{ key: "a", keyCode: 97, which: 97/);
+    assert.match(fake.evaluated[0] ?? "", /new KeyboardEvent\("keyup", \{ key: "a", keyCode: 65, which: 65/);
   });
 
   test("a selector containing quotes is JSON-escaped, not spliced raw", async () => {
@@ -267,5 +363,33 @@ describe("browser_dispatch_key by ref", () => {
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "invalid_state");
     assert.deepEqual(r.error.details, { ref: "e4" });
+  });
+});
+
+describe("key helpers", () => {
+  test("virtual key codes for letters and digits are the upper-case ASCII code", () => {
+    assert.equal(virtualKeyCode("a"), 65);
+    assert.equal(virtualKeyCode("Z"), 90);
+    assert.equal(virtualKeyCode("7"), 55);
+    assert.equal(virtualKeyCode("Enter"), 13);
+    assert.equal(virtualKeyCode("-"), 45);
+  });
+
+  test("physical codes name the key, not the character", () => {
+    assert.equal(physicalCode("a"), "KeyA");
+    assert.equal(physicalCode("5"), "Digit5");
+    assert.equal(physicalCode(" "), "Space");
+    assert.equal(physicalCode("Enter"), "Enter");
+  });
+
+  test("editing commands map the clipboard/undo shortcuts and nothing else", () => {
+    assert.deepEqual(editingCommands("a", 4), ["selectAll"]);
+    assert.deepEqual(editingCommands("c", 2), ["copy"]);
+    assert.deepEqual(editingCommands("v", 4), ["paste"]);
+    assert.deepEqual(editingCommands("z", 4 | 8), ["redo"]);
+    assert.deepEqual(editingCommands("a", 0), []);
+    assert.deepEqual(editingCommands("a", 8), []);
+    assert.deepEqual(editingCommands("a", 4 | 1), [], "Alt changes the shortcut");
+    assert.deepEqual(editingCommands("q", 4), []);
   });
 });

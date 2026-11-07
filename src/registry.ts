@@ -4,7 +4,7 @@ import type { BrowserTool } from "./util/tool";
 import { type Result, err, ok } from "./util/result";
 import { clickTool } from "./domains/click";
 import { typeTool, pressKeyTool, dispatchKeyTool } from "./domains/keyboard";
-import { fillTool, selectOptionTool, focusTool, setCheckedTool } from "./domains/form";
+import { selectOptionTool, focusTool, setCheckedTool } from "./domains/form";
 import { fillFormTool } from "./domains/form-batch";
 import { pageInfoTool, waitTool, waitForLoadTool, waitForTool } from "./domains/page";
 import { scrollTool } from "./domains/scroll";
@@ -31,7 +31,6 @@ export const ALL_TOOLS: ReadonlyArray<BrowserTool> = [
   setupTool,
   clickTool,
   typeTool,
-  fillTool,
   fillFormTool,
   selectOptionTool,
   setCheckedTool,

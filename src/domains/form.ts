@@ -2,7 +2,8 @@ import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type JsonObject, type ToolErr, type ToolOk } from "../util/tool";
 import { detailsOf, type ElementOutcome, isPageResult, resolveAndCall, runOnElement } from "./element-call";
-import { fillField, type FillOptions } from "./page/fill.page";
+import { fillField, type FillOptions, type PageResult } from "./page/fill.page";
+import type { BrowserClient } from "../client";
 import { type FocusResult, focusElement, type SelectOption, type SelectResult, type SelectWanted, selectOption, setChecked } from "./page/form.page";
 import { elementFunctionSource } from "./page/inject";
 import { interactiveDiff } from "./ref-resolve";
@@ -56,45 +57,53 @@ const FillArgs = Type.Object({
 const FILL_FN = elementFunctionSource(fillField);
 const FILL_OPTIONS: FillOptions = { rejectSelect: true, focusFirst: false };
 
+type FilledField = Extract<PageResult, { readonly ok: true }>;
+
+// Writes `value` through the page's native value setter (the fill engine in page/fill.page.ts) and returns what the
+// field holds afterwards. browser_type falls back to it when typing did not produce the value; recipe "fill" steps
+// (recorded by the old browser_fill and by browser_fill_form) replay through it.
+export const nativeFill = async (
+  client: BrowserClient,
+  t: Target,
+  value: string,
+): Promise<Result<FilledField, ToolErr>> => {
+  const r = await runOnElement(client, { ref: t.ref, selector: t.selector, functionDeclaration: FILL_FN, args: [value, FILL_OPTIONS] });
+  if (!r.success) return r;
+  const narrowed = narrow(r.data, t, "browser_fill", isPageResult);
+  if (!narrowed.success) return narrowed;
+  const res = narrowed.data;
+  if (res.ok) return ok(res);
+  const target = targetLabel(t);
+  const details = { ...targetDetails(t), ...(res.tag !== undefined ? { tag: res.tag } : {}) };
+  if (res.code === "select_rejected") {
+    return err({
+      kind: "invalid_state",
+      message: `Element <select> is not fillable (not an input, textarea, or contenteditable): ${target}. For <select> use browser_select_option.`,
+      details,
+    });
+  }
+  return err({ kind: "invalid_state", message: `Could not fill ${target}: ${res.reason}`, details });
+};
+
+// Not registered for the agent any more (browser_type replaces it); kept so saved recipes' "fill" steps replay.
 export const fillTool = defineBrowserTool({
   name: "browser_fill",
   label: "Browser Fill",
   description:
-    "Fill a form field (input/textarea/contenteditable), or tick a checkbox/radio by passing 'true'/'false'. PREFERRED: pass `ref` (e.g. 'e7') from browser_snapshot — survives re-renders. Fallback: a CSS `selector`. Writes through the native value setter and fires bubbling 'input'/'change' events, so React/Vue/Angular controlled components and rich-text editors update correctly — unlike browser_type. Refuses a disabled field rather than writing a value the page will ignore. Returns the field's value after writing, plus a compact diff of page changes.",
-  promptSnippet: "Fill a form field by ref (preferred) or selector (works with React/Vue controlled inputs)",
-  promptGuidelines: [
-    "Pass the desired value; no browser_click is needed first.",
-    "For a checkbox or radio pass 'true' or 'false' — it toggles `checked`, not the submit value. browser_set_checked does the same thing with a boolean.",
-    "Use browser_type instead only for keystroke-sensitive widgets (autocomplete, masked/segmented inputs).",
-    "Fill sets the value but does not focus or submit. To submit a tag/autocomplete input, follow with browser_dispatch_key({ ref, key: 'Enter' }) — not browser_press_key, which targets the focused element and may miss this field.",
-    "For a custom (div-based) dropdown, browser_fill won't validate against its option list — open it, run browser_snapshot, then browser_click the option's ref.",
-    "Confirm the field value browser_fill returns matches what you intended.",
-  ],
+    "Recipe replay only: set a form field's value through the native setter, or tick a checkbox/radio with 'true'/'false'.",
+  promptSnippet: "Set a form field's value (recipe replay)",
+  promptGuidelines: [],
   parameters: FillArgs,
   concurrency: "serialized",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
-    const r = await runOnElement(client, { ref: args.ref, selector: args.selector, functionDeclaration: FILL_FN, args: [args.value, FILL_OPTIONS] });
-    if (!r.success) return r;
-    const narrowed = narrow(r.data, args, "browser_fill", isPageResult);
-    if (!narrowed.success) return narrowed;
-    const res = narrowed.data;
-    const target = targetLabel(args);
-    if (!res.ok) {
-      const details = { ref: args.ref, selector: args.selector, ...(res.tag !== undefined ? { tag: res.tag } : {}) };
-      if (res.code === "select_rejected") {
-        return err({
-          kind: "invalid_state",
-          message: `Element <select> is not fillable (not an input, textarea, or contenteditable): ${target}. For <select> use browser_select_option.`,
-          details,
-        });
-      }
-      return err({ kind: "invalid_state", message: `Could not fill ${target}: ${res.reason}`, details });
-    }
+    const filled = await nativeFill(client, args, args.value);
+    if (!filled.success) return filled;
+    const res = filled.data;
     const verified = "checked" in res ? res.checked : res.value;
     const shown = "checked" in res ? `checked=${res.checked}` : JSON.stringify(res.value);
     const diff = await interactiveDiff(client);
     return ok({
-      text: `Filled ${target} = ${shown}${diff}`,
+      text: `Filled ${targetLabel(args)} = ${shown}${diff}`,
       details: { ...targetDetails(args), value: args.value, verified, tag: res.tag, kind: res.kind },
     });
   },
@@ -119,10 +128,10 @@ export const focusTool = defineBrowserTool({
   name: "browser_focus",
   label: "Browser Focus",
   description:
-    "Focus an element via the DOM .focus() method — deterministic, no coordinate accuracy needed. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`. Use before browser_type when a click might miss the field.",
+    "Focus an element via the DOM .focus() method — deterministic, no coordinate accuracy needed. PREFERRED: pass `ref` from browser_snapshot; fallback: a CSS `selector`.",
   promptSnippet: "Focus an element by ref (preferred) or selector",
   promptGuidelines: [
-    "For simply setting a value, prefer browser_fill (it doesn't need a separate focus step).",
+    "To enter text, pass the ref straight to browser_type — it focuses the field itself.",
   ],
   parameters: FocusArgs,
   concurrency: "serialized",

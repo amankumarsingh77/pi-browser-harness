@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { type PageFunction, pageFunctionSource } from "../../src/domains/page/inject";
 import { focusElement, selectOption, setChecked } from "../../src/domains/page/form.page";
+import { prepareTyping } from "../../src/domains/page/fill.page";
+import { hitInfo } from "../../src/domains/page/click.page";
 import { liveValue } from "../../src/domains/page/live-value.page";
 import { capturePage } from "../../src/domains/page/read-page.page";
 import { extractSerp } from "../../src/domains/page/serp.page";
@@ -15,7 +17,7 @@ import { asRecord } from "../../src/util/guards";
 import { callPage, materialise } from "./page-harness";
 
 const PAGE_DIR = join(import.meta.dirname, "..", "..", "src", "domains", "page");
-const EXPECTED_FUNCTIONS = ["fillField", "focusElement", "selectOption", "setChecked", "liveValue", "capturePage", "extractSerp", "dispatchKeyEvent"];
+const EXPECTED_FUNCTIONS = ["prepareTyping", "readTypedValue", "hitInfo", "fillField", "focusElement", "selectOption", "setChecked", "liveValue", "capturePage", "extractSerp", "dispatchKeyEvent"];
 
 const pageModules = (): ReadonlyArray<string> => readdirSync(PAGE_DIR).filter((f) => f.endsWith(".page.ts"));
 
@@ -315,4 +317,55 @@ describe("extractSerp", () => {
     });
   });
 
+});
+
+describe("prepareTyping", () => {
+  test("focuses a text input and, with clear, selects its content so typing replaces it", () => {
+    const el = focusable("INPUT");
+    let selected = false;
+    Object.assign(el, { type: "text", value: "Other", select: () => { selected = true; } });
+    assert.deepEqual(callPage(prepareTyping, el, true), { ok: true, kind: "input", value: "Other", tag: "INPUT" });
+    assert.equal(el.focused, true);
+    assert.equal(selected, true);
+  });
+
+  test("without clear it leaves the selection alone", () => {
+    const el = focusable("TEXTAREA");
+    let selected = false;
+    Object.assign(el, { value: "a", select: () => { selected = true; } });
+    assert.deepEqual(callPage(prepareTyping, el, false), { ok: true, kind: "textarea", value: "a", tag: "TEXTAREA" });
+    assert.equal(selected, false);
+  });
+
+  test("refuses selects, checkboxes, disabled and read-only fields with a code the tool turns into advice", () => {
+    assert.equal(asRecord(callPage(prepareTyping, fake("SELECT"), true))?.["code"], "select");
+    assert.equal(asRecord(callPage(prepareTyping, fake("INPUT", { type: "checkbox" }), true))?.["code"], "checkable");
+    assert.equal(asRecord(callPage(prepareTyping, fake("INPUT", { type: "text", disabled: true }), true))?.["code"], "disabled");
+    assert.equal(asRecord(callPage(prepareTyping, Object.assign(fake("INPUT", { type: "text" }), { readOnly: true }), true))?.["code"], "readonly");
+    assert.equal(asRecord(callPage(prepareTyping, fake("DIV"), true))?.["code"], "not_editable");
+    assert.equal(asRecord(callPage(prepareTyping, null, true))?.["code"], "not_element");
+  });
+});
+
+describe("hitInfo", () => {
+  const node = (tagName: string, extra: Record<string, unknown> = {}) => ({
+    tagName, nodeType: 1, id: "", className: "", textContent: "", getAttribute: () => null, contains: () => false, ...extra,
+  });
+
+  test("the target itself, or something inside it, is on target", () => {
+    const target = node("LI");
+    const inner = node("A", { textContent: " 1 Year " });
+    Object.assign(target, { contains: (n: unknown) => n === inner || n === target });
+    assert.deepEqual(callPage(hitInfo, target, inner), { onTarget: true, hit: 'a "1 Year"' });
+  });
+
+  test("an unrelated element on top is described with its id and first classes", () => {
+    const target = node("BUTTON");
+    const overlay = node("DIV", { id: "ov", className: "modal backdrop show" });
+    assert.deepEqual(callPage(hitInfo, target, overlay), { onTarget: false, hit: "div#ov.modal.backdrop" });
+  });
+
+  test("nothing under the point is not on target", () => {
+    assert.deepEqual(callPage(hitInfo, node("A"), null), { onTarget: false, hit: "nothing" });
+  });
 });

@@ -61,7 +61,6 @@ Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
 | `browser_download` | serialized | Configure download directory |
 | `browser_drag_and_drop` | serialized | Drag and drop between two coordinates |
 | `browser_execute_js` | parallel | Execute JS in the page — surgical DOM reads (preferred over screenshot) |
-| `browser_fill` | serialized | Fill a form field by ref (preferred) or selector (works with React/Vue controlled inputs) |
 | `browser_fill_form` | serialized | Fill many form fields at once by ref — React-safe, self-confirming |
 | `browser_focus` | serialized | Focus an element by ref (preferred) or selector |
 | `browser_go_back` | serialized | Go back one page |
@@ -89,7 +88,7 @@ Generated from `src/registry.ts` by `npm run gen:skill`; do not edit by hand.
 | `browser_setup` | parallel | Initialize browser connection |
 | `browser_snapshot` | parallel | Get accessibility-tree snapshot with stable element refs (default for page inspection) |
 | `browser_switch_tab` | serialized | Switch tabs |
-| `browser_type` | serialized | Type text into the focused element |
+| `browser_type` | serialized | Type text into a field by ref (preferred), selector, or the focused element |
 | `browser_upload_file` | serialized | Upload a file to a file input by ref (preferred) or selector |
 | `browser_viewport_resize` | serialized | Resize the viewport (responsive testing) |
 | `browser_wait` | parallel | Wait N seconds |

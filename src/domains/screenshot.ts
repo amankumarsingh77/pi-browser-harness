@@ -1,4 +1,8 @@
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import type { BrowserClient } from "../client";
+import { imageWidth } from "../util/image-size";
+import { evalJs } from "./cdp-call";
 import { Type } from "typebox";
 import { Image, type ImageTheme, Text, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import { type Result, ok } from "../util/result";
@@ -20,6 +24,21 @@ const ScreenshotDetailsSchema = Type.Object({
 
 export type ScreenshotDetails = DetailsOf<typeof ScreenshotDetailsSchema>;
 
+// Screenshots come out in device pixels (2x on a Retina display) and maxDim may shrink them again, so a point read
+// off the image is not a browser_click coordinate. Say how to convert, whenever the two differ.
+const scaleNote = async (client: BrowserClient, path: string, fullPage: boolean): Promise<string> => {
+  try {
+    const width = imageWidth(await readFile(path));
+    const css = await evalJs(client, fullPage ? "document.documentElement.scrollWidth" : "window.innerWidth");
+    if (width === undefined || !css.success || typeof css.data !== "number" || css.data <= 0) return "";
+    const ratio = width / css.data;
+    if (Math.abs(ratio - 1) < 0.05) return "";
+    return `\nImage scale: ${ratio.toFixed(2)} image px per CSS px — divide coordinates read off this image by ${ratio.toFixed(2)} before passing them to browser_click (or use refs from browser_snapshot).`;
+  } catch {
+    return "";
+  }
+};
+
 export const screenshotTool = defineBrowserTool({
   name: "browser_screenshot",
   label: "Browser Screenshot",
@@ -40,8 +59,9 @@ export const screenshotTool = defineBrowserTool({
       const resized = await resizeIfNeeded(cap.data.path, args.maxDim);
       note = resized.note;
     }
+    const scale = await scaleNote(client, cap.data.path, args.fullPage ?? false);
     return ok({
-      text: `Screenshot saved: ${cap.data.path}${note}`,
+      text: `Screenshot saved: ${cap.data.path}${note}${scale}`,
       details: { path: cap.data.path, format: cap.data.format, attached: false },
     });
   },

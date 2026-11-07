@@ -91,7 +91,7 @@ export const waitForTool = defineBrowserTool({
     "Poll until a condition holds: a selector appears (or disappears with gone:true), or text appears in the page. Returns a typed timeout error if the deadline elapses. Use to wait for SPA content to render before interacting.",
   promptSnippet: "Wait for an element or text to appear (or an element to disappear)",
   promptGuidelines: [
-    "Use before browser_fill / browser_click on dynamic pages so you act after the element renders.",
+    "Use before browser_type / browser_click on dynamic pages so you act after the element renders.",
   ],
   parameters: WaitForArgs,
   concurrency: "parallel",
