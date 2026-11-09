@@ -53,6 +53,11 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **`browser_web_search` resolves Google `/goto` result links**, and treats every Google TLD as Google's own, not a result.
 - **The agent calls `browser_setup` before it has connected** instead of falling back to `curl`: the prompt now says the `browser_*` tools are available and the browser is just not connected yet.
 
+### Fixed
+
+- **`/browser-setup` connects to a browser that is not on this machine (#54, #41).** Setup refused with "No browser instance running" unless a browser process existed locally, before it ever tried the DevTools endpoint, so pi in WSL2 with the browser on Windows, a browser behind an SSH tunnel, and `BU_CDP_WS` itself all failed. Setup now decides once where the browser is (`src/browser-location.ts`): a reachable endpoint is enough to proceed, and the local process scan only shapes the error and gates local-only features. With no browser anywhere the error is now "No browser found" and names the remote options.
+- **A saved profile pin no longer breaks a remote browser.** A pin is applied by launching this machine's browser, which failed the connection (or could open a different browser) when the connected one was elsewhere. The pin is suspended, not cleared, while the browser is remote, and `/browser-profile` says profiles can't be listed from here instead of offering another browser's.
+
 ## 0.13.0 — 2026-10-20
 
 ### Fixed

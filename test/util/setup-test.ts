@@ -14,8 +14,10 @@ import { fakeCtx, fakePi } from "../helpers/fake-pi";
 
 const PIN: ProfilePin = { userDataDir: "/home/u/.config/google-chrome", profileDir: "Default", label: "Alice", savedAt: "" };
 
+const REMOTE_ENDPOINT = { wsUrl: "ws://127.0.0.1:9222/devtools/browser/remote" };
+
 const ready: SetupDeps = {
-  isBrowserRunning: () => Promise.resolve(true),
+  locateBrowser: () => Promise.resolve({ kind: "local" }),
   ensureDaemon: () => Promise.resolve(true),
 };
 
@@ -78,13 +80,13 @@ describe("registerSetupCommand", () => {
   test("the handler notifies a failure as an error", async () => {
     const pi = fakePi();
     const c = await setupClient();
-    registerSetupCommand(pi.pi, c.client, { ...ready, isBrowserRunning: () => Promise.resolve(false) });
+    registerSetupCommand(pi.pi, c.client, { ...ready, locateBrowser: () => Promise.resolve({ kind: "none" }) });
     const ctx = fakeCtx();
     await pi.command("browser-setup").handler("", ctx.ctx);
     const notice = ctx.notices[0];
     assert.ok(notice);
     assert.equal(notice.type, "error");
-    assert.match(notice.message, /No browser instance running/);
+    assert.match(notice.message, /^No browser found\./);
     assert.equal(c.started(), 0);
   });
 });
@@ -122,17 +124,50 @@ describe("performSetup", () => {
     assert.match(r.data, /^Browser connected ✓\nNavigated to: https:\/\/github\.com\/\nNo browser profile selected/);
   });
 
-  test("no running browser stops before the daemon or the client are touched", async () => {
+  test("no browser anywhere stops before the daemon or the client are touched, and says how to reach a remote one", async () => {
     const c = await setupClient();
     let daemonAsked = false;
     const r = await performSetup(c.client, undefined, {
-      isBrowserRunning: () => Promise.resolve(false),
+      locateBrowser: () => Promise.resolve({ kind: "none" }),
       ensureDaemon: () => { daemonAsked = true; return Promise.resolve(true); },
     });
     assert.equal(r.success, false);
-    assert.equal(r.error, "No browser instance running. Please open your browser and then run /browser-setup.");
+    assert.match(r.error, /^No browser found\. Open your browser and run \/browser-setup\./);
+    assert.match(r.error, /127\.0\.0\.1:9222/);
+    assert.match(r.error, /BU_CDP_WS/);
     assert.equal(daemonAsked, false);
     assert.equal(c.started(), 0);
+  });
+
+  test("a local browser with remote debugging off still reaches the client, which reports the hint", async () => {
+    const c = await setupClient({ startError: "DevToolsActivePort not found" });
+    const r = await performSetup(c.client, undefined, ready);
+    assert.equal(r.success, false);
+    assert.match(r.error, /^Browser remote debugging needs to be enabled\./);
+    assert.equal(c.started(), 1);
+  });
+
+  test("a remote browser connects without a local browser process (#54, #41)", async () => {
+    const c = await setupClient();
+    const r = await performSetup(c.client, undefined, {
+      ...ready,
+      locateBrowser: () => Promise.resolve({ kind: "remote", endpoint: REMOTE_ENDPOINT }),
+    });
+    assert.ok(r.success);
+    assert.equal(c.started(), 1);
+    assert.match(r.data, /^Browser connected ✓\nNavigated to: https:\/\/github\.com\/\nRemote browser: profile selection is unavailable/);
+  });
+
+  test("a remote browser skips the profile prompt: no profile is offered or pinned from this machine", async () => {
+    const c = await setupClient({ pin: null });
+    const ctx = fakeCtx({ hasUI: true, selections: ["x"] });
+    const r = await performSetup(c.client, ctx.ctx, {
+      ...ready,
+      locateBrowser: () => Promise.resolve({ kind: "remote", endpoint: REMOTE_ENDPOINT }),
+    });
+    assert.ok(r.success);
+    assert.equal(ctx.prompts.length, 0);
+    assert.doesNotMatch(r.data, /No browser profile selected|No browser profiles found/);
   });
 
   test("a daemon that will not start names the socket path", async () => {

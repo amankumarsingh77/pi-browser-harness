@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { endpointFromEnv, firstReadyPort, parseVersionResponse, type PortProbe } from "../../src/cdp/discovery";
+import { endpointFromEnv, firstReadyPort, parseVersionResponse, probeEndpoint, type PortProbe, type ProbeDeps } from "../../src/cdp/discovery";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
 
@@ -84,5 +84,65 @@ describe("firstReadyPort", () => {
   test("no candidates is an immediate failure", async () => {
     const r = await firstReadyPort([], { probe: live(1), deadlineMs: 1_000 });
     assert.equal(r.success, false);
+  });
+});
+
+describe("probeEndpoint", () => {
+  // Every seam is injected, so nothing on this machine (env, port files, sockets) is read.
+  const deps = (over: ProbeDeps = {}): ProbeDeps => ({
+    env: {},
+    portFileCandidates: () => Promise.resolve([]),
+    isPortLive: () => Promise.resolve(false),
+    liveWsUrl: () => Promise.resolve(null),
+    fallbackPorts: () => [9222],
+    ...over,
+  });
+
+  test("a BU_CDP_WS override is returned without touching the network", async () => {
+    let probed = false;
+    const r = await probeEndpoint(deps({
+      env: { BU_CDP_WS: "ws://example.test/devtools/browser/abc" },
+      isPortLive: () => { probed = true; return Promise.resolve(true); },
+    }));
+    assert.deepEqual(r, { wsUrl: "ws://example.test/devtools/browser/abc" });
+    assert.equal(probed, false);
+  });
+
+  test("a live port-file candidate wins and carries its user-data-dir", async () => {
+    const r = await probeEndpoint(deps({
+      portFileCandidates: () => Promise.resolve([
+        { port: 5001, path: "/devtools/browser/stale", mtimeMs: 2, userDataDir: "/udd/stale" },
+        { port: 5002, path: "/devtools/browser/live", mtimeMs: 1, userDataDir: "/udd/live" },
+      ]),
+      isPortLive: (port) => Promise.resolve(port === 5002),
+    }));
+    assert.deepEqual(r, { wsUrl: "ws://127.0.0.1:5002/devtools/browser/live", userDataDir: "/udd/live" });
+  });
+
+  test("the browser's own /json/version url is preferred over the port file's path", async () => {
+    const r = await probeEndpoint(deps({
+      portFileCandidates: () => Promise.resolve([{ port: 5002, path: "/devtools/browser/old", mtimeMs: 1, userDataDir: "/udd" }]),
+      isPortLive: () => Promise.resolve(true),
+      liveWsUrl: () => Promise.resolve("ws://127.0.0.1:5002/devtools/browser/current"),
+    }));
+    assert.deepEqual(r, { wsUrl: "ws://127.0.0.1:5002/devtools/browser/current", userDataDir: "/udd" });
+  });
+
+  test("with no live port file, an answering fallback port is an endpoint with no user-data-dir", async () => {
+    const r = await probeEndpoint(deps({
+      portFileCandidates: () => Promise.resolve([{ port: 5001, path: "/devtools/browser/stale", mtimeMs: 1, userDataDir: "/udd" }]),
+      isPortLive: (port) => Promise.resolve(port === 9222),
+      liveWsUrl: (port) => Promise.resolve(port === 9222 ? "ws://127.0.0.1:9222/devtools/browser/remote" : null),
+    }));
+    assert.deepEqual(r, { wsUrl: "ws://127.0.0.1:9222/devtools/browser/remote" });
+  });
+
+  test("a fallback port that is open but does not speak DevTools is not an endpoint", async () => {
+    const r = await probeEndpoint(deps({ isPortLive: () => Promise.resolve(true) }));
+    assert.equal(r, undefined);
+  });
+
+  test("nothing live yields undefined", async () => {
+    assert.equal(await probeEndpoint(deps()), undefined);
   });
 });

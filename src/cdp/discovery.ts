@@ -131,26 +131,23 @@ const fallbackPorts = (): ReadonlyArray<number> => {
   return Array.from(ports);
 };
 
-type Candidate = {
+export type PortFileCandidate = {
   readonly port: number;
   readonly path: string;
   readonly mtimeMs: number;
   readonly userDataDir: string;
 };
 
-// Read here rather than in the client: the daemon owns the only socket to Chrome, so an override the daemon cannot see has no effect.
-export const endpointFromEnv = (env: NodeJS.ProcessEnv = process.env): CdpEndpoint | undefined => {
-  const wsUrl = env["BU_CDP_WS"]?.trim();
-  return wsUrl ? { wsUrl } : undefined;
+type PortFileScan = {
+  readonly dirs: ReadonlyArray<string>;
+  readonly candidates: ReadonlyArray<PortFileCandidate>;
+  readonly readErrors: ReadonlyArray<string>;
 };
 
-export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
-  const override = endpointFromEnv();
-  if (override) return ok(override);
-
+// Every DevToolsActivePort file a browser on THIS machine has written. A candidate is only a claim: the file outlives the browser, so its port still has to be probed.
+const readPortFileCandidates = async (): Promise<Result<PortFileScan, CdpError>> => {
   const dirs = userDataDirCandidates();
-
-  const candidates: Candidate[] = [];
+  const candidates: PortFileCandidate[] = [];
   const readErrors: string[] = [];
   for (const base of dirs) {
     const portFile = join(base, "DevToolsActivePort");
@@ -183,6 +180,22 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     if (!Number.isInteger(portNum) || portNum <= 0 || portNum >= 65536) continue;
     candidates.push({ port: portNum, path, mtimeMs, userDataDir: base });
   }
+  return ok({ dirs, candidates, readErrors });
+};
+
+// Read here rather than in the client: the daemon owns the only socket to Chrome, so an override the daemon cannot see has no effect.
+export const endpointFromEnv = (env: NodeJS.ProcessEnv = process.env): CdpEndpoint | undefined => {
+  const wsUrl = env["BU_CDP_WS"]?.trim();
+  return wsUrl ? { wsUrl } : undefined;
+};
+
+export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
+  const override = endpointFromEnv();
+  if (override) return ok(override);
+
+  const scan = await readPortFileCandidates();
+  if (!scan.success) return scan;
+  const { dirs, candidates, readErrors } = scan.data;
 
   if (candidates.length === 0) {
     for (const port of fallbackPorts()) {
@@ -199,7 +212,7 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
     ));
   }
 
-  const byPort = new Map<number, Candidate>();
+  const byPort = new Map<number, PortFileCandidate>();
   for (const c of candidates) {
     const prev = byPort.get(c.port);
     if (!prev || c.mtimeMs > prev.mtimeMs) byPort.set(c.port, c);
@@ -225,6 +238,43 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   }
 
   return err(ready.error);
+};
+
+export type ProbeDeps = {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly portFileCandidates?: () => Promise<ReadonlyArray<PortFileCandidate>>;
+  readonly isPortLive?: (port: number) => Promise<boolean>;
+  readonly liveWsUrl?: (port: number) => Promise<string | null>;
+  readonly fallbackPorts?: () => ReadonlyArray<number>;
+};
+
+// "Is a DevTools endpoint reachable right now?", answered in one pass of about a second. Unlike discoverEndpoint it never waits for a browser to come up, so "nothing there" is a fast answer rather than a 30s one.
+export const probeEndpoint = async (deps: ProbeDeps = {}): Promise<CdpEndpoint | undefined> => {
+  // An explicit endpoint is the user's statement of where the browser is; whether it answers is for the connection to report.
+  const override = endpointFromEnv(deps.env ?? process.env);
+  if (override) return override;
+
+  const live = deps.isPortLive ?? isPortLive;
+  const wsUrlOf = deps.liveWsUrl ?? queryLiveWsUrl;
+  const candidates = deps.portFileCandidates
+    ? await deps.portFileCandidates()
+    : await readPortFileCandidates().then((scan) => (scan.success ? scan.data.candidates : []));
+
+  const liveChecks = await Promise.all(candidates.map((c) => live(c.port)));
+  const liveCandidates = candidates.filter((_, i) => liveChecks[i]).sort((x, y) => y.mtimeMs - x.mtimeMs);
+  const fromFile = liveCandidates[0];
+  if (fromFile) {
+    const liveUrl = await wsUrlOf(fromFile.port);
+    return { wsUrl: liveUrl ?? `ws://127.0.0.1:${fromFile.port}${fromFile.path}`, userDataDir: fromFile.userDataDir };
+  }
+
+  // A bare open port proves nothing: only one that answers /json/version is a browser.
+  for (const port of (deps.fallbackPorts ?? fallbackPorts)()) {
+    if (!(await live(port))) continue;
+    const liveUrl = await wsUrlOf(port);
+    if (liveUrl) return { wsUrl: liveUrl };
+  }
+  return undefined;
 };
 
 export const discoverWsUrl = async (): Promise<Result<string, CdpError>> => {

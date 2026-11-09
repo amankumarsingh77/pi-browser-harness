@@ -456,7 +456,7 @@ listed with each.
 |---|---|
 | `--browser-namespace <name>` | Override the session namespace (default: auto-generated). |
 | `--browser-debug-clicks` | Save annotated click screenshots for debugging. Equivalent to `BH_DEBUG_CLICKS=1`. |
-| `BU_CDP_WS` | Attach to a remote browser by WebSocket URL instead of discovering a local one. The daemon reads this when it starts, so stop a running daemon first. |
+| `BU_CDP_WS` | Attach to a browser by WebSocket URL instead of discovering one. The daemon reads this when it starts, so stop a running daemon first. |
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
@@ -501,12 +501,28 @@ rather than being copied into the browser prompt.
 
 ---
 
+### Browser on another machine
+
+The browser does not have to run on the machine pi runs on. `/browser-setup` connects to any DevTools
+endpoint it can reach, which covers pi in WSL2 driving a browser on the Windows host, a browser behind
+an SSH tunnel, and a browser in a container.
+
+- **Port on loopback.** Make the browser's DevTools port answer on `127.0.0.1:9222` where pi runs
+  (WSL2 mirrors the Windows host's localhost; for SSH use `-L 9222:127.0.0.1:9222`). Setup finds it
+  with no configuration. Add other ports with `BU_CDP_PORTS`.
+- **Explicit endpoint.** Set `BU_CDP_WS` to the browser's WebSocket URL (the `webSocketDebuggerUrl`
+  from `http://<host>:<port>/json/version`).
+
+`BU_CDP_WS` and `BU_CDP_PORTS` are the only endpoint variables read. Profile selection
+(`/browser-profile`) is unavailable for a browser on another machine, because its profiles are on
+that machine's disk; the agent works in whichever window is focused.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `DevToolsActivePort not found` | Open `chrome://inspect/#remote-debugging`, tick **Discover network targets**, click **Allow**. Or relaunch with `--remote-debugging-port=9222`. |
-| `No browser instance running` | Chrome/Brave/Edge isn't open, or only helper processes remain. Open the browser, then `/browser-setup`. |
+| `No browser found` | No browser process on this machine and nothing answering on the DevTools port. Open Chrome/Brave/Edge, then `/browser-setup`. For a browser on another machine, see [Browser on another machine](#browser-on-another-machine). |
 | `Browser harness not initialized` | Run `/browser-setup` — or let the agent call `browser_setup` itself. |
 | `ref is stale` | The page re-rendered. Re-run `browser_snapshot` for fresh refs. |
 | Page looks loaded but content is missing | SPA still rendering. Use `browser_wait_for({ selector })`, not a fixed sleep. |

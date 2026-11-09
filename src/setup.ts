@@ -2,13 +2,13 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import type { BrowserClient } from "./client";
 import { ensureDaemon } from "./daemon/spawn";
 import { DAEMON_SOCKET_PATH } from "./daemon/protocol";
-import { isBrowserRunning } from "./profile/browser-process";
+import { type BrowserLocation, locateBrowser } from "./browser-location";
 import { promptForProfileIfUnset } from "./profile/command";
 import { type Result, err, ok } from "./util/result";
 
 // The machine probes setup runs before touching the client. Each defaults to the real implementation.
 export type SetupDeps = {
-  readonly isBrowserRunning?: () => Promise<boolean>;
+  readonly locateBrowser?: () => Promise<BrowserLocation>;
   readonly ensureDaemon?: () => Promise<boolean>;
 };
 
@@ -33,9 +33,14 @@ export async function performSetup(
   ctx?: ExtensionContext,
   deps: SetupDeps = {},
 ): Promise<SetupResult> {
-  const chromeRunning = await (deps.isBrowserRunning ?? isBrowserRunning)();
-  if (!chromeRunning) {
-    return err("No browser instance running. Please open your browser and then run /browser-setup.");
+  // Reachability decides whether setup can proceed; a browser process on this machine is not required (it may sit behind a tunnel, on the Windows host of a WSL session, or in a container).
+  const location = await (deps.locateBrowser ?? locateBrowser)();
+  if (location.kind === "none") {
+    return err(
+      "No browser found. Open your browser and run /browser-setup.\n\n" +
+        "If the browser runs on another machine (the Windows host from WSL, an SSH tunnel, a container),\n" +
+        "make its DevTools port reachable on 127.0.0.1:9222 or set BU_CDP_WS to its WebSocket URL.",
+    );
   }
 
   const daemonReady = await (deps.ensureDaemon ?? ensureDaemon)();
@@ -43,7 +48,10 @@ export async function performSetup(
     return err(`Could not start the browser daemon. Check ${DAEMON_SOCKET_PATH}.`);
   }
 
-  const profileNote = await promptForProfileIfUnset(client, ctx);
+  // Profiles live on the browser's own disk, so there is nothing to list or pin for a remote one.
+  const profileNote = location.kind === "remote"
+    ? "Remote browser: profile selection is unavailable, using whichever window is focused."
+    : await promptForProfileIfUnset(client, ctx);
 
   const startResult = await client.start({ reconnectNow: true });
   if (!startResult.success) {

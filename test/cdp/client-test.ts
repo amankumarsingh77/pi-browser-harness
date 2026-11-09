@@ -135,3 +135,52 @@ describe("BrowserClient.closeTab", () => {
     assert.equal(client.owns("t1"), true);
   });
 });
+
+describe("BrowserClient profile pin against a remote browser", () => {
+  const PIN = { userDataDir: "/home/u/.config/google-chrome", profileDir: "Default", label: "Alice", savedAt: "" };
+
+  // No `remote` option, so start() runs the injected discovery; no pin is set before start(), so nothing is seeded.
+  const discovered = async (opts: { readonly userDataDir?: string; readonly running: boolean }) => {
+    const stub = createStubTransport({
+      "Target.setDiscoverTargets": ok({}),
+      "Target.getTargets": ok({ targetInfos: [{ targetId: "t1", type: "page", title: "One", url: "https://one.test/" }] }),
+      "Target.attachToTarget": ok({ sessionId: "s1" }),
+      "Browser.getWindowForTarget": ok({ windowId: 7 }),
+      "Target.activateTarget": ok({}),
+      "Runtime.evaluate": ok({ result: { type: "string", value: PAGE_JSON } }),
+    });
+    const client = createBrowserClient({
+      namespace: "test",
+      transport: stub.transport,
+      initialOwnership: { ownedTargetIds: ["t1"] },
+      discoverEndpoint: () => Promise.resolve(ok({
+        wsUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+        ...(opts.userDataDir === undefined ? {} : { userDataDir: opts.userDataDir }),
+      })),
+      isBrowserRunning: () => Promise.resolve(opts.running),
+    });
+    const r = await client.start();
+    assert.equal(r.success, true);
+    return client;
+  };
+
+  test("an endpoint with no user-data-dir and no local browser process suspends the pin", async () => {
+    const client = await discovered({ running: false });
+    client.setProfilePin(PIN);
+    assert.equal(client.profilePin(), null);
+    const seeded = await client.seedPinnedProfileWindow();
+    assert.equal(seeded.success, false);
+  });
+
+  test("an endpoint with no user-data-dir but a local browser process keeps the pin", async () => {
+    const client = await discovered({ running: true });
+    client.setProfilePin(PIN);
+    assert.deepEqual(client.profilePin(), PIN);
+  });
+
+  test("an endpoint from a local port file keeps the pin without asking about processes", async () => {
+    const client = await discovered({ userDataDir: PIN.userDataDir, running: false });
+    client.setProfilePin(PIN);
+    assert.deepEqual(client.profilePin(), PIN);
+  });
+});
