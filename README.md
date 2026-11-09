@@ -501,6 +501,19 @@ rather than being copied into the browser prompt.
 
 ---
 
+### When the browser is closed
+
+If no browser is running, `/browser-setup` can open one for you:
+
+- **Interactive session.** Setup asks "Open Chrome?" first. Your windows and tabs come back as you left them.
+- **No UI (print mode, CI).** Setup opens the browser without asking only when a profile is pinned
+  (`/browser-profile`), because the pin already says which browser and profile to use.
+
+Setup never opens a browser when `BU_CDP_WS` is set, when a Linux session has no display, or when
+several browsers are installed and no profile is pinned (it will not guess). Opening the browser does
+not turn remote debugging on: if you have never enabled it, setup opens the browser and then shows
+the usual `chrome://inspect/#remote-debugging` instructions.
+
 ### Browser on another machine
 
 The browser does not have to run on the machine pi runs on. `/browser-setup` connects to any DevTools
@@ -522,7 +535,8 @@ that machine's disk; the agent works in whichever window is focused.
 | Symptom | Fix |
 |---|---|
 | `DevToolsActivePort not found` | Open `chrome://inspect/#remote-debugging`, tick **Discover network targets**, click **Allow**. Or relaunch with `--remote-debugging-port=9222`. |
-| `No browser found` | No browser process on this machine and nothing answering on the DevTools port. Open Chrome/Brave/Edge, then `/browser-setup`. For a browser on another machine, see [Browser on another machine](#browser-on-another-machine). |
+| `No browser found` | No browser process on this machine and nothing answering on the DevTools port. Open Chrome/Brave/Edge, then `/browser-setup`. For a browser on another machine, see [Browser on another machine](#browser-on-another-machine). Setup offers to open a closed browser itself; see [When the browser is closed](#when-the-browser-is-closed) for when it does not. |
+| `Opened <browser>, but it did not start` | Setup launched the browser but nothing came up within 15s (often no display). Open it yourself, then `/browser-setup`. |
 | `Browser harness not initialized` | Run `/browser-setup` — or let the agent call `browser_setup` itself. |
 | `ref is stale` | The page re-rendered. Re-run `browser_snapshot` for fresh refs. |
 | Page looks loaded but content is missing | SPA still rendering. Use `browser_wait_for({ selector })`, not a fixed sleep. |

@@ -25,6 +25,27 @@ const SENTINEL_HTML = (token: string): string =>
   `<!doctype html><meta charset="utf-8"><title>${token}</title>` +
   `<body style="font:14px system-ui;padding:2rem;color:#555">pi browser harness — opening this profile…</body>`;
 
+// Starts the browser detached from pi, so it outlives the session that opened it.
+const spawnDetached = async (exePath: string, args: ReadonlyArray<string>): Promise<Result<ChildProcess, string>> => {
+  let child: ChildProcess;
+  try {
+    child = spawn(exePath, [...args], { detached: true, stdio: "ignore" });
+  } catch (e) {
+    return err(`could not launch ${exePath}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // spawn() reports a bad binary asynchronously as an 'error' event rather than throwing; unhandled, an ENOENT looked like the 15s sentinel timeout.
+  const spawnFailure = await new Promise<string | undefined>((resolve) => {
+    child.once("spawn", () => { resolve(undefined); });
+    child.once("error", (e: Error) => { resolve(e.message); });
+  });
+  // A later 'error' event with no listener would throw, so keep one attached for the detached launcher's lifetime.
+  child.on("error", () => undefined);
+  child.unref();
+
+  return spawnFailure ? err(`could not launch ${exePath}: ${spawnFailure}`) : ok(child);
+};
+
 export const openProfileWindow = async (
   req: ProfileWindowRequest,
 ): Promise<Result<ProfileWindowHandle, string>> => {
@@ -43,29 +64,13 @@ export const openProfileWindow = async (
 
   const discardSentinel = (): Promise<void> => rm(file, { force: true }).catch(() => undefined);
 
-  let child: ChildProcess;
-  try {
-    child = spawn(req.exePath, args, { detached: true, stdio: "ignore" });
-  } catch (e) {
+  const spawned = await spawnDetached(req.exePath, args);
+  if (!spawned.success) {
     await discardSentinel();
-    return err(`could not launch ${req.exePath}: ${e instanceof Error ? e.message : String(e)}`);
+    return spawned;
   }
 
-  // spawn() reports a bad binary asynchronously as an 'error' event rather than throwing; unhandled, an ENOENT looked like the 15s sentinel timeout.
-  const spawnFailure = await new Promise<string | undefined>((resolve) => {
-    child.once("spawn", () => { resolve(undefined); });
-    child.once("error", (e: Error) => { resolve(e.message); });
-  });
-  // A later 'error' event with no listener would throw, so keep one attached for the detached launcher's lifetime.
-  child.on("error", () => undefined);
-  child.unref();
-
-  if (spawnFailure) {
-    await discardSentinel();
-    return err(`could not launch ${req.exePath}: ${spawnFailure}`);
-  }
-
-  let live: ChildProcess | null = child;
+  let live: ChildProcess | null = spawned.data;
 
   return ok({
     sentinelUrl,
@@ -81,4 +86,18 @@ export const openProfileWindow = async (
       }
     },
   });
+};
+
+export type BrowserLaunchRequest = {
+  readonly exePath: string;
+  readonly profileDir?: string;
+};
+
+export const browserLaunchArgs = (req: BrowserLaunchRequest): ReadonlyArray<string> =>
+  req.profileDir === undefined ? [] : [`--profile-directory=${req.profileDir}`];
+
+// Opens a browser that is not running. No --user-data-dir and no debugging flag: it starts as the user's own browser, with whatever remote-debugging setting they left it in.
+export const launchBrowser = async (req: BrowserLaunchRequest): Promise<Result<void, string>> => {
+  const spawned = await spawnDetached(req.exePath, browserLaunchArgs(req));
+  return spawned.success ? ok(undefined) : spawned;
 };
