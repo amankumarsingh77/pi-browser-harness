@@ -5,7 +5,7 @@ import { parseJson } from "./schemas/parse";
 import { type Result, err, ok } from "./util/result";
 import { safeJs } from "./util/js-template";
 import { type Mutex, createMutex } from "./util/mutex";
-import { type CdpEndpoint, discoverEndpoint } from "./cdp/discovery";
+import { type CdpEndpoint, discoverEndpoint, isLoopbackWsUrl } from "./cdp/discovery";
 import { isBrowserRunning } from "./profile/browser-process";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/types";
@@ -177,8 +177,8 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       if (!discovered.success) return discovered;
       wsUrl = discovered.data.wsUrl;
       userDataDir = discovered.data.userDataDir;
-      // No user-data-dir means the endpoint did not come from a port file here; with no local browser process either, the browser is remote.
-      pinSuspended = userDataDir === undefined && !(await localBrowserRunning());
+      // No user-data-dir means the endpoint did not come from a port file here. It is remote if it names another host, or if no browser process runs on this machine either.
+      pinSuspended = userDataDir === undefined && (!isLoopbackWsUrl(wsUrl) || !(await localBrowserRunning()));
     }
     const connected = await transport.connect(wsUrl, { timeoutMs: 10_000 });
     if (!connected.success) return connected;

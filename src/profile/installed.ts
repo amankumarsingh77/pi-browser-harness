@@ -72,12 +72,16 @@ export const installedBrowsers = async (deps: InstalledBrowsersDeps = {}): Promi
   return Array.from(found.values());
 };
 
+const PRERELEASE_DIR = /beta|unstable|canary|nightly|sxs|[-\s]dev\b/i;
+
 // A pinned profile names its browser. Without one there is a choice only when a single browser is installed: guessing among several could open the wrong one.
 export const chooseBrowserToLaunch = (
   installed: ReadonlyArray<InstalledBrowser>,
   pinnedUserDataDir?: string,
 ): InstalledBrowser | undefined => {
   if (pinnedUserDataDir !== undefined) {
+    // Only stable builds are looked up, and each channel keeps its own profile store: opening stable Chrome for a Chrome Beta pin would land in a different one.
+    if (PRERELEASE_DIR.test(pinnedUserDataDir)) return undefined;
     const family = browserNameForUserDataDir(pinnedUserDataDir);
     return installed.find((b) => b.family === family);
   }

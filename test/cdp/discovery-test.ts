@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { endpointFromEnv, firstReadyPort, parseVersionResponse, probeEndpoint, type PortProbe, type ProbeDeps } from "../../src/cdp/discovery";
+import { discoverEndpoint, endpointFromEnv, firstReadyPort, isLoopbackWsUrl, parseVersionResponse, probeEndpoint, type PortProbe, type ProbeDeps } from "../../src/cdp/discovery";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
 
@@ -144,5 +144,46 @@ describe("probeEndpoint", () => {
 
   test("nothing live yields undefined", async () => {
     assert.equal(await probeEndpoint(deps()), undefined);
+  });
+});
+
+describe("discoverEndpoint with a stale port file", () => {
+  test("a browser answering on a fallback port is used at once instead of after the stale file's full deadline", async () => {
+    const begun = Date.now();
+    const r = await discoverEndpoint({
+      env: {},
+      portFileCandidates: () => Promise.resolve([{ port: 5001, path: "/devtools/browser/stale", mtimeMs: 1, userDataDir: "/udd" }]),
+      isPortLive: (port) => Promise.resolve(port === 9222),
+      liveWsUrl: (port) => Promise.resolve(port === 9222 ? "ws://127.0.0.1:9222/devtools/browser/remote" : null),
+      fallbackPorts: () => [9222],
+      deadlineMs: 5_000,
+    });
+    assert.ok(r.success);
+    assert.deepEqual(r.data, { wsUrl: "ws://127.0.0.1:9222/devtools/browser/remote" });
+    assert.ok(Date.now() - begun < 1_000, "did not wait on the stale candidate");
+  });
+
+  test("a live port-file candidate still wins over a fallback port", async () => {
+    const r = await discoverEndpoint({
+      env: {},
+      portFileCandidates: () => Promise.resolve([{ port: 5002, path: "/devtools/browser/live", mtimeMs: 1, userDataDir: "/udd" }]),
+      isPortLive: () => Promise.resolve(true),
+      liveWsUrl: (port) => Promise.resolve(port === 9222 ? "ws://127.0.0.1:9222/devtools/browser/other" : null),
+      fallbackPorts: () => [9222],
+      probe: () => Promise.resolve(ok(undefined)),
+    });
+    assert.ok(r.success);
+    assert.deepEqual(r.data, { wsUrl: "ws://127.0.0.1:5002/devtools/browser/live", userDataDir: "/udd" });
+  });
+});
+
+describe("isLoopbackWsUrl", () => {
+  test("127.0.0.0/8, localhost and ::1 are this machine; anything else, or not a URL, is not", () => {
+    for (const url of ["ws://127.0.0.1:9222/x", "ws://127.4.5.6/x", "ws://localhost:9222/x", "wss://LOCALHOST/x", "ws://[::1]:9222/x"]) {
+      assert.equal(isLoopbackWsUrl(url), true, url);
+    }
+    for (const url of ["ws://example.test/x", "ws://192.168.1.5:9222/x", "ws://127.evil.test/x", "not a url", ""]) {
+      assert.equal(isLoopbackWsUrl(url), false, url);
+    }
   });
 });

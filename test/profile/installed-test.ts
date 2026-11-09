@@ -70,6 +70,19 @@ describe("chooseBrowserToLaunch", () => {
     assert.equal(chooseBrowserToLaunch([chrome], "/home/u/.config/BraveSoftware/Brave-Browser"), undefined);
   });
 
+  test("a pin in a beta, dev or canary build's directory chooses nothing: the stable build would open a different profile store", () => {
+    for (const dir of [
+      "/home/u/.config/google-chrome-beta",
+      "/home/u/.config/google-chrome-unstable",
+      "/Users/u/Library/Application Support/Google/Chrome Canary",
+      "C:\\Users\\u\\AppData\\Local\\Google\\Chrome SxS\\User Data",
+      "/home/u/.config/BraveSoftware/Brave-Browser-Nightly",
+      "/home/u/.config/microsoft-edge-dev",
+    ]) {
+      assert.equal(chooseBrowserToLaunch([chrome, brave, { family: "Edge", exePath: "/usr/bin/microsoft-edge" }], dir), undefined, dir);
+    }
+  });
+
   test("nothing installed chooses nothing", () => {
     assert.equal(chooseBrowserToLaunch([]), undefined);
   });

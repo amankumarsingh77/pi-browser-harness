@@ -520,9 +520,12 @@ The browser does not have to run on the machine pi runs on. `/browser-setup` con
 endpoint it can reach, which covers pi in WSL2 driving a browser on the Windows host, a browser behind
 an SSH tunnel, and a browser in a container.
 
-- **Port on loopback.** Make the browser's DevTools port answer on `127.0.0.1:9222` where pi runs
-  (WSL2 mirrors the Windows host's localhost; for SSH use `-L 9222:127.0.0.1:9222`). Setup finds it
-  with no configuration. Add other ports with `BU_CDP_PORTS`.
+- **Port on loopback.** Make the browser's DevTools port answer on `127.0.0.1:9222` where pi runs.
+  Setup finds it with no configuration; add other ports with `BU_CDP_PORTS`.
+  - SSH: forward the port with `-L 9222:127.0.0.1:9222`.
+  - WSL2: the Windows host's localhost is reachable from WSL only with mirrored networking
+    (`networkingMode=mirrored` in `.wslconfig`). With the default NAT networking, forward the port
+    yourself or use `BU_CDP_WS`. Check with `curl http://127.0.0.1:9222/json/version` from WSL.
 - **Explicit endpoint.** Set `BU_CDP_WS` to the browser's WebSocket URL (the `webSocketDebuggerUrl`
   from `http://<host>:<port>/json/version`).
 

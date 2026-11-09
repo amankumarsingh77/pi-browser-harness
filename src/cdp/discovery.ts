@@ -189,19 +189,50 @@ export const endpointFromEnv = (env: NodeJS.ProcessEnv = process.env): CdpEndpoi
   return wsUrl ? { wsUrl } : undefined;
 };
 
-export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>> => {
-  const override = endpointFromEnv();
+// Whether an endpoint is on this machine's loopback. A tunnel or port mirror also ends on loopback, so true means "possibly local", while false is a definite "not this machine".
+export const isLoopbackWsUrl = (wsUrl: string): boolean => {
+  let host: string;
+  try {
+    host = new URL(wsUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return host === "localhost" || host === "[::1]" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
+};
+
+export type ProbeDeps = {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly portFileCandidates?: () => Promise<ReadonlyArray<PortFileCandidate>>;
+  readonly isPortLive?: (port: number) => Promise<boolean>;
+  readonly liveWsUrl?: (port: number) => Promise<string | null>;
+  readonly fallbackPorts?: () => ReadonlyArray<number>;
+};
+
+export type DiscoverDeps = ProbeDeps & PortRaceOptions;
+
+export const discoverEndpoint = async (deps: DiscoverDeps = {}): Promise<Result<CdpEndpoint, CdpError>> => {
+  const override = endpointFromEnv(deps.env ?? process.env);
   if (override) return ok(override);
 
-  const scan = await readPortFileCandidates();
-  if (!scan.success) return scan;
-  const { dirs, candidates, readErrors } = scan.data;
+  const live = deps.isPortLive ?? isPortLive;
+  const wsUrlOf = deps.liveWsUrl ?? queryLiveWsUrl;
+  const fallbacks = deps.fallbackPorts ?? fallbackPorts;
+
+  let scan: PortFileScan;
+  if (deps.portFileCandidates) {
+    scan = { dirs: [], candidates: await deps.portFileCandidates(), readErrors: [] };
+  } else {
+    const read = await readPortFileCandidates();
+    if (!read.success) return read;
+    scan = read.data;
+  }
+  const { dirs, candidates, readErrors } = scan;
 
   if (candidates.length === 0) {
-    for (const port of fallbackPorts()) {
-      if (!(await isPortLive(port))) continue;
-      const live = await queryLiveWsUrl(port);
-      if (live) return ok({ wsUrl: live });
+    for (const port of fallbacks()) {
+      if (!(await live(port))) continue;
+      const liveUrl = await wsUrlOf(port);
+      if (liveUrl) return ok({ wsUrl: liveUrl });
     }
     const permHint = readErrors.length > 0
       ? `\n\nDevToolsActivePort reads were denied (${readErrors.join(", ")}); if you're running in a sandbox, grant read access to those files or set BU_CDP_WS / BU_CDP_PORTS to bypass file discovery.`
@@ -219,33 +250,34 @@ export const discoverEndpoint = async (): Promise<Result<CdpEndpoint, CdpError>>
   }
   const unique = Array.from(byPort.values());
 
-  const liveChecks = await Promise.all(unique.map((c) => isPortLive(c.port)));
+  const liveChecks = await Promise.all(unique.map((c) => live(c.port)));
   const liveCandidates = unique.filter((_, i) => liveChecks[i]);
   const ordered = liveCandidates.length > 0 ? liveCandidates : unique;
 
   // Some browsers disable the /json/version endpoint when remote debugging is toggled via chrome://inspect rather than a launch flag, hence the DevToolsActivePort fallback.
-  const ready = await firstReadyPort(ordered);
+  // Every port file is stale (its browser has closed). A browser answering on a fallback port right now, such as a tunnelled one, should not wait out the stale files' deadline.
+  if (liveCandidates.length === 0) {
+    for (const port of fallbacks()) {
+      if (byPort.has(port) || !(await live(port))) continue;
+      const liveUrl = await wsUrlOf(port);
+      if (liveUrl) return ok({ wsUrl: liveUrl });
+    }
+  }
+
+  const ready = await firstReadyPort(ordered, deps);
   if (ready.success) {
     const c = ready.data;
-    const liveUrl = await queryLiveWsUrl(c.port);
+    const liveUrl = await wsUrlOf(c.port);
     return ok({ wsUrl: liveUrl ?? `ws://127.0.0.1:${c.port}${c.path}`, userDataDir: c.userDataDir });
   }
 
-  for (const port of fallbackPorts()) {
-    if (byPort.has(port) || !(await isPortLive(port))) continue;
-    const liveUrl = await queryLiveWsUrl(port);
+  for (const port of fallbacks()) {
+    if (byPort.has(port) || !(await live(port))) continue;
+    const liveUrl = await wsUrlOf(port);
     if (liveUrl) return ok({ wsUrl: liveUrl });
   }
 
   return err(ready.error);
-};
-
-export type ProbeDeps = {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly portFileCandidates?: () => Promise<ReadonlyArray<PortFileCandidate>>;
-  readonly isPortLive?: (port: number) => Promise<boolean>;
-  readonly liveWsUrl?: (port: number) => Promise<string | null>;
-  readonly fallbackPorts?: () => ReadonlyArray<number>;
 };
 
 // "Is a DevTools endpoint reachable right now?", answered in one pass of about a second. Unlike discoverEndpoint it never waits for a browser to come up, so "nothing there" is a fast answer rather than a 30s one.

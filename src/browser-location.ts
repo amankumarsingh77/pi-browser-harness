@@ -1,4 +1,4 @@
-import { type CdpEndpoint, endpointFromEnv, probeEndpoint } from "./cdp/discovery";
+import { type CdpEndpoint, endpointFromEnv, isLoopbackWsUrl, probeEndpoint } from "./cdp/discovery";
 import { isBrowserRunning } from "./profile/browser-process";
 
 // Where the browser is, decided once. A reachable DevTools endpoint is what makes a browser usable;
@@ -19,9 +19,12 @@ export type LocateDeps = {
 export const locateBrowser = async (deps: LocateDeps = {}): Promise<BrowserLocation> => {
   const running = deps.isBrowserRunning ?? isBrowserRunning;
 
-  // BU_CDP_WS names the endpoint outright, so nothing is probed. It is commonly set for a browser on this machine too, hence the process check.
+  // BU_CDP_WS names the endpoint outright, so nothing is probed. Another host is remote whatever runs here; on loopback it is commonly this machine's own browser, hence the process check.
   const override = endpointFromEnv(deps.env ?? process.env);
-  if (override) return (await running()) ? { kind: "local", endpoint: override } : { kind: "remote", endpoint: override };
+  if (override) {
+    const local = isLoopbackWsUrl(override.wsUrl) && (await running());
+    return local ? { kind: "local", endpoint: override } : { kind: "remote", endpoint: override };
+  }
 
   const [endpoint, isRunning] = await Promise.all([(deps.probeEndpoint ?? probeEndpoint)(), running()]);
   if (!endpoint) return isRunning ? { kind: "local" } : { kind: "none" };

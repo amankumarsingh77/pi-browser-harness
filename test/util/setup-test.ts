@@ -235,16 +235,20 @@ describe("performSetup with a closed local browser", () => {
     readonly after?: ReadonlyArray<BrowserLocation>;
     readonly launchError?: string;
     readonly display?: boolean;
+    readonly lookupMs?: number;
   }) => {
     const launches: BrowserLaunchRequest[] = [];
     const after = opts.after ?? [UP];
     let asked = 0;
+    // A clock that only sleeping (and, when asked, a slow lookup) moves, so waits are exact and instant.
+    let clock = 0;
     const deps: SetupDeps = {
+      now: () => clock,
       ensureDaemon: () => Promise.resolve(true),
       readPin: () => Promise.resolve(null),
       installedBrowsers: () => Promise.resolve(opts.installed),
       canShowWindow: () => opts.display ?? true,
-      sleep: () => Promise.resolve(),
+      sleep: (ms) => { clock += ms; return Promise.resolve(); },
       launchBrowser: (req) => {
         launches.push(req);
         return Promise.resolve(opts.launchError === undefined ? ok(undefined) : err(opts.launchError));
@@ -252,10 +256,11 @@ describe("performSetup with a closed local browser", () => {
       locateBrowser: () => {
         const answer: BrowserLocation = asked === 0 ? { kind: "none" } : after[Math.min(asked - 1, after.length - 1)] ?? { kind: "none" };
         asked++;
+        clock += opts.lookupMs ?? 0;
         return Promise.resolve(answer);
       },
     };
-    return { deps, launches };
+    return { deps, launches, lookups: () => asked - 1, elapsed: () => clock };
   };
 
   let agentDir: string;
@@ -376,19 +381,25 @@ describe("performSetup with a closed local browser", () => {
     assert.equal(c.started(), 0);
   });
 
-  test("an opened browser with remote debugging off stops waiting early and gets the enable-debugging hint", async () => {
+  test("an opened browser with remote debugging off stops waiting after the grace period and gets the enable-debugging hint", async () => {
     const c = await setupClient({ startError: "DevToolsActivePort not found" });
-    let polls = 0;
-    const { deps } = closed({ installed: [CHROME], after: [{ kind: "local" }] });
-    const r = await performSetup(c.client, fakeCtx({ hasUI: false }).ctx, {
-      ...deps,
-      sleep: () => { polls++; return Promise.resolve(); },
-      launchWaitMs: 60_000,
-      launchPollMs: 500,
-    });
+    const { deps, elapsed } = closed({ installed: [CHROME], after: [{ kind: "local" }] });
+    const r = await performSetup(c.client, fakeCtx({ hasUI: false }).ctx, { ...deps, launchWaitMs: 60_000, launchPollMs: 500 });
     assert.equal(r.success, false);
     assert.match(r.error, /^Browser remote debugging needs to be enabled\./);
     assert.equal(c.started(), 1);
-    assert.ok(polls <= 12, `stopped after ${polls} polls instead of the full 120`);
+    assert.ok(elapsed() >= 5_000 && elapsed() <= 6_000, `waited ${elapsed()}ms`);
+  });
+
+  test("the wait is bounded by elapsed time, so slow lookups cannot stretch it", async () => {
+    const c = await setupClient();
+    const { deps, lookups, elapsed } = closed({ installed: [CHROME], after: [{ kind: "none" }], lookupMs: 5_000 });
+    const r = await performSetup(c.client, fakeCtx({ hasUI: false }).ctx, { ...deps, launchWaitMs: 15_000, launchPollMs: 500 });
+    assert.equal(r.success, false);
+    assert.match(r.error, /^Opened Chrome, but it did not start\./);
+    // The lookup that found no browser in the first place also took 5s, before the wait began.
+    const waited = elapsed() - 5_000;
+    assert.ok(lookups() <= 3, `${lookups()} lookups`);
+    assert.ok(waited <= 17_000, `waited ${waited}ms`);
   });
 });

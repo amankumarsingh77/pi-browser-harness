@@ -20,6 +20,7 @@ export type SetupDeps = {
   readonly readPin?: () => Promise<ProfilePin | null>;
   readonly canShowWindow?: () => boolean;
   readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => number;
   readonly launchWaitMs?: number;
   readonly launchPollMs?: number;
 };
@@ -77,18 +78,20 @@ const openClosedBrowser = async (
   });
   if (!launched.success) return err(`Could not open ${browser.family}: ${launched.error}`);
 
+  // Both limits are measured in elapsed time, not poll counts: a lookup scans processes and can itself take seconds.
   const pause = deps.sleep ?? sleep;
+  const now = deps.now ?? Date.now;
   const pollMs = deps.launchPollMs ?? LAUNCH_POLL_MS;
-  const maxPolls = Math.ceil((deps.launchWaitMs ?? LAUNCH_WAIT_MS) / pollMs);
-  const gracePolls = Math.ceil(DEBUGGING_OFF_GRACE_MS / pollMs);
+  const deadline = now() + (deps.launchWaitMs ?? LAUNCH_WAIT_MS);
   let location: BrowserLocation = { kind: "none" };
-  let pollsWithoutEndpoint = 0;
-  for (let i = 0; i < maxPolls; i++) {
+  let upSince: number | undefined;
+  while (now() < deadline) {
     await pause(pollMs);
     location = await (deps.locateBrowser ?? locateBrowser)();
     if (location.kind === "none") continue;
     if (location.endpoint) break;
-    if (++pollsWithoutEndpoint >= gracePolls) break;
+    upSince ??= now();
+    if (now() - upSince >= DEBUGGING_OFF_GRACE_MS) break;
   }
   if (location.kind === "none") {
     return err(`Opened ${browser.family}, but it did not start. Open it yourself, then run /browser-setup.`);

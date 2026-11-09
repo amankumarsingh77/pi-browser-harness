@@ -140,7 +140,7 @@ describe("BrowserClient profile pin against a remote browser", () => {
   const PIN = { userDataDir: "/home/u/.config/google-chrome", profileDir: "Default", label: "Alice", savedAt: "" };
 
   // No `remote` option, so start() runs the injected discovery; no pin is set before start(), so nothing is seeded.
-  const discovered = async (opts: { readonly userDataDir?: string; readonly running: boolean }) => {
+  const discovered = async (opts: { readonly userDataDir?: string; readonly running: boolean; readonly wsUrl?: string }) => {
     const stub = createStubTransport({
       "Target.setDiscoverTargets": ok({}),
       "Target.getTargets": ok({ targetInfos: [{ targetId: "t1", type: "page", title: "One", url: "https://one.test/" }] }),
@@ -154,7 +154,7 @@ describe("BrowserClient profile pin against a remote browser", () => {
       transport: stub.transport,
       initialOwnership: { ownedTargetIds: ["t1"] },
       discoverEndpoint: () => Promise.resolve(ok({
-        wsUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+        wsUrl: opts.wsUrl ?? "ws://127.0.0.1:9222/devtools/browser/abc",
         ...(opts.userDataDir === undefined ? {} : { userDataDir: opts.userDataDir }),
       })),
       isBrowserRunning: () => Promise.resolve(opts.running),
@@ -176,6 +176,12 @@ describe("BrowserClient profile pin against a remote browser", () => {
     const client = await discovered({ running: true });
     client.setProfilePin(PIN);
     assert.deepEqual(client.profilePin(), PIN);
+  });
+
+  test("an endpoint on another host suspends the pin even while an unrelated browser runs here", async () => {
+    const client = await discovered({ running: true, wsUrl: "ws://example.test/devtools/browser/abc" });
+    client.setProfilePin(PIN);
+    assert.equal(client.profilePin(), null);
   });
 
   test("an endpoint from a local port file keeps the pin without asking about processes", async () => {

@@ -20,9 +20,21 @@ describe("locateBrowser", () => {
     assert.deepEqual(r, { kind: "remote", endpoint: { wsUrl: OVERRIDE } });
   });
 
-  test("BU_CDP_WS alongside a local browser process stays local, so profile features keep working", async () => {
+  test("BU_CDP_WS on loopback alongside a local browser process stays local, so profile features keep working", async () => {
+    for (const url of ["ws://127.0.0.1:9222/devtools/browser/abc", "ws://localhost:9222/devtools/browser/abc", "ws://[::1]:9222/devtools/browser/abc"]) {
+      const r = await locateBrowser(deps({ override: url, running: true }));
+      assert.deepEqual(r, { kind: "local", endpoint: { wsUrl: url } }, url);
+    }
+  });
+
+  test("BU_CDP_WS naming another host is remote even while an unrelated browser runs here", async () => {
     const r = await locateBrowser(deps({ override: OVERRIDE, running: true }));
-    assert.deepEqual(r, { kind: "local", endpoint: { wsUrl: OVERRIDE } });
+    assert.deepEqual(r, { kind: "remote", endpoint: { wsUrl: OVERRIDE } });
+  });
+
+  test("a BU_CDP_WS that is not a URL at all is treated as remote, never as this machine's browser", async () => {
+    const r = await locateBrowser(deps({ override: "not a url", running: true }));
+    assert.deepEqual(r, { kind: "remote", endpoint: { wsUrl: "not a url" } });
   });
 
   test("an endpoint found through a port file on this machine is local even when no process was detected", async () => {
