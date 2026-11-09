@@ -2,6 +2,18 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- **`/browser-setup` can open a closed browser.** With no browser running, an interactive setup asks "Open Chrome?" and, on yes, starts it and carries on once its DevTools endpoint answers. Without a UI it opens the browser unasked only when a profile is pinned. It never opens one when `BU_CDP_WS` is set, when a Linux session has no display, when several browsers are installed and none is pinned, or when the pin belongs to a beta, dev or canary build.
+
+### Fixed
+
+- **`/browser-setup` connects to a browser that is not on this machine (#54, #41).** Setup refused with "No browser instance running" unless a browser process existed locally, before it ever tried the DevTools endpoint, so pi in WSL2 with the browser on Windows, a browser behind an SSH tunnel, and `BU_CDP_WS` itself all failed. Setup now decides once where the browser is (`src/browser-location.ts`): a reachable endpoint is enough to proceed, and the local process scan only shapes the error and gates local-only features. With no browser anywhere the error is now "No browser found" and names the remote options.
+- **A saved profile pin no longer breaks a remote browser.** A pin is applied by launching this machine's browser, which failed the connection (or could open a different browser) when the connected one was elsewhere. The pin is suspended, not cleared, while the browser is remote, and `/browser-profile` says profiles can't be listed from here instead of offering another browser's.
+- **A browser on a fallback port no longer waits behind a stale port file.** When every `DevToolsActivePort` file on disk belonged to a browser that had closed, discovery polled those dead ports for 30s before trying port 9222. It now tries the fallback ports first in that case.
+
 ## 0.16.0 — 2026-11-07
 
 ### Added

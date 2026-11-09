@@ -5,7 +5,8 @@ import { parseJson } from "./schemas/parse";
 import { type Result, err, ok } from "./util/result";
 import { safeJs } from "./util/js-template";
 import { type Mutex, createMutex } from "./util/mutex";
-import { discoverEndpoint } from "./cdp/discovery";
+import { type CdpEndpoint, discoverEndpoint, isLoopbackWsUrl } from "./cdp/discovery";
+import { isBrowserRunning } from "./profile/browser-process";
 import { type CdpError, cdpError } from "./cdp/errors";
 import type { CdpTransport } from "./cdp/types";
 import { type CdpSession, createCdpSession } from "./cdp/session";
@@ -42,6 +43,9 @@ export type BrowserClientOptions = {
   readonly profilePin?: ProfilePin | null;
   // How long one close may take to show in Chrome's target list before it is sent again; tests shorten it.
   readonly closeConfirmMs?: number;
+  // How start() finds the browser and decides whether it is on this machine. Each defaults to the real one.
+  readonly discoverEndpoint?: () => Promise<Result<CdpEndpoint, CdpError>>;
+  readonly isBrowserRunning?: () => Promise<boolean>;
   readonly onOwnershipChange?: (snapshot: {
     readonly ownedTargetIds: ReadonlyArray<string>;
     readonly harnessWindowTargetId: string | undefined;
@@ -149,10 +153,15 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
   let userDataDir: string | undefined;
   let profilePin: ProfilePin | null = opts.profilePin ?? null;
   let profileContextId: string | undefined;
+  // A pin names a profile on this machine's disk and is applied by launching this machine's browser, so it is suspended (kept, not cleared) while the connected browser is somewhere else.
+  let pinSuspended = false;
+  const activePin = (): ProfilePin | null => (pinSuspended ? null : profilePin);
+  const discover = opts.discoverEndpoint ?? discoverEndpoint;
+  const localBrowserRunning = opts.isBrowserRunning ?? isBrowserRunning;
 
   // With a pin set the window must exist BEFORE anything attaches, or attachFirstPage's bare Target.createTarget lands in the focus-derived default profile.
   const seedIfPinned = async (): Promise<Result<void, CdpError>> => {
-    if (!profilePin) return ok(undefined);
+    if (!activePin()) return ok(undefined);
     const window = await ensureHarnessWindow(api);
     if (!window.success) return window;
     return ok(undefined);
@@ -164,10 +173,12 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     if (remote?.cdpUrl) {
       wsUrl = remote.cdpUrl;
     } else {
-      const discovered = await discoverEndpoint();
+      const discovered = await discover();
       if (!discovered.success) return discovered;
       wsUrl = discovered.data.wsUrl;
       userDataDir = discovered.data.userDataDir;
+      // No user-data-dir means the endpoint did not come from a port file here. It is remote if it names another host, or if no browser process runs on this machine either.
+      pinSuspended = userDataDir === undefined && (!isLoopbackWsUrl(wsUrl) || !(await localBrowserRunning()));
     }
     const connected = await transport.connect(wsUrl, { timeoutMs: 10_000 });
     if (!connected.success) return connected;
@@ -420,7 +431,7 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
     session: () => session,
     transport: () => transport,
     userDataDir: () => userDataDir,
-    profilePin: () => profilePin,
+    profilePin: activePin,
     setProfilePin: (pin) => {
       const changed = pin === null
         ? profilePin !== null
@@ -435,10 +446,11 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       profileContextId = contextId;
     },
     seedPinnedProfileWindow: async () => {
-      if (!profilePin) {
+      const pin = activePin();
+      if (!pin) {
         return err(cdpError("discovery_failed", "no browser profile is selected — run /browser-profile"));
       }
-      return seedProfileWindow(api, profilePin);
+      return seedProfileWindow(api, pin);
     },
     mutationMutex: () => mutationMutex,
   };

@@ -271,21 +271,22 @@ const collectWin32 = async (): Promise<ReadonlyArray<BrowserCandidate>> => {
   return [];
 };
 
+export const WIN_INSTALL_SUFFIXES: ReadonlyArray<string> = [
+  "Google\\Chrome\\Application\\chrome.exe",
+  "Google\\Chrome Beta\\Application\\chrome.exe",
+  "Google\\Chrome SxS\\Application\\chrome.exe",
+  "Chromium\\Application\\chrome.exe",
+  "BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+  "Microsoft\\Edge\\Application\\msedge.exe",
+];
+
 const winInstallCandidates = (): ReadonlyArray<string> => {
   const roots = [
     process.env["PROGRAMFILES"],
     process.env["PROGRAMFILES(X86)"],
     process.env["LOCALAPPDATA"],
   ].filter((r): r is string => typeof r === "string" && r.length > 0);
-  const suffixes = [
-    "Google\\Chrome\\Application\\chrome.exe",
-    "Google\\Chrome Beta\\Application\\chrome.exe",
-    "Google\\Chrome SxS\\Application\\chrome.exe",
-    "Chromium\\Application\\chrome.exe",
-    "BraveSoftware\\Brave-Browser\\Application\\brave.exe",
-    "Microsoft\\Edge\\Application\\msedge.exe",
-  ];
-  return roots.flatMap((root) => suffixes.map((suffix) => join(root, suffix)));
+  return roots.flatMap((root) => WIN_INSTALL_SUFFIXES.map((suffix) => join(root, suffix)));
 };
 
 const winRegistryExecutable = async (): Promise<string | undefined> => {

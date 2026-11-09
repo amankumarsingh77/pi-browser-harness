@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openProfileWindow } from "../../src/profile/launch";
+import { browserLaunchArgs, launchBrowser, openProfileWindow } from "../../src/profile/launch";
 
 describe("openProfileWindow's failure reporting", () => {
   let root: string;
@@ -105,5 +105,25 @@ describe("openProfileWindow's failure reporting", () => {
       r.data.kill();
       r.data.kill();
     });
+  });
+});
+
+describe("launchBrowser", () => {
+  test("a missing executable is reported with the path and spawn's own cause", async () => {
+    const missing = join(tmpdir(), "pi-launch-no-such-browser");
+    const r = await launchBrowser({ exePath: missing });
+    assert.ok(!r.success);
+    assert.ok(r.error.includes(missing));
+    assert.ok(r.error.includes("ENOENT"));
+  });
+
+  test("an executable that starts is a successful launch", { skip: process.platform === "win32" }, async () => {
+    const r = await launchBrowser({ exePath: "/bin/sh", profileDir: "Default" });
+    assert.ok(r.success);
+  });
+
+  test("a pinned profile is passed as --profile-directory; without one the browser picks its own", () => {
+    assert.deepEqual(browserLaunchArgs({ exePath: "/x", profileDir: "Profile 1" }), ["--profile-directory=Profile 1"]);
+    assert.deepEqual(browserLaunchArgs({ exePath: "/x" }), []);
   });
 });

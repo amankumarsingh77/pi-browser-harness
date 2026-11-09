@@ -99,7 +99,8 @@ describe("profile command", () => {
 
   const run = async (client: BrowserClient, ctxOpts: Parameters<typeof fakeCtx>[0], deps: ProfileCommandDeps = {}) => {
     const pi = fakePi();
-    registerProfileCommand(pi.pi, client, deps);
+    // A local browser by default, so no test probes this machine for one.
+    registerProfileCommand(pi.pi, client, { locateBrowser: () => Promise.resolve({ kind: "local" }), ...deps });
     const cmd = pi.command("browser-profile");
     const ctx = fakeCtx(ctxOpts);
     await cmd.handler("", ctx.ctx);
@@ -282,10 +283,28 @@ describe("profile command", () => {
       assert.match(notice.message, /^Found profiles for more than one browser \(Chrome, Brave\)\. Open the browser you want/);
     });
 
+    test("a remote browser is refused before any discovery or disk scan: its profiles are not on this machine", async () => {
+      const rec = await recordingClient({});
+      let touched = false;
+      const r = await run(rec.client, { selections: ["  Alice (alice@example.com)"] }, {
+        locateBrowser: () => Promise.resolve({ kind: "remote", endpoint: { wsUrl: "ws://127.0.0.1:9222/devtools/browser/x" } }),
+        discoverEndpoint: () => { touched = true; return endpointFails(); },
+        userDataDirCandidates: () => { touched = true; return [udd]; },
+      });
+      assert.equal(touched, false);
+      assert.equal(r.prompts.length, 0);
+      assert.deepEqual(r.notices, [{
+        message: "The connected browser runs on another machine, so its profiles can't be listed or pinned from here.",
+        type: "error",
+      }]);
+      assert.equal(await readPin(), null);
+    });
+
     test("promptForProfileIfUnset resolves the directory through the same seam", async () => {
       const rec = await recordingClient({});
       const ctx = fakeCtx({ selections: ["  Alice (alice@example.com)"] });
       const note = await promptForProfileIfUnset(rec.client, ctx.ctx, {
+        locateBrowser: () => Promise.resolve({ kind: "local" }),
         discoverEndpoint: endpointFails,
         userDataDirCandidates: () => [udd],
       });

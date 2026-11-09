@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { BrowserClient } from "../client";
 import { type CdpEndpoint, discoverEndpoint } from "../cdp/discovery";
+import { type BrowserLocation, locateBrowser } from "../browser-location";
 import type { CdpError } from "../cdp/errors";
 import { type Result, err, mapErr, ok } from "../util/result";
 import { type BrowserProfile, listProfiles } from "./list";
@@ -57,6 +58,7 @@ const pinFor = (userDataDir: string, profile: BrowserProfile): ProfilePin => ({
 // How the command finds a user-data-dir when the client is not connected: the DevTools endpoint's
 // own report, then a scan of the per-platform candidate directories. Each defaults to the real one.
 export type ProfileCommandDeps = {
+  readonly locateBrowser?: () => Promise<BrowserLocation>;
   readonly discoverEndpoint?: () => Promise<Result<CdpEndpoint, CdpError>>;
   readonly userDataDirCandidates?: () => ReadonlyArray<string>;
 };
@@ -64,6 +66,11 @@ export type ProfileCommandDeps = {
 const resolveUserDataDir = async (client: BrowserClient, deps: ProfileCommandDeps): Promise<Result<string, string>> => {
   const connected = client.userDataDir();
   if (connected) return ok(connected);
+
+  // A remote browser's profiles are on its own disk; scanning this machine would offer some other browser's.
+  if ((await (deps.locateBrowser ?? locateBrowser)()).kind === "remote") {
+    return err("The connected browser runs on another machine, so its profiles can't be listed or pinned from here.");
+  }
 
   const endpoint = await (deps.discoverEndpoint ?? discoverEndpoint)();
   if (endpoint.success && endpoint.data.userDataDir) return ok(endpoint.data.userDataDir);
