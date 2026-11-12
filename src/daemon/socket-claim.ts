@@ -83,8 +83,8 @@ const breakStaleLock = (lockPath: string, staleMs: number): void => {
   unlinkQuietly(aside);
 };
 
-// Serializes the one step two starting daemons must never interleave: deciding a socket is stale,
-// removing it and binding in its place. Held only for that step, never for the daemon's lifetime.
+// Serializes socket claims: binding, and deciding a socket is stale, removing it and binding in its
+// place. Held only while a daemon starts, never for its lifetime.
 export const withStartupLock = async <T>(
   lockPath: string,
   fn: () => Promise<T>,
@@ -103,10 +103,9 @@ export const withStartupLock = async <T>(
       if (errnoCode(e) !== "EEXIST") throw e;
     }
     const heldSince = mtimeMs(lockPath);
-    if (heldSince !== null && Date.now() - heldSince > staleMs) {
-      breakStaleLock(lockPath, staleMs);
-      continue;
-    }
+    // Falls through to the deadline and the pause either way, so a lock that cannot be moved aside
+    // ends in the timeout below rather than a spin.
+    if (heldSince !== null && Date.now() - heldSince > staleMs) breakStaleLock(lockPath, staleMs);
     if (Date.now() >= deadline) {
       throw new Error(`another daemon has been starting on ${lockPath} for over ${Math.round(waitMs / 1000)}s`);
     }

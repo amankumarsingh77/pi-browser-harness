@@ -161,33 +161,40 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
       });
     });
 
-  // Runs only when the path is already taken. Under the startup lock, so two daemons cannot both
-  // judge the same socket stale and then remove each other's fresh one.
-  const replaceStaleSocket = (): Promise<void> =>
-    withStartupLock(startupLockPath(socketPath), async () => {
-      const state = await probeSocket(socketPath);
-      if (state === "live") throw alreadyRunning(socketPath, "its socket accepts connections");
-      if (state === "unknown") throw alreadyRunning(socketPath, "its socket could not be proven stale");
-      if (state === "stale") {
-        try {
-          // A refused connect is also what a regular file answers; only a socket is ever removed.
-          if (lstatSync(socketPath).isSocket()) unlinkSync(socketPath);
-        } catch {
-          // Removed by someone else; listen() below reports whatever is there now.
-        }
-      }
-      const failure = await listenOnce();
-      if (!failure) return;
-      throw failure.code === "EADDRINUSE" ? alreadyRunning(socketPath, "it bound the socket first") : failure;
-    });
+  // The whole claim runs under the startup lock, the first bind included. A socket is bound and
+  // then put into listening state in two steps, and a connect between them is refused exactly as a
+  // dead socket's is; with every binder and every prober holding the lock, no daemon can catch
+  // another one in that gap and reap its fresh socket.
+  const claimSocket = async (): Promise<void> => {
+    const taken = await listenOnce();
+    if (!taken) return;
+    if (taken.code !== "EADDRINUSE") throw taken;
 
-  const start = async (): Promise<void> => {
+    const state = await probeSocket(socketPath);
+    if (state === "live") throw alreadyRunning(socketPath, "its socket accepts connections");
+    if (state === "unknown") throw alreadyRunning(socketPath, "its socket could not be proven stale");
+    if (state === "stale") {
+      try {
+        // A refused connect is also what a regular file answers; only a socket is ever removed.
+        if (lstatSync(socketPath).isSocket()) unlinkSync(socketPath);
+      } catch {
+        // Removed by someone else; listen() below reports whatever is there now.
+      }
+    }
     const failure = await listenOnce();
     if (!failure) return;
-    if (failure.code !== "EADDRINUSE") throw failure;
-    // A named pipe is not a filesystem entry: one in use is a live daemon, with nothing to reap.
-    if (process.platform === "win32") throw alreadyRunning(socketPath, "its pipe is in use");
-    await replaceStaleSocket();
+    throw failure.code === "EADDRINUSE" ? alreadyRunning(socketPath, "it bound the socket first") : failure;
+  };
+
+  const start = async (): Promise<void> => {
+    if (process.platform !== "win32") {
+      await withStartupLock(startupLockPath(socketPath), claimSocket);
+      return;
+    }
+    // A named pipe is not a filesystem entry: one in use is a live daemon, with nothing to reap or lock.
+    const failure = await listenOnce();
+    if (!failure) return;
+    throw failure.code === "EADDRINUSE" ? alreadyRunning(socketPath, "its pipe is in use") : failure;
   };
 
   const stop = (): Promise<void> =>
