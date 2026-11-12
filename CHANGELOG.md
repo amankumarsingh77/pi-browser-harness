@@ -2,6 +2,12 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **The daemon no longer reports Chrome as connected before Chrome has answered anything (#57).** The connection was marked open the moment the WebSocket opened, so a browser that accepted the socket but was not serving CDP yet looked connected: tool calls failed with `Timeout after 10000ms` and the attempt's five-minute limit was switched off, leaving it "connected" indefinitely. The attempt now stays pending until Chrome answers the daemon's first command. Until then tools get the existing "a connection attempt has been waiting… accept the Allow prompt" message, a late answer completes the same attempt without a second WebSocket (so no second prompt), and no answer within the limit fails the attempt and starts the usual cooldown.
+
 ## 0.17.0 — 2026-11-09
 
 ### Added

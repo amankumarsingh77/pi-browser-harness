@@ -82,6 +82,8 @@ class FakeWebSocket extends EventEmitter {
     if (this.readyState === FakeWebSocket.OPEN) return;
     this.readyState = FakeWebSocket.OPEN;
     this.emit("open");
+    // A browser that is serving CDP acknowledges the daemon's readiness command.
+    this.emit("message", JSON.stringify({ id: 0, result: {} }));
   }
 
   fail(error = new Error("socket error")): void {
