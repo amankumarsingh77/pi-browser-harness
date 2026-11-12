@@ -11,6 +11,7 @@ import { restoreDownloadBehavior } from "./domains/files";
 import { createDaemonTransport } from "./daemon/transport";
 import type { CdpTransport } from "./cdp/types";
 import { setDebugClicks } from "./util/debug";
+import { neverActivate, setNeverActivate } from "./util/activation";
 import { asBoolean, asString } from "./util/guards";
 import { type BrowserTool, setCallObserver } from "./util/tool";
 import type { Result } from "./util/result";
@@ -84,6 +85,11 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
     type: "boolean",
     default: false,
   });
+  pi.registerFlag("browser-never-activate", {
+    description: "Never bring the browser, its windows or its tabs to the front; tools that need that are refused",
+    type: "boolean",
+    default: false,
+  });
 
   pi.registerCommand("browser-status", {
     description: "Show browser connection status and current page",
@@ -99,6 +105,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
         `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
+      if (neverActivate()) lines.push("Policy: never-activate (the browser is never brought to the front; clicks and drags are refused)");
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
       if (s.alive) {
         const info = await client.pageInfo();
@@ -142,6 +149,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
     state = restored;
     persister.markPersisted(restored);
     setDebugClicks(asBoolean(pi.getFlag("browser-debug-clicks")) ?? false);
+    setNeverActivate(asBoolean(pi.getFlag("browser-never-activate")) ?? false);
 
     // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
     const profilePin = await loadPin();

@@ -7,6 +7,7 @@ import { sleep as sleepMs } from "../util/sleep";
 import { detectRunningBrowser, resolveBrowserExecutable, type RunningBrowser } from "./browser-process";
 import { openProfileWindow, type ProfileWindowHandle, type ProfileWindowRequest } from "./launch";
 import type { ProfilePin } from "./store";
+import { neverActivate, POLICY_OFF_HINT } from "../util/activation";
 
 const SEED_DEADLINE_MS = 15_000;
 const SEED_POLL_MS = 500;
@@ -57,6 +58,16 @@ export const seedProfileWindow = async (
       "discovery_failed",
       `the selected profile "${pin.label}" belongs to ${pin.userDataDir}, but the harness is connected to ${connectedDir}. ` +
       `Run /browser-profile to choose a profile in the browser you're using.`,
+    ));
+  }
+
+  // A window in another profile can only be opened from the command line, which brings the browser
+  // to the front. Under the policy that needs the user, not the harness.
+  if (neverActivate()) {
+    return err(cdpError(
+      "policy",
+      `opening a window in "${pin.label}" launches the browser in the foreground, and the never-activate policy is on. ` +
+      `Nothing was launched, and no other profile was used instead: ${manualFallbackHint(pin)} Or ${POLICY_OFF_HINT}.`,
     ));
   }
 

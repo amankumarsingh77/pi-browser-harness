@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { type Result, err, ok } from "../util/result";
 import { defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { cdpCall, fromClient } from "./cdp-call";
+import { neverActivate } from "../util/activation";
 
 const ScrollArgs = Type.Object({
   x: Type.Optional(Type.Number({ description: "X coordinate where to scroll. Default: viewport center" })),
@@ -24,6 +25,7 @@ export const scrollTool = defineBrowserTool({
   ],
   parameters: ScrollArgs,
   concurrency: "serialized",
+  foreground: "rendered",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const info = fromClient(await client.pageInfo(), "pageInfo");
     if (!info.success) return info;
@@ -37,9 +39,12 @@ export const scrollTool = defineBrowserTool({
     const cy = args.y ?? Math.round(info.data.height / 2);
     const dx = args.deltaX ?? 0;
     const dy = args.deltaY ?? 300;
-    // The page target must be focused or Input events are dropped silently: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling.
-    const front = await cdpCall(client, "Page.bringToFront", {});
-    if (!front.success) return front;
+    // A hidden tab drops Input events: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling. Under the
+    // never-activate policy the tab is left where it is; `foreground: "rendered"` has already refused a hidden one.
+    if (!neverActivate()) {
+      const front = await cdpCall(client, "Page.bringToFront", {});
+      if (!front.success) return front;
+    }
     // Establish compositor mouse position first, or CDP sometimes drops the wheel event with a timeout.
     const moved = await cdpCall(client, "Input.dispatchMouseEvent", {
       type: "mouseMoved", x: cx, y: cy, button: "none", buttons: 0,

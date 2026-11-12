@@ -6,7 +6,7 @@ import { type Result, err } from "../util/result";
 import type { ToolErr } from "../util/tool";
 
 export const cdpErrToToolErr = (e: CdpError, method: string): ToolErr => ({
-  kind: e.kind === "timeout" ? "timeout" : "cdp_error",
+  kind: e.kind === "timeout" ? "timeout" : e.kind === "policy" ? "policy" : "cdp_error",
   message: e.message,
   details: { method },
 });

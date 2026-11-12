@@ -6,6 +6,7 @@ import { type Result, err, ok } from "../util/result";
 import { safeJs } from "../util/js-template";
 import { type CdpError, cdpError } from "./errors";
 import { reconcileOwnership } from "./ownership";
+import { createInBackground, neverActivate, POLICY_OFF_HINT } from "../util/activation";
 
 const SPAWN_DEADLINE_MS = 8_000;
 const SPAWN_POLL_MS = 100;
@@ -49,6 +50,17 @@ const spawnTabViaOpener = async (
   client: BrowserClient,
   openerTargetId: string,
 ): Promise<Result<string, CdpError>> => {
+  // window.open is the only way into a pinned profile, and Chrome raises the window it opens the
+  // tab in. Refuse rather than fall back to createTarget, which would land in a different profile.
+  if (neverActivate()) {
+    return err(cdpError(
+      "policy",
+      `opening another tab in the selected profile raises the browser window, and the never-activate policy is on. ` +
+      `No tab was opened. Reuse the current tab with browser_navigate, clear the profile selection with /browser-profile, or ${POLICY_OFF_HINT}.`,
+      "Target.createTarget",
+    ));
+  }
+
   const borrowed = await borrowSession(client, openerTargetId);
   if (!borrowed.success) return borrowed;
 
@@ -141,7 +153,7 @@ const ensureHarnessWindowUncoordinated = async (
 };
 
 const createDedicatedWindow = async (client: BrowserClient): Promise<Result<string, CdpError>> => {
-  const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true });
+  const created = await client.session().callBrowser("Target.createTarget", { url: "about:blank", newWindow: true, ...createInBackground() });
   if (!created.success) return created;
   const { targetId } = created.data;
   const ownership = client.ownership();
@@ -162,6 +174,7 @@ export const openHarnessTab = async (
         const created = await client.session().callBrowser("Target.createTarget", {
           url: "about:blank",
           openerId: openerTargetId,
+          ...createInBackground(),
         });
         if (!created.success) return created;
         return ok(created.data.targetId);

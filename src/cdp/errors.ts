@@ -4,6 +4,8 @@ export type CdpErrorKind =
   | "session_not_found"
   | "remote_error"
   | "discovery_failed"
+  // The harness refused the operation itself, under an opt-in policy; Chrome was never asked.
+  | "policy"
   | "invalid_response";
 
 export type CdpError = {

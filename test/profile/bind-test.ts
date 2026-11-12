@@ -8,6 +8,7 @@ import type { ProfileWindowRequest } from "../../src/profile/launch";
 import { cdpError } from "../../src/cdp/errors";
 import { err, ok } from "../../src/util/result";
 import { createFakeClient, type Canned, type FakeClient } from "../domains/fake-client";
+import { underNeverActivate } from "../helpers/never-activate";
 
 const pin: ProfilePin = {
   userDataDir: "/home/u/.config/google-chrome",
@@ -198,6 +199,19 @@ describe("seedProfileWindow", () => {
     assert.ok(r.success, "a failed reset does not fail the seed");
     assert.equal(s.fake.callsTo("Page.navigate").length, 0);
     assert.equal(s.cleanups(), 1);
+  });
+
+  test("under the never-activate policy no profile window is launched, and the user is told to open it", async () => {
+    const s = await seeded();
+    const r = await underNeverActivate(() => seedProfileWindow(s.client, pin, s.deps));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "policy");
+    assert.match(r.error.message, /launches the browser in the foreground, and the never-activate policy is on/);
+    assert.match(r.error.message, /no other profile was used instead/);
+    assert.match(r.error.message, /browser profile menu → Profile 1/);
+    assert.deepEqual(s.launches, []);
+    assert.deepEqual(s.detects, []);
+    assert.equal(s.fake.calls.length, 0);
   });
 
   test("no browser executable is a discovery failure with the manual fallback", async () => {

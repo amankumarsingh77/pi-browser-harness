@@ -13,6 +13,7 @@ import { type Component, Text } from "@mariozechner/pi-tui";
 import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "./result";
+import { type ToolForeground, explainTimeoutUnderPolicy, foregroundRefusal } from "./foreground";
 
 // Details are stored by pi as JSON and handed back on replay, so a renderer only ever reads them.
 export type DeepReadonly<T> = T extends ReadonlyArray<infer U>
@@ -56,6 +57,8 @@ export type ToolErrKind =
   | "invalid_state"
   | "invalid_args"
   | "io_error"
+  // Refused by an opt-in policy (never-activate), not by the browser: retrying the same call cannot succeed.
+  | "policy"
   | "internal";
 
 export type ToolErr = {
@@ -94,6 +97,8 @@ export type BrowserToolDefinition<S extends TSchema, D extends TSchema = Untyped
   readonly renderResult?: (result: AgentToolResult<DetailsOf<D>>, expanded: boolean, theme: Theme) => Component;
   readonly concurrency: ToolConcurrency;
   readonly ensureAlive?: boolean;
+  // What the tool needs from the screen; only consulted under the never-activate policy. See ./foreground.ts.
+  readonly foreground?: ToolForeground;
 };
 
 // The schema-erased view of a tool. Everything that depends on S or D (handler, renderers, the details
@@ -101,7 +106,7 @@ export type BrowserToolDefinition<S extends TSchema, D extends TSchema = Untyped
 // needed to hold tools of different schemas in one list.
 export type BrowserTool = Pick<
   BrowserToolDefinition<TSchema>,
-  "name" | "label" | "description" | "promptSnippet" | "promptGuidelines" | "concurrency" | "ensureAlive"
+  "name" | "label" | "description" | "promptSnippet" | "promptGuidelines" | "concurrency" | "ensureAlive" | "foreground"
 > & {
   readonly register: (pi: Pick<ExtensionAPI, "registerTool">, client: BrowserClient) => void;
 };
@@ -181,6 +186,11 @@ const runHandler = async <S extends TSchema, D extends TSchema>(
       return err({ kind: "invalid_state", message: "Tool execution aborted before entering serialized lane" });
     }
   }
+  const refusal = await foregroundRefusal(def.name, def.foreground, client).catch(() => undefined);
+  if (refusal) {
+    release?.();
+    return err(refusal);
+  }
   const finish = await callObserver?.({ name: def.name, concurrency: def.concurrency, args, client }).catch(() => undefined);
   try {
     const result = await def.handler(args, {
@@ -190,7 +200,8 @@ const runHandler = async <S extends TSchema, D extends TSchema>(
       extensionCtx,
     });
     const note = await finish?.(result.success ? { ok: true } : { ok: false, error: result.error.message }).catch(() => undefined);
-    return result.success && note !== undefined ? ok({ ...result.data, text: `${result.data.text}\n\n${note}` }) : result;
+    if (!result.success) return err(await explainTimeoutUnderPolicy(result.error, client).catch(() => result.error));
+    return note !== undefined ? ok({ ...result.data, text: `${result.data.text}\n\n${note}` }) : result;
   } catch (e) {
     // A throw is a bug in the handler, not a tool outcome; it still has to reach the model as an error.
     const message = e instanceof Error ? e.message : String(e);

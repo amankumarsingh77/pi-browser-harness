@@ -9,6 +9,7 @@ import { type BrowserLaunchRequest, launchBrowser } from "./profile/launch";
 import { type ProfilePin, readPin } from "./profile/store";
 import { sleep } from "./util/sleep";
 import { type Result, err, ok } from "./util/result";
+import { neverActivate } from "./util/activation";
 
 // The machine probes setup runs before touching the client. Each defaults to the real implementation.
 export type SetupDeps = {
@@ -70,6 +71,9 @@ const openClosedBrowser = async (
     if (!agreed) return err(NO_BROWSER);
   } else if (!pin) {
     return err(NO_BROWSER);
+  } else if (neverActivate()) {
+    // Nobody is here to ask, and starting a browser puts its window in front of whatever the user is doing.
+    return err(`${NO_BROWSER}\n\nThe never-activate policy is on, so ${browser.family} was not opened for you. Open it yourself, then run /browser-setup.`);
   }
 
   const launched = await (deps.launchBrowser ?? launchBrowser)({

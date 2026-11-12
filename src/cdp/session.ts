@@ -5,6 +5,7 @@ import type { CdpEvent, DialogInfo, RefSignature } from "./types";
 import { type OwnershipRegistry, reconcileOwnership } from "./ownership";
 import type { CdpTransport } from "./types";
 import { type CdpMethod, type ParamsOf, type ResultOf, decodeResult } from "./commands";
+import { createInBackground, neverActivate } from "../util/activation";
 
 export type CallOpts = { readonly timeoutMs?: number };
 
@@ -389,7 +390,7 @@ export const createCdpSession = (
     if (createSeedTarget) return createSeedTarget();
     const created = await req(
       "Target.createTarget",
-      { url: "about:blank", ...(ownership ? { newWindow: true } : {}) },
+      { url: "about:blank", ...(ownership ? { newWindow: true } : {}), ...createInBackground() },
       null,
     );
     if (!created.success) return created;
@@ -422,8 +423,12 @@ export const createCdpSession = (
       return ok({ targetId: tid, sessionId: attached.data });
     },
     async switchTo(tid) {
-      const activated = await req("Target.activateTarget", { targetId: tid }, null);
-      if (!activated.success) return activated;
+      // Under the never-activate policy the switch is logical only: the harness talks to the tab's
+      // own session, which does not need the tab to be the one on screen.
+      if (!neverActivate()) {
+        const activated = await req("Target.activateTarget", { targetId: tid }, null);
+        if (!activated.success) return activated;
+      }
       const existing = tabs.get(tid);
       if (existing) {
         setCurrent(tid, existing.sessionId);
