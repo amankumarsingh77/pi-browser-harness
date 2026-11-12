@@ -2,6 +2,13 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **A second daemon can no longer take over a live daemon's socket (#56).** The daemon removed the socket path before every listen, so two sessions starting together each got a daemon: earlier clients stayed on the first, later ones reached the second, and each opened its own Chrome connection and "Allow remote debugging" prompt. When the first one stopped it removed the second one's socket too, leaving a daemon nothing could reach. The daemon now binds without removing anything, and a path that is already taken is only replaced when a connect to it is refused, under a short startup lock so two daemons cannot reap the same stale socket and then each other's. A daemon that finds another one running exits and leaves it alone.
+- **The client no longer deletes the daemon socket.** A daemon that took more than two seconds to answer the liveness probe had its socket removed by the client that was asking. The probe is now read-only; a socket left behind by a killed daemon is cleaned up by the next daemon as it starts.
+
 ## 0.17.0 — 2026-11-09
 
 ### Added
