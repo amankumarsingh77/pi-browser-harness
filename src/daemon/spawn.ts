@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync } from "node:fs";
-import { access, unlink } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -12,15 +12,6 @@ import { destroyQuietly } from "./socket";
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 const requireFromHere = createRequire(import.meta.url);
-
-const isWindows = process.platform === "win32";
-
-// No-op on Windows: a named pipe is not a filesystem entry and unlinking a pipe path throws.
-const cleanupStaleSocket = (): void => {
-  if (isWindows) return;
-  // ENOENT is the normal case; anything else surfaces when listen() fails.
-  unlink(DAEMON_SOCKET_PATH).catch(() => undefined);
-};
 
 export const daemonSocketMayExist = async (
   platform: NodeJS.Platform = process.platform,
@@ -35,8 +26,13 @@ export const daemonSocketMayExist = async (
   }
 };
 
-export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
-  if (!(await daemonSocketMayExist())) return false;
+// Read-only on purpose: a daemon that is alive but slow looks exactly like a dead one from here, so
+// this never removes the socket. A stale socket is reaped by the next daemon as it starts.
+export const isDaemonRunning = async (
+  timeoutMs = 2_000,
+  socketPath: string = DAEMON_SOCKET_PATH,
+): Promise<boolean> => {
+  if (!(await daemonSocketMayExist(process.platform, socketPath))) return false;
 
   return new Promise((resolve) => {
     let settled = false;
@@ -46,10 +42,9 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
       resolve(alive);
     };
 
-    const sock = createConnection(DAEMON_SOCKET_PATH);
+    const sock = createConnection(socketPath);
     const timer = setTimeout(() => {
       destroyQuietly(sock);
-      cleanupStaleSocket();
       done(false);
     }, timeoutMs);
 
@@ -72,11 +67,9 @@ export const isDaemonRunning = async (timeoutMs = 2_000): Promise<boolean> => {
     sock.on("error", () => {
       clearTimeout(timer);
       destroyQuietly(sock);
-      cleanupStaleSocket();
       done(false);
     });
 
-    // Closed without a 'registered' ack: the daemon is alive but rejected us, so do NOT unlink its socket.
     sock.on("close", () => {
       clearTimeout(timer);
       done(false);

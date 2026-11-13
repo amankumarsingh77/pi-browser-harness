@@ -10,7 +10,13 @@ All notable changes to pi-browser-harness will be documented in this file.
 - **Tools that cannot work without the foreground are refused, not faked.** Under the policy `browser_click` and `browser_drag_and_drop` are always refused (a real mouse press makes Chrome raise its window), `browser_scroll` is refused on a tab its window is not showing (Chrome drops trusted wheel input there), and a window or second tab in a pinned profile is refused rather than opened in another profile. Each refusal sends nothing to the page and fails with the new `policy` error kind, naming the alternative and how to turn the policy off. A timeout on a background tab now says that is the likely cause.
 - **`foreground` on a tool definition.** A tool declares `"raises"` or `"rendered"` and the policy is enforced in one place, so a tool from another extension is covered the same way.
 
- — 2026-11-09
+### Fixed
+
+- **A second daemon can no longer take over a live daemon's socket (#56).** The daemon removed the socket path before every listen, so two sessions starting together each got a daemon: earlier clients stayed on the first, later ones reached the second, and each opened its own Chrome connection and "Allow remote debugging" prompt. When the first one stopped it removed the second one's socket too, leaving a daemon nothing could reach. The daemon now binds without removing anything, and a path that is already taken is only replaced when a connect to it is refused. Starting daemons take a short startup lock for that whole step, so two of them cannot reap the same stale socket and then each other's. A daemon that finds another one running exits and leaves it alone.
+- **The client no longer deletes the daemon socket.** A daemon that took more than two seconds to answer the liveness probe had its socket removed by the client that was asking. The probe is now read-only; a socket left behind by a killed daemon is cleaned up by the next daemon as it starts.
+- **The daemon no longer reports Chrome as connected before Chrome has answered anything (#57).** The connection was marked open the moment the WebSocket opened, so a browser that accepted the socket but was not serving CDP yet looked connected: tool calls failed with `Timeout after 10000ms` and the attempt's five-minute limit was switched off, leaving it "connected" indefinitely. The attempt now stays pending until Chrome answers the daemon's first command. Until then tools get the existing "a connection attempt has been waiting… accept the Allow prompt" message, a late answer completes the same attempt without a second WebSocket (so no second prompt), and no answer within the limit fails the attempt and starts the usual cooldown.
+
+## 0.17.0 — 2026-11-09
 
 ### Added
 

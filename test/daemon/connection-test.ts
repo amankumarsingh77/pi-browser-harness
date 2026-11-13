@@ -21,7 +21,11 @@ class FakeSocket extends EventEmitter implements ChromeSocket {
     this.readyState = 3;
     this.emit("close");
   }
-  open(): void { this.readyState = 1; this.emit("open"); }
+  // The WebSocket handshake alone: Chrome has accepted the transport but answered nothing.
+  openTransport(): void { this.readyState = 1; this.emit("open"); }
+  message(frame: unknown): void { this.emit("message", JSON.stringify(frame)); }
+  // A browser that is serving CDP: the transport opens and the readiness command is acknowledged.
+  open(): void { this.openTransport(); this.message({ id: 0, result: {} }); }
   fail(message: string): void { this.emit("error", new Error(message)); this.close(); }
   drop(): void { this.close(); }
 }
@@ -29,6 +33,7 @@ class FakeSocket extends EventEmitter implements ChromeSocket {
 type Harness = {
   readonly sockets: FakeSocket[];
   readonly ends: ConnectionEndReason[];
+  readonly messages: string[];
   readonly discoverCalls: () => number;
   readonly connection: ReturnType<typeof createChromeConnection>;
 };
@@ -42,6 +47,7 @@ const harness = (opts: {
 } = {}): Harness => {
   const sockets: FakeSocket[] = [];
   const ends: ConnectionEndReason[] = [];
+  const messages: string[] = [];
   let discoverCalls = 0;
   const connection = createChromeConnection(
     {
@@ -52,9 +58,9 @@ const harness = (opts: {
       cooldownMs: opts.cooldownMs ?? 60,
       cooldownMaxMs: opts.cooldownMaxMs ?? 1_000,
     },
-    { onMessage: () => undefined, onEnd: (_g, reason) => { ends.push(reason); } },
+    { onMessage: (raw) => { messages.push(raw); }, onEnd: (_g, reason) => { ends.push(reason); } },
   );
-  return { sockets, ends, discoverCalls: () => discoverCalls, connection };
+  return { sockets, ends, messages, discoverCalls: () => discoverCalls, connection };
 };
 
 describe("chrome connection: one dial, one prompt", () => {
@@ -166,6 +172,97 @@ describe("chrome connection: one dial, one prompt", () => {
   });
 });
 
+describe("chrome connection: ready means Chrome answered", () => {
+  test("an open WebSocket with no CDP reply is still connecting, not open", async () => {
+    const h = harness({ connectTimeoutMs: 20, attemptLifetimeMs: 500 });
+    const starting = h.connection.start();
+    await sleep(1);
+    h.sockets[0]?.openTransport();
+    assert.equal(await starting, false, "the caller is told the connection is not ready");
+    assert.equal(h.connection.isOpen(), false);
+    assert.equal(h.connection.status().state, "connecting");
+    assert.deepEqual(h.sockets[0]?.sent.map((p) => JSON.parse(p) as unknown), [
+      { id: 0, method: "Target.setDiscoverTargets", params: { discover: true } },
+    ]);
+    assert.equal(h.connection.send("{}").success, false, "nothing may be sent on a connection that is not ready");
+    h.connection.stop();
+  });
+
+  test("a late reply completes the same attempt without another dial", async () => {
+    const h = harness({ connectTimeoutMs: 15, attemptLifetimeMs: 500 });
+    const starting = h.connection.start();
+    await sleep(1);
+    h.sockets[0]?.openTransport();
+    assert.equal(await starting, false);
+
+    const joined = h.connection.connect();
+    h.sockets[0]?.message({ id: 0, result: {} });
+    assert.equal(await joined, true);
+    assert.equal(h.connection.isOpen(), true);
+    assert.equal(h.connection.status().state, "open");
+    assert.equal(h.sockets.length, 1, "no second WebSocket, so no second Allow prompt");
+    assert.equal(h.discoverCalls(), 1);
+    h.connection.stop();
+  });
+
+  test("a browser that never answers is abandoned after the attempt lifetime, with a cooldown", async () => {
+    const h = harness({ connectTimeoutMs: 10, attemptLifetimeMs: 50, cooldownMs: 200 });
+    const starting = h.connection.start();
+    await sleep(1);
+    h.sockets[0]?.openTransport();
+    assert.equal(await starting, false);
+    await sleep(70);
+    assert.deepEqual(h.ends, ["failed"]);
+    assert.equal(h.sockets[0]?.readyState, 3, "the unanswered socket is closed");
+    const status = h.connection.status();
+    assert.equal(status.state, "cooldown");
+    assert.match(status.lastFailure, /no answer from Chrome/);
+    assert.equal(await h.connection.connect(), false);
+    assert.equal(h.sockets.length, 1, "no automatic re-dial during the cooldown");
+  });
+
+  test("Chrome rejecting the first command fails the attempt with its reason", async () => {
+    const h = harness({ connectTimeoutMs: 50 });
+    const starting = h.connection.start();
+    await sleep(1);
+    h.sockets[0]?.openTransport();
+    h.sockets[0]?.message({ id: 0, error: { code: -32000, message: "Not allowed" } });
+    assert.equal(await starting, false);
+    assert.deepEqual(h.ends, ["failed"]);
+    const status = h.connection.status();
+    assert.match(status.state === "cooldown" ? status.lastFailure : "", /Chrome refused the first command: Not allowed/);
+  });
+
+  test("the socket closing before Chrome answers is a failed attempt, not a dropped connection", async () => {
+    const h = harness({ connectTimeoutMs: 50 });
+    const starting = h.connection.start();
+    await sleep(1);
+    h.sockets[0]?.openTransport();
+    h.sockets[0]?.drop();
+    assert.equal(await starting, false);
+    assert.deepEqual(h.ends, ["failed"]);
+  });
+
+  test("events Chrome sends ahead of its answer are delivered after it, in order", async () => {
+    const h = harness({ connectTimeoutMs: 50 });
+    const starting = h.connection.start();
+    await sleep(1);
+    const socket = h.sockets[0];
+    socket?.openTransport();
+    socket?.message({ method: "Target.targetCreated", params: { n: 1 } });
+    socket?.message({ method: "Target.targetCreated", params: { n: 2 } });
+    assert.deepEqual(h.messages, [], "nothing is delivered before Chrome answers");
+    socket?.message({ id: 0, result: {} });
+    assert.equal(await starting, true);
+    socket?.message({ method: "Target.targetCreated", params: { n: 3 } });
+    assert.deepEqual(
+      h.messages.map((m) => JSON.parse(m) as unknown),
+      [1, 2, 3].map((n) => ({ method: "Target.targetCreated", params: { n } })),
+    );
+    h.connection.stop();
+  });
+});
+
 describe("bridge messages while disconnected", () => {
   const request = (bridge: ReturnType<typeof createCdpBridge>, id: number, method: string): Promise<WireResponse | undefined> =>
     new Promise((resolve) => {
@@ -198,6 +295,35 @@ describe("bridge messages while disconnected", () => {
     const r3 = await reconnect;
     assert.deepEqual(r3?.result, { connected: true });
     assert.equal(bridge.isAlive(), true);
+    await bridge.stop();
+  });
+
+  test("a request while Chrome has not answered yet is told to wait, and is never sent to Chrome", async () => {
+    const sockets: FakeSocket[] = [];
+    const bridge = createCdpBridge({
+      discoverWsUrl: () => Promise.resolve(ok("ws://fake")),
+      createWebSocket: () => { const s = new FakeSocket(); sockets.push(s); return s; },
+      connectTimeoutMs: 20,
+      attemptLifetimeMs: 500,
+    });
+    await bridge.start();
+    await sleep(1);
+    const socket = sockets[0];
+    assert.ok(socket, "the daemon dialed Chrome");
+    socket.openTransport();
+
+    const r1 = await request(bridge, 1, "Page.navigate");
+    assert.match(String(r1?.error?.message), /^Chrome not connected: a connection attempt has been waiting \d+s/);
+    assert.doesNotMatch(String(r1?.error?.message), /Timeout after/);
+    assert.equal(bridge.isAlive(), false);
+    assert.equal(socket.sent.length, 1, "only the readiness command reached Chrome");
+
+    socket.message({ id: 0, result: {} });
+    assert.equal(bridge.isAlive(), true);
+    void bridge.handleRequest({ type: "request", id: 2, method: "Page.navigate", params: {} }, "c1", () => undefined);
+    await sleep(1);
+    assert.equal(socket.sent.length, 2, "once Chrome answers, requests go through on the same socket");
+    assert.equal(sockets.length, 1);
     await bridge.stop();
   });
 

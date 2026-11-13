@@ -8,6 +8,7 @@ import {
 } from "./protocol";
 import type { CdpError } from "../cdp/errors";
 import { type Result, err, ok } from "../util/result";
+import { asString, isRecord } from "../util/guards";
 
 // Why an attempt ended. Only "dropped" means clients were relying on a live Chrome connection
 // that went away unannounced; "failed" never got that far, "stopped" is the daemon's own doing,
@@ -36,6 +37,7 @@ export type ChromeConnectionDependencies = {
 
 // What a caller that could not get a connection is looking at.
 export type ConnectionStatus =
+  // Chrome has answered a command on this socket; an open WebSocket alone is still "connecting".
   | { readonly state: "open" }
   // A dial is in progress; `pendingForMs` says for how long. No new prompt will be opened.
   | { readonly state: "connecting"; readonly pendingForMs: number }
@@ -45,7 +47,7 @@ export type ConnectionStatus =
   | { readonly state: "stopped" };
 
 export type ChromeConnection = {
-  // Clears a previous stop() and dials Chrome. Resolves true once the socket is open.
+  // Clears a previous stop() and dials Chrome. Resolves true once Chrome has answered a command.
   readonly start: () => Promise<boolean>;
   // Dials Chrome unless already open, stopped or cooling down. Concurrent callers share the
   // attempt in flight. Resolves true when open, or false once the attempt fails or the caller
@@ -100,6 +102,23 @@ const closeSocket = (socket: ChromeSocket): void => {
   } catch {
     // Closing an already-closing socket throws; the socket is gone either way.
   }
+};
+
+// The daemon's own first command. Client requests are numbered from 1 (see createIdMultiplexer).
+const READINESS_ID = 0;
+
+// Chrome's answer to the readiness command, or null when the frame is anything else.
+const readinessAnswer = (raw: string): Result<void, string> | null => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || parsed["id"] !== READINESS_ID) return null;
+  const failure = parsed["error"];
+  if (failure === undefined) return ok(undefined);
+  return err(isRecord(failure) ? (asString(failure["message"]) ?? "unknown error") : "unknown error");
 };
 
 // Resolves with the attempt's outcome, or false once `waitMs` passes while it is still dialing.
@@ -221,12 +240,35 @@ export const createChromeConnection = (
       attempt.end(!attempt.opened ? "failed" : attempt.superseded ? "superseded" : "dropped");
     };
 
+    // An open WebSocket only proves the transport: a browser that accepted it but is not serving
+    // CDP yet (consent still pending, or hung) would otherwise look connected and turn every tool
+    // call into a command timeout. The attempt stays pending, on its lifetime timer, until Chrome
+    // answers the first command.
     socket.on("open", () => {
       if (attempt.ended) { closeSocket(socket); return; }
       try {
-        socket.send(JSON.stringify({ id: 0, method: "Target.setDiscoverTargets", params: { discover: true } }));
+        socket.send(JSON.stringify({ id: READINESS_ID, method: "Target.setDiscoverTargets", params: { discover: true } }));
       } catch (e) {
         attempt.failure = e instanceof Error ? e.message : String(e);
+        attempt.end("failed");
+      }
+    });
+    // Chrome may emit events ahead of the acknowledgement; they are delivered once it arrives.
+    const early: string[] = [];
+    socket.on("message", (data: WebSocket.Data) => {
+      if (attempt.ended) return;
+      const raw = wsDataToString(data);
+      if (attempt.opened) {
+        events.onMessage(raw);
+        return;
+      }
+      const answer = readinessAnswer(raw);
+      if (answer === null) {
+        early.push(raw);
+        return;
+      }
+      if (!answer.success) {
+        attempt.failure = `Chrome refused the first command: ${answer.error}`;
         attempt.end("failed");
         return;
       }
@@ -234,17 +276,14 @@ export const createChromeConnection = (
       recordSuccess();
       console.log("[pi-browser-daemon] Connected to Chrome ✓");
       attempt.settle(true);
-    });
-    socket.on("message", (data: WebSocket.Data) => {
-      if (attempt.ended || !attempt.opened) return;
-      events.onMessage(wsDataToString(data));
+      for (const queued of early.splice(0)) events.onMessage(queued);
     });
     socket.on("error", (e: Error) => {
       attempt.failure ??= e.message;
       endFromSocket();
     });
     socket.on("close", () => {
-      attempt.failure ??= "Chrome closed the connection before it opened (was its \"Allow remote debugging\" prompt denied?)";
+      attempt.failure ??= "Chrome closed the connection before it answered (was its \"Allow remote debugging\" prompt denied?)";
       endFromSocket();
     });
   };
