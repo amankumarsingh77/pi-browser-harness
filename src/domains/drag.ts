@@ -27,6 +27,7 @@ export const dragAndDropTool = defineBrowserTool({
   ],
   parameters: DragArgs,
   concurrency: "serialized",
+  foreground: "raises",
   async handler(args, { client }): Promise<Result<ToolOk, ToolErr>> {
     const data: ParamsOf<"Input.dispatchDragEvent">["data"] = {
       items: Object.entries(args.dataTransfer ?? {}).map(([mimeType, payload]) => ({

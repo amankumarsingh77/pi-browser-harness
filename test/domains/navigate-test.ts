@@ -9,6 +9,7 @@ import { cdpError } from "../../src/cdp/errors";
 import type { HandlerContext } from "../../src/util/tool";
 import { asRecord } from "../../src/util/guards";
 import { err, ok } from "../../src/util/result";
+import { underNeverActivate } from "../helpers/never-activate";
 
 const URL = "https://example.test/next";
 const ONE_TAB: ReadonlyArray<TabInfo> = [{ targetId: "t1", title: "Fake", url: "https://example.test/", owned: true }];
@@ -175,6 +176,18 @@ describe("browser_open_urls", () => {
     });
     assert.deepEqual(seen, ["Opening URLs… 1/2 navigated", "Opening URLs… 2/2 navigated"]);
     assert.equal(fake.client.owns("t2") && fake.client.owns("t3"), true);
+  });
+
+  test("under the never-activate policy the tabs open in the background and none is activated", async () => {
+    const fake = await opening();
+    const r = await underNeverActivate(() => openUrlsTool.handler({ urls: [A, B] }, handlerContext(fake.client)));
+    assert.equal(r.success, true);
+    assert.deepEqual(fake.callsTo("Target.createTarget").map((c) => c.params), [
+      { url: "about:blank", openerId: "t1", background: true },
+      { url: "about:blank", openerId: "t1", background: true },
+    ]);
+    assert.equal(fake.callsTo("Target.activateTarget").length, 0);
+    assert.deepEqual(fake.callsTo("Page.navigate").map((c) => c.params["url"]), [A, B]);
   });
 
   test("the title marker is applied only after the document reports complete", async () => {

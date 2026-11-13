@@ -9,6 +9,7 @@ import type { ProfilePin } from "../../src/profile/store";
 import { type Result, err, ok } from "../../src/util/result";
 import { asString } from "../../src/util/guards";
 import { type Canned, type FakeClient, type RecordedCall, createFakeClient } from "../domains/fake-client";
+import { underNeverActivate } from "../helpers/never-activate";
 
 type TargetRow = {
   readonly targetId: string;
@@ -233,6 +234,19 @@ describe("ensureHarnessWindow", () => {
   });
 });
 
+describe("ensureHarnessWindow under the never-activate policy", () => {
+  test("the dedicated window is created in the background", async () => {
+    const h = await harness(
+      { ...targets({ targetId: "stranger" }), "Target.createTarget": ok({ targetId: "fresh" }), "Browser.getWindowForTarget": ok({ windowId: 42 }) },
+      {},
+      ["gone"],
+    );
+    const r = await underNeverActivate(() => ensureHarnessWindow(h.client));
+    assert.deepEqual(r, ok({ targetId: "fresh", freshlyCreated: true }));
+    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", newWindow: true, background: true }]);
+  });
+});
+
 describe("openHarnessTab", () => {
   test("without a profile context, creates a target with the opener and takes ownership", async () => {
     const h = await harness({ "Target.createTarget": ok({ targetId: "child" }) });
@@ -311,6 +325,24 @@ describe("openHarnessTab", () => {
     assert.equal(createCalls(h.fake).length, 0, "no bare createTarget in a pinned profile");
     assert.equal(h.fake.callsTo("Target.detachFromTarget").length, 0, "a tracked session is not detached");
     assert.equal(h.fake.ownership.has("spawned"), true);
+  });
+
+  test("under the never-activate policy a tab is created in the background", async () => {
+    const h = await harness({ "Target.createTarget": ok({ targetId: "child" }) });
+    const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
+    assert.deepEqual(r, ok("child"));
+    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", openerId: "t1", background: true }]);
+  });
+
+  test("under the never-activate policy a tab in a pinned profile is refused, not opened in another profile", async () => {
+    const h = await spawningClient(true);
+    const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
+    assert.equal(r.success, false);
+    assert.equal(r.error.kind, "policy");
+    assert.match(r.error.message, /raises the browser window, and the never-activate policy is on/);
+    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 0, "window.open was never called");
+    assert.equal(createCalls(h.fake).length, 0, "no fallback createTarget into a different profile");
+    assert.equal(h.fake.ownership.has("spawned"), false);
   });
 
   test("with a profile context, a blocked window.open is reported as invalid_response and nothing is owned", async () => {

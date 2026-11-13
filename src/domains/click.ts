@@ -62,6 +62,7 @@ export const clickTool = defineBrowserTool({
   ],
   parameters: ClickArgs,
   concurrency: "serialized",
+  foreground: "raises",
   renderCall: (a) => new Text(`🖱️ Click ${a.ref ? `[${a.ref}]` : `(${a.x}, ${a.y})`}`, 0, 0),
   async handler(args, { client }) {
     const button = args.button ?? "left";

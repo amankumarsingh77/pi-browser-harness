@@ -5,6 +5,7 @@ import { createOwnershipRegistry } from "../../src/cdp/ownership";
 import { createStubTransport } from "../domains/fake-client";
 import { err, ok } from "../../src/util/result";
 import { cdpError } from "../../src/cdp/errors";
+import { underNeverActivate } from "../helpers/never-activate";
 
 const ENABLED_DOMAINS = ["Page", "DOM", "Runtime", "Network", "Accessibility", "Log"];
 
@@ -70,6 +71,17 @@ describe("CdpSession.switchTo domain enablement", () => {
     const last = stub.calls.at(-1);
     assert.equal(last?.method, "Page.bringToFront");
     assert.equal(last.sessionId, "s1");
+  });
+
+  test("under the never-activate policy a switch is logical: the tab is attached and made current without being activated", async () => {
+    const { stub, session } = await twoTabSession();
+    const switched = await underNeverActivate(() => session.switchTo("t2"));
+    assert.equal(switched.success, true);
+    assert.equal(stub.calls.some((c) => c.method === "Target.activateTarget"), false);
+    assert.deepEqual(session.current(), { targetId: "t2", sessionId: "s2" });
+    assert.deepEqual(enablesFor(stub, "s2").sort(), ENABLED_DOMAINS.map((d) => `${d}.enable`).sort());
+    await session.call("Runtime.evaluate", { expression: "1" });
+    assert.equal(stub.calls.at(-1)?.sessionId, "s2", "calls go to the tab that was switched to");
   });
 
   test("a failed activateTarget leaves the current tab unchanged", async () => {

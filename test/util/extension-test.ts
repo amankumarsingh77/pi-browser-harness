@@ -62,11 +62,12 @@ describe("browser harness extension", () => {
     assert.equal(pi.commands.length, commandsAfterFirst + 3);
   });
 
-  test("registers the namespace and debug-click flags at load", () => {
+  test("registers the namespace, debug-click and never-activate flags at load", () => {
     const pi = load();
     assert.deepEqual(pi.flags, [
       { name: "browser-namespace", type: "string", defaultValue: undefined },
       { name: "browser-debug-clicks", type: "boolean", defaultValue: false },
+      { name: "browser-never-activate", type: "boolean", defaultValue: false },
     ]);
   });
 

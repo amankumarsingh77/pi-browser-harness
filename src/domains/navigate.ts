@@ -8,6 +8,7 @@ import { safeJs } from "../util/js-template";
 import { borrowSession, ensureHarnessWindow, openHarnessTab } from "../cdp/target-factory";
 import { cdpCall, cdpCallBrowser, cdpCallOnTarget, evalJs, fromClient } from "./cdp-call";
 import { pollUntil, READY_STATE_COMPLETE } from "./poll";
+import { neverActivate } from "../util/activation";
 
 const NavigateArgs = Type.Object({
   url: Type.String({ description: "Full URL to navigate to (e.g. https://github.com)" }),
@@ -178,7 +179,7 @@ export const openUrlsTool = defineBrowserTool({
     const all: ReadonlyArray<TabResult> = [...settled, ...created.data.filter((t) => !t.ok)];
     const okTabs = all.filter((r) => r.ok);
     const last = okTabs[okTabs.length - 1];
-    if (last !== undefined) {
+    if (last !== undefined && !neverActivate()) {
       await cdpCallBrowser(client, "Target.activateTarget", { targetId: last.targetId });
     }
     const truncated = await applyTruncation(renderOutcomes(all, total), "urls");

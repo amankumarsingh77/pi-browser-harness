@@ -4,6 +4,12 @@ All notable changes to pi-browser-harness will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- **`--browser-never-activate` keeps the browser in the background (#58).** Off by default. With the flag (or `BH_NEVER_ACTIVATE=1`) the harness creates its window and tabs in the background, switches tabs without showing them, and no longer activates the last tab `browser_open_urls` opened or brings a tab forward to scroll it. Reading, navigating, typing and key presses work on a background tab.
+- **Tools that cannot work without the foreground are refused, not faked.** Under the policy `browser_click` and `browser_drag_and_drop` are always refused (a real mouse press makes Chrome raise its window), `browser_scroll` is refused on a tab its window is not showing (Chrome drops trusted wheel input there), and a window or second tab in a pinned profile is refused rather than opened in another profile. Each refusal sends nothing to the page and fails with the new `policy` error kind, naming the alternative and how to turn the policy off. A timeout on a background tab now says that is the likely cause.
+- **`foreground` on a tool definition.** A tool declares `"raises"` or `"rendered"` and the policy is enforced in one place, so a tool from another extension is covered the same way.
+
 ### Fixed
 
 - **A second daemon can no longer take over a live daemon's socket (#56).** The daemon removed the socket path before every listen, so two sessions starting together each got a daemon: earlier clients stayed on the first, later ones reached the second, and each opened its own Chrome connection and "Allow remote debugging" prompt. When the first one stopped it removed the second one's socket too, leaving a daemon nothing could reach. The daemon now binds without removing anything, and a path that is already taken is only replaced when a connect to it is refused. Starting daemons take a short startup lock for that whole step, so two of them cannot reap the same stale socket and then each other's. A daemon that finds another one running exits and leaves it alone.
