@@ -1,7 +1,9 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { readLines } from "./lines";
-import { unlinkSync } from "node:fs";
+import { lstatSync, unlinkSync } from "node:fs";
 import { destroyQuietly } from "./socket";
+import { probeSocket, startupLockPath, withStartupLock } from "./socket-claim";
+import { errnoCode } from "../util/guards";
 import {
   type WireMessage,
   type WireControl,
@@ -30,7 +32,10 @@ export type IpcServerOptions = {
 };
 
 export type IpcServer = {
+  // Rejects with an already-running error (see isDaemonAlreadyRunning) rather than take a socket
+  // another daemon may still be serving.
   readonly start: () => Promise<void>;
+  // Removes the socket only if this server bound it.
   readonly stop: () => Promise<void>;
   readonly onMessage: (handler: MessageHandler) => Disposer;
   readonly onConnect: (handler: ConnectionHandler) => Disposer;
@@ -49,6 +54,12 @@ const listen = <H>(handlers: Set<H>) => (handler: H): Disposer => {
   return () => { handlers.delete(handler); };
 };
 
+const ALREADY_RUNNING = "EDAEMONRUNNING";
+
+const alreadyRunning = (socketPath: string, detail: string): Error =>
+  Object.assign(new Error(`a daemon is already running on ${socketPath} (${detail})`), { code: ALREADY_RUNNING });
+
+export const isDaemonAlreadyRunning = (e: unknown): boolean => errnoCode(e) === ALREADY_RUNNING;
 
 export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
   const socketPath = options.socketPath ?? DAEMON_SOCKET_PATH;
@@ -62,15 +73,6 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
   const disconnectHandlers = new Set<ConnectionHandler>();
   let nextTempId = 1;
 
-  const unlinkSocketFile = (): void => {
-    if (process.platform === "win32") return;
-    try {
-      unlinkSync(socketPath);
-    } catch {
-      // Nothing to unlink, or no permission: listen() reports the real problem if there is one.
-    }
-  };
-
   // A registered client leaves exactly once: either its socket closes or it deregisters first.
   const forget = (client: ClientSocket): void => {
     if (!client.registered) return;
@@ -79,84 +81,121 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
     for (const h of disconnectHandlers) h(client);
   };
 
-  const start = (): Promise<void> =>
-    new Promise((resolve, reject) => {
-      unlinkSocketFile();
+  const acceptClient = (socket: Socket): void => {
+    if (anonymous.size + clients.size >= maxClients) {
+      socket.destroy();
+      return;
+    }
 
-      server = createServer({ pauseOnConnect: false }, (socket: Socket) => {
-        if (anonymous.size + clients.size >= maxClients) {
-          socket.destroy();
+    const tempId = `anon-${nextTempId++}`;
+    const stopReading = readLines(socket, (line) => { onLine(line); });
+    const client: ClientSocket = { id: tempId, socket, stopReading, registered: false };
+
+    anonymous.set(tempId, client);
+
+    function onLine(line: string): void {
+      const msg = deserialize(line);
+      if (!msg) return;
+
+      if (msg.type === "control" && msg.action === "register") {
+        if (client.registered) return;
+        const clientId = msg.clientId;
+
+        if (clients.has(clientId)) {
+          const reply: WireControl = {
+            type: "control",
+            action: "shutdown",
+            reason: `clientId ${clientId} is already connected`,
+          };
+          // end() flushes the reply before closing; destroy() would race it.
+          socket.end(serialize(reply) + "\n");
           return;
         }
 
-        const tempId = `anon-${nextTempId++}`;
-        const stopReading = readLines(socket, (line) => { onLine(line); });
-        const client: ClientSocket = { id: tempId, socket, stopReading, registered: false };
+        // Mutate in place so the already-captured closure sees the promoted client.
+        anonymous.delete(tempId);
+        client.id = clientId;
+        client.registered = true;
+        clients.set(clientId, client);
 
-        anonymous.set(tempId, client);
+        const ack: WireControl = { type: "control", action: "registered", clientId };
+        socket.write(serialize(ack) + "\n");
 
-        function onLine(line: string): void {
-          const msg = deserialize(line);
-          if (!msg) return;
+        for (const h of connectHandlers) h(client);
+        return;
+      }
 
-          if (msg.type === "control" && msg.action === "register") {
-            if (client.registered) return;
-            const clientId = msg.clientId;
+      if (!client.registered) return;
 
-            if (clients.has(clientId)) {
-              const reply: WireControl = {
-                type: "control",
-                action: "shutdown",
-                reason: `clientId ${clientId} is already connected`,
-              };
-              // end() flushes the reply before closing; destroy() would race it.
-              socket.end(serialize(reply) + "\n");
-              return;
-            }
+      if (msg.type === "control" && msg.action === "deregister") {
+        if (msg.clientId !== client.id) return;
+        forget(client);
+        socket.end();
+        return;
+      }
 
-            // Mutate in place so the already-captured closure sees the promoted client.
-            anonymous.delete(tempId);
-            client.id = clientId;
-            client.registered = true;
-            clients.set(clientId, client);
+      for (const h of messageHandlers) h(msg, client);
+    }
 
-            const ack: WireControl = { type: "control", action: "registered", clientId };
-            socket.write(serialize(ack) + "\n");
+    // A client socket error is always followed by "close", which does the cleanup.
+    socket.on("error", () => undefined);
 
-            for (const h of connectHandlers) h(client);
-            return;
-          }
+    socket.on("close", () => {
+      anonymous.delete(tempId);
+      forget(client);
+      stopReading();
+    });
+  };
 
-          if (!client.registered) return;
-
-          if (msg.type === "control" && msg.action === "deregister") {
-            if (msg.clientId !== client.id) return;
-            forget(client);
-            socket.end();
-            return;
-          }
-
-          for (const h of messageHandlers) h(msg, client);
-        }
-
-        // A client socket error is always followed by "close", which does the cleanup.
-        socket.on("error", () => undefined);
-
-        socket.on("close", () => {
-          anonymous.delete(tempId);
-          forget(client);
-          stopReading();
-        });
-      });
-
-      server.on("error", (err: NodeJS.ErrnoException) => {
-        reject(err);
-      });
-
-      server.listen(socketPath, () => {
-        resolve();
+  // bind() creates the socket path atomically and fails if it exists, so a successful listen is
+  // itself the proof of ownership. Resolves with the listen error instead of rejecting.
+  const listenOnce = (): Promise<NodeJS.ErrnoException | null> =>
+    new Promise((resolve) => {
+      const candidate = createServer({ pauseOnConnect: false }, acceptClient);
+      candidate.once("error", (e: NodeJS.ErrnoException) => { resolve(e); });
+      candidate.listen(socketPath, () => {
+        candidate.removeAllListeners("error");
+        candidate.on("error", () => undefined);
+        server = candidate;
+        resolve(null);
       });
     });
+
+  // The whole claim runs under the startup lock, the first bind included. A socket is bound and
+  // then put into listening state in two steps, and a connect between them is refused exactly as a
+  // dead socket's is; with every binder and every prober holding the lock, no daemon can catch
+  // another one in that gap and reap its fresh socket.
+  const claimSocket = async (): Promise<void> => {
+    const taken = await listenOnce();
+    if (!taken) return;
+    if (taken.code !== "EADDRINUSE") throw taken;
+
+    const state = await probeSocket(socketPath);
+    if (state === "live") throw alreadyRunning(socketPath, "its socket accepts connections");
+    if (state === "unknown") throw alreadyRunning(socketPath, "its socket could not be proven stale");
+    if (state === "stale") {
+      try {
+        // A refused connect is also what a regular file answers; only a socket is ever removed.
+        if (lstatSync(socketPath).isSocket()) unlinkSync(socketPath);
+      } catch {
+        // Removed by someone else; listen() below reports whatever is there now.
+      }
+    }
+    const failure = await listenOnce();
+    if (!failure) return;
+    throw failure.code === "EADDRINUSE" ? alreadyRunning(socketPath, "it bound the socket first") : failure;
+  };
+
+  const start = async (): Promise<void> => {
+    if (process.platform !== "win32") {
+      await withStartupLock(startupLockPath(socketPath), claimSocket);
+      return;
+    }
+    // A named pipe is not a filesystem entry: one in use is a live daemon, with nothing to reap or lock.
+    const failure = await listenOnce();
+    if (!failure) return;
+    throw failure.code === "EADDRINUSE" ? alreadyRunning(socketPath, "its pipe is in use") : failure;
+  };
 
   const stop = (): Promise<void> =>
     new Promise((resolve) => {
@@ -171,14 +210,11 @@ export const createIpcServer = (options: IpcServerOptions = {}): IpcServer => {
       clients.clear();
       anonymous.clear();
 
-      if (server) {
-        server.close(() => {
-          unlinkSocketFile();
-          resolve();
-        });
-      } else {
-        resolve();
-      }
+      // Closing a listening server removes its own socket path; one that never bound has none.
+      const listening = server;
+      server = null;
+      if (listening) listening.close(() => { resolve(); });
+      else resolve();
     });
 
   const send = (clientId: string, msg: WireMessage): void => {
