@@ -1,4 +1,4 @@
-import { createIpcServer, type IpcServer } from "./server";
+import { createIpcServer, isDaemonAlreadyRunning, type IpcServer } from "./server";
 import { createCdpBridge, type CdpBridge, type SendToClient } from "./bridge";
 import { DAEMON_IDLE_TIMEOUT_MS } from "./protocol";
 
@@ -101,6 +101,12 @@ export const createDaemon = (deps: DaemonDeps = {}): Daemon => {
       await ipcServer.start();
       log("IPC server listening");
     } catch (e) {
+      if (isDaemonAlreadyRunning(e)) {
+        // Two sessions raced to spawn a daemon; the loser leaves the winner and its Chrome connection alone.
+        log(`Another daemon is already running; exiting (${e instanceof Error ? e.message : String(e)})`);
+        exit(0);
+        return;
+      }
       log(`Failed to start IPC server: ${describeError(e)}`);
       exit(1);
       return;
