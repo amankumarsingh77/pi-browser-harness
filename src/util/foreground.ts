@@ -32,7 +32,7 @@ export const foregroundRefusal = async (
     return {
       kind: "policy",
       message:
-        `${toolName} presses a real mouse button, which makes the browser raise its window, and the never-activate policy is on. ` +
+        `${toolName} presses a real mouse button, which makes the browser raise its window, and background mode is on. ` +
         `Nothing was sent to the page. To act on the element without raising the browser, call it from script with browser_execute_js ` +
         `(for example element.click()); that is not trusted input and some pages ignore it. To allow the real click, ${POLICY_OFF_HINT}.`,
     };
@@ -42,7 +42,7 @@ export const foregroundRefusal = async (
     kind: "policy",
     message:
       `${toolName} needs this tab on screen: the tab is in the background, where Chrome drops trusted pointer input, ` +
-      `and the never-activate policy stops the harness from bringing it forward. Nothing was sent to the page. ` +
+      `and background mode stops the harness from bringing it forward. Nothing was sent to the page. ` +
       `Scroll from script with browser_execute_js (window.scrollBy, element.scrollIntoView), which is not trusted wheel input, ` +
       `bring the tab forward yourself, or ${POLICY_OFF_HINT}.`,
   };
@@ -56,7 +56,7 @@ export const explainTimeoutUnderPolicy = async (error: ToolErr, client: BrowserC
   return {
     ...error,
     message:
-      `${error.message}. This tab is in the background and the never-activate policy keeps it there; Chrome does not paint a background tab, ` +
+      `${error.message}. This tab is in the background and background mode keeps it there; Chrome does not paint a background tab, ` +
       `so a call that waits for a frame (a screenshot of a tab that was never shown, trusted pointer input) does not finish. ` +
       `Read the page with browser_snapshot or browser_read_page instead, bring the tab forward yourself, or ${POLICY_OFF_HINT}.`,
   };

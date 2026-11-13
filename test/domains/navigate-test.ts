@@ -178,7 +178,7 @@ describe("browser_open_urls", () => {
     assert.equal(fake.client.owns("t2") && fake.client.owns("t3"), true);
   });
 
-  test("under the never-activate policy the tabs open in the background and none is activated", async () => {
+  test("under background mode the tabs open in the background and none is activated", async () => {
     const fake = await opening();
     const r = await underNeverActivate(() => openUrlsTool.handler({ urls: [A, B] }, handlerContext(fake.client)));
     assert.equal(r.success, true);

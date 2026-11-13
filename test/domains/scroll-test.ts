@@ -31,7 +31,7 @@ describe("browser_scroll", () => {
     assert.deepEqual(r.data.details, { x: 500, y: 300, deltaX: 0, deltaY: 300 });
   });
 
-  test("under the never-activate policy the tab is not brought to the front, and the wheel is still sent", async () => {
+  test("under background mode the tab is not brought to the front, and the wheel is still sent", async () => {
     const { fake, client } = await scrollable();
     const r = await underNeverActivate(() => scrollTool.handler({}, handlerContext(client)));
     assert.equal(r.success, true);

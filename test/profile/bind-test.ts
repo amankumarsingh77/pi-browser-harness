@@ -201,12 +201,12 @@ describe("seedProfileWindow", () => {
     assert.equal(s.cleanups(), 1);
   });
 
-  test("under the never-activate policy no profile window is launched, and the user is told to open it", async () => {
+  test("under background mode no profile window is launched, and the user is told to open it", async () => {
     const s = await seeded();
     const r = await underNeverActivate(() => seedProfileWindow(s.client, pin, s.deps));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "policy");
-    assert.match(r.error.message, /launches the browser in the foreground, and the never-activate policy is on/);
+    assert.match(r.error.message, /launches the browser in the foreground, and background mode is on/);
     assert.match(r.error.message, /no other profile was used instead/);
     assert.match(r.error.message, /browser profile menu → Profile 1/);
     assert.deepEqual(s.launches, []);

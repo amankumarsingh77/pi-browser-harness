@@ -55,7 +55,7 @@ const spawnTabViaOpener = async (
   if (neverActivate()) {
     return err(cdpError(
       "policy",
-      `opening another tab in the selected profile raises the browser window, and the never-activate policy is on. ` +
+      `opening another tab in the selected profile raises the browser window, and background mode is on. ` +
       `No tab was opened. Reuse the current tab with browser_navigate, clear the profile selection with /browser-profile, or ${POLICY_OFF_HINT}.`,
       "Target.createTarget",
     ));

@@ -73,7 +73,7 @@ describe("CdpSession.switchTo domain enablement", () => {
     assert.equal(last.sessionId, "s1");
   });
 
-  test("under the never-activate policy a switch is logical: the tab is attached and made current without being activated", async () => {
+  test("in background mode a switch is logical: the tab is attached and made current without being activated", async () => {
     const { stub, session } = await twoTabSession();
     const switched = await underNeverActivate(() => session.switchTo("t2"));
     assert.equal(switched.success, true);

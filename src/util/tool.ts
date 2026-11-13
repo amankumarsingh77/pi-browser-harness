@@ -57,7 +57,7 @@ export type ToolErrKind =
   | "invalid_state"
   | "invalid_args"
   | "io_error"
-  // Refused by an opt-in policy (never-activate), not by the browser: retrying the same call cannot succeed.
+  // Refused by an opt-in policy (background mode), not by the browser: retrying the same call cannot succeed.
   | "policy"
   | "internal";
 
@@ -97,7 +97,7 @@ export type BrowserToolDefinition<S extends TSchema, D extends TSchema = Untyped
   readonly renderResult?: (result: AgentToolResult<DetailsOf<D>>, expanded: boolean, theme: Theme) => Component;
   readonly concurrency: ToolConcurrency;
   readonly ensureAlive?: boolean;
-  // What the tool needs from the screen; only consulted under the never-activate policy. See ./foreground.ts.
+  // What the tool needs from the screen; only consulted under background mode. See ./foreground.ts.
   readonly foreground?: ToolForeground;
 };
 

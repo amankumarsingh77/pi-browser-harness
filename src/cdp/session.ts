@@ -423,7 +423,7 @@ export const createCdpSession = (
       return ok({ targetId: tid, sessionId: attached.data });
     },
     async switchTo(tid) {
-      // Under the never-activate policy the switch is logical only: the harness talks to the tab's
+      // Under background mode the switch is logical only: the harness talks to the tab's
       // own session, which does not need the tab to be the one on screen.
       if (!neverActivate()) {
         const activated = await req("Target.activateTarget", { targetId: tid }, null);

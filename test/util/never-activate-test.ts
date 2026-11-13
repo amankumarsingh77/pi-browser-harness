@@ -17,20 +17,20 @@ const clientReporting = async (visibility: Result<unknown, ReturnType<typeof cdp
   return { client: fake.client, probes: () => fake.evaluated.filter((e) => e === "document.visibilityState").length };
 };
 
-describe("never-activate policy switch", () => {
-  test("it is off unless the flag or BH_NEVER_ACTIVATE turns it on", () => {
-    assert.equal(neverActivate({}), false);
-    assert.equal(neverActivate({ BH_NEVER_ACTIVATE: "1" }), true);
-    assert.equal(neverActivate({ BH_NEVER_ACTIVATE: "true" }), true);
-    assert.equal(neverActivate({ BH_NEVER_ACTIVATE: "0" }), false);
-    assert.equal(neverActivate({ BH_NEVER_ACTIVATE: "false" }), false);
-    setNeverActivate(true);
+describe("background mode switch", () => {
+  test("it is off until it is set, and no environment variable turns it on", () => {
+    const saved = process.env["BH_NEVER_ACTIVATE"];
+    process.env["BH_NEVER_ACTIVATE"] = "1";
     try {
-      assert.equal(neverActivate({}), true);
+      assert.equal(neverActivate(), false);
+      setNeverActivate(true);
+      assert.equal(neverActivate(), true);
     } finally {
       setNeverActivate(false);
+      if (saved === undefined) Reflect.deleteProperty(process.env, "BH_NEVER_ACTIVATE");
+      else process.env["BH_NEVER_ACTIVATE"] = saved;
     }
-    assert.equal(neverActivate({}), false);
+    assert.equal(neverActivate(), false);
   });
 
   test("targets are created in the background only under the policy", async () => {
@@ -77,7 +77,7 @@ describe("foreground refusal", () => {
     assert.match(refusal.message, /^browser_click presses a real mouse button/);
     assert.match(refusal.message, /Nothing was sent to the page/);
     assert.match(refusal.message, /browser_execute_js/);
-    assert.match(refusal.message, /--browser-never-activate \/ BH_NEVER_ACTIVATE/);
+    assert.match(refusal.message, /turn background mode off with \/browser-background/);
     assert.equal(probes(), 0, "the verdict does not depend on the tab");
   });
 

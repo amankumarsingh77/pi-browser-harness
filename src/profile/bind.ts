@@ -66,7 +66,7 @@ export const seedProfileWindow = async (
   if (neverActivate()) {
     return err(cdpError(
       "policy",
-      `opening a window in "${pin.label}" launches the browser in the foreground, and the never-activate policy is on. ` +
+      `opening a window in "${pin.label}" launches the browser in the foreground, and background mode is on. ` +
       `Nothing was launched, and no other profile was used instead: ${manualFallbackHint(pin)} Or ${POLICY_OFF_HINT}.`,
     ));
   }

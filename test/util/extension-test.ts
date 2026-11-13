@@ -62,21 +62,20 @@ describe("browser harness extension", () => {
     assert.equal(pi.commands.length, commandsAfterFirst + 3);
   });
 
-  test("registers the namespace, debug-click and never-activate flags at load", () => {
+  test("registers the namespace and debug-click flags at load", () => {
     const pi = load();
     assert.deepEqual(pi.flags, [
       { name: "browser-namespace", type: "string", defaultValue: undefined },
       { name: "browser-debug-clicks", type: "boolean", defaultValue: false },
-      { name: "browser-never-activate", type: "boolean", defaultValue: false },
     ]);
   });
 
-  test("registers the status and reload commands at load, and setup/profile/recipe only once a session starts", async () => {
+  test("registers the background, status and reload commands at load, and setup/profile/recipe only once a session starts", async () => {
     const pi = load();
-    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon"]);
+    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-background", "browser-status", "browser-reload-daemon"]);
     for (const c of pi.commands) assert.ok(c.description, `${c.name} has no description`);
     await pi.emit("session_start", { type: "session_start" }, fakeCtx().ctx);
-    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-status", "browser-reload-daemon", "browser-setup", "browser-profile", "browser-recipe"]);
+    assert.deepEqual(pi.commands.map((c) => c.name), ["browser-background", "browser-status", "browser-reload-daemon", "browser-setup", "browser-profile", "browser-recipe"]);
   });
 
   test("subscribes to the session lifecycle, agent start and the agent prompt", () => {

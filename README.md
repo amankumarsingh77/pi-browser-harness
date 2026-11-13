@@ -448,7 +448,8 @@ listed with each.
 |---|---|
 | `/browser-setup` | Connect pi to your browser. Run once; idempotent. |
 | `/browser-profile` | Pick which browser profile the agent works in. Remembered across sessions. |
-| `/browser-status` | Connection state, selected profile, and current page. |
+| `/browser-background` | Keep the browser in the background while the agent works: pick On or Off, or pass `on` / `off`. Remembered across sessions. See [Working in the background](#working-in-the-background). |
+| `/browser-status` | Connection state, selected profile, background mode, and current page. |
 | `/browser-reload-daemon` | Force a client restart. Rarely needed — the transport reconnects on its own. |
 | `/browser-recipe` | Replay a saved recipe: `/browser-recipe NAME key=value`. No name lists recipes. |
 
@@ -457,9 +458,7 @@ listed with each.
 | `--browser-namespace <name>` | Override the session namespace (default: auto-generated). |
 | `--browser-debug-clicks` | Save annotated click screenshots for debugging. Equivalent to `BH_DEBUG_CLICKS=1`. |
 | `BU_CDP_WS` | Attach to a browser by WebSocket URL instead of discovering one. The daemon reads this when it starts, so stop a running daemon first. |
-| `--browser-never-activate` | Never bring the browser, its windows or its tabs to the front. See [Working in the background](#working-in-the-background). Equivalent to `BH_NEVER_ACTIVATE=1`. |
 | `BH_DEBUG_CLICKS` | Same as `--browser-debug-clicks`. |
-| `BH_NEVER_ACTIVATE` | Same as `--browser-never-activate`. |
 | `BU_CDP_PORTS` | Extra ports to probe during CDP discovery, beyond 9222. |
 | `BH_SCRIPT_DIR` | Additional directory `browser_run_script` will accept paths from. |
 | `PI_BROWSER_NODE` | Node executable used to run the daemon. Defaults to the one running pi, or `node` from `PATH` when pi is a Bun-compiled binary. |
@@ -538,10 +537,12 @@ that machine's disk; the agent works in whichever window is focused.
 ### Working in the background
 
 By default the harness brings its window forward when it opens one, switches tabs or scrolls, which
-takes focus from whatever you are doing. Start pi with `--browser-never-activate` (or set
-`BH_NEVER_ACTIVATE=1`) and it never does. The default is unchanged.
+takes focus from whatever you are doing. Run `/browser-background` and pick **On**, and it never
+does. The choice is saved with your profile selection and applies to every later session until you
+turn it off; `/browser-background on` and `/browser-background off` set it without the list.
+`/browser-status` shows the current setting. Background mode is off by default.
 
-With the policy on:
+With background mode on:
 
 | What the agent does | What happens |
 |---|---|
@@ -554,10 +555,10 @@ With the policy on:
 | `/browser-setup` with no browser running and no one to ask | The browser is not opened. With a UI you are still asked, and yes opens it. |
 
 A refused tool sends nothing to the page and fails with a `policy` error that names the alternative
-(usually `browser_execute_js`, which is script, not trusted input) and how to turn the policy off.
+(usually `browser_execute_js`, which is script, not trusted input) and how to turn background mode off.
 A screenshot of a background tab that was never shown can time out; the error then says so.
 
-The policy covers the harness's own tools. A `browser_run_script` script or a raw
+Background mode covers the harness's own tools. A `browser_run_script` script or a raw
 `browser_execute_js` call that asks Chrome to activate something is not checked. A tool another
 extension contributes is covered once it declares `foreground: "raises"` or `foreground: "rendered"`.
 
@@ -578,7 +579,7 @@ Windows.
 | Actions all hang | A JS dialog is blocking. `browser_page_info` reports it; `browser_handle_dialog` clears it. |
 | No `[eN]` ref for your target | The element wasn't exposed as interactive. Fall back to a CSS `selector`, or `browser_execute_js` with `getBoundingClientRect()`. |
 | Connected but the wrong browser responds | A stale `DevToolsActivePort` file. Quit every Chromium-family browser, reopen one, then `/browser-setup`. |
-| `failed (policy)` | The never-activate policy refused a tool that needs the browser in front. Follow the alternative in the message, or start pi without `--browser-never-activate`. See [Working in the background](#working-in-the-background). |
+| `failed (policy)` | Background mode refused a tool that needs the browser in front. Follow the alternative in the message, or run `/browser-background off`. See [Working in the background](#working-in-the-background). |
 | Agent acts as the wrong account | No profile is pinned, so tabs open in whichever profile has focus. Run `/browser-profile` and pick one. |
 | `couldn't open a window in "…" automatically` | The profile window couldn't be opened for you. Open that profile from the browser's profile menu, then retry — the harness never falls back to a different profile silently. |
 

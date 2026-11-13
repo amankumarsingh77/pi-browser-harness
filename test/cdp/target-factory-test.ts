@@ -234,7 +234,7 @@ describe("ensureHarnessWindow", () => {
   });
 });
 
-describe("ensureHarnessWindow under the never-activate policy", () => {
+describe("ensureHarnessWindow under background mode", () => {
   test("the dedicated window is created in the background", async () => {
     const h = await harness(
       { ...targets({ targetId: "stranger" }), "Target.createTarget": ok({ targetId: "fresh" }), "Browser.getWindowForTarget": ok({ windowId: 42 }) },
@@ -327,19 +327,19 @@ describe("openHarnessTab", () => {
     assert.equal(h.fake.ownership.has("spawned"), true);
   });
 
-  test("under the never-activate policy a tab is created in the background", async () => {
+  test("in background mode a tab is created in the background", async () => {
     const h = await harness({ "Target.createTarget": ok({ targetId: "child" }) });
     const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
     assert.deepEqual(r, ok("child"));
     assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", openerId: "t1", background: true }]);
   });
 
-  test("under the never-activate policy a tab in a pinned profile is refused, not opened in another profile", async () => {
+  test("in background mode a tab in a pinned profile is refused, not opened in another profile", async () => {
     const h = await spawningClient(true);
     const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
     assert.equal(r.success, false);
     assert.equal(r.error.kind, "policy");
-    assert.match(r.error.message, /raises the browser window, and the never-activate policy is on/);
+    assert.match(r.error.message, /raises the browser window, and background mode is on/);
     assert.equal(h.fake.callsTo("Runtime.evaluate").length, 0, "window.open was never called");
     assert.equal(createCalls(h.fake).length, 0, "no fallback createTarget into a different profile");
     assert.equal(h.fake.ownership.has("spawned"), false);

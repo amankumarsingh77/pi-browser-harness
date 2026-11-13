@@ -19,6 +19,8 @@ export type ProfilePin = {
 type PinFile = {
   readonly version: 1;
   readonly profile: ProfilePin | null;
+  // Background mode (/browser-background). Absent in files written before it existed, which reads as off.
+  readonly background?: boolean;
 };
 
 const CURRENT_VERSION = 1;
@@ -38,36 +40,54 @@ const PinFileSchema = Type.Object(
       ),
       Type.Null(),
     ]),
+    background: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: true },
 );
 
 const pinFileValidator = Compile(PinFileSchema);
 
-export const readPin = async (): Promise<ProfilePin | null> => {
+type Settings = { readonly profile: ProfilePin | null; readonly background: boolean };
+
+const NO_SETTINGS: Settings = { profile: null, background: false };
+
+// A missing or unreadable file is the defaults, not an error: nothing has been chosen yet.
+const readSettings = async (): Promise<Settings> => {
   let raw: string;
   try {
     raw = await readFile(pinFilePath(), "utf8");
   } catch {
-    return null;
+    return NO_SETTINGS;
   }
   const parsed = parseJson(raw, pinFileValidator);
-  if (!parsed.success) return null;
+  if (!parsed.success) return NO_SETTINGS;
+  const background = parsed.data.background === true;
   const profile = parsed.data.profile;
-  if (profile === null) return null;
+  if (profile === null) return { profile: null, background };
   const { userDataDir, profileDir, label, savedAt } = profile;
   return {
-    userDataDir,
-    profileDir,
-    label: typeof label === "string" && label.length > 0 ? label : profileDir,
-    savedAt: typeof savedAt === "string" ? savedAt : "",
+    background,
+    profile: {
+      userDataDir,
+      profileDir,
+      label: typeof label === "string" && label.length > 0 ? label : profileDir,
+      savedAt: typeof savedAt === "string" ? savedAt : "",
+    },
   };
 };
 
-const writePinFile = async (profile: ProfilePin | null): Promise<Result<void, string>> => {
+export const readPin = async (): Promise<ProfilePin | null> => (await readSettings()).profile;
+
+export const readBackgroundMode = async (): Promise<boolean> => (await readSettings()).background;
+
+const writeSettings = async (settings: Settings, what: string): Promise<Result<void, string>> => {
   const target = pinFilePath();
   const tmp = `${target}.${randomUUID()}.tmp`;
-  const payload: PinFile = { version: CURRENT_VERSION, profile };
+  const payload: PinFile = {
+    version: CURRENT_VERSION,
+    profile: settings.profile,
+    ...(settings.background ? { background: true } : {}),
+  };
   try {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
@@ -76,10 +96,17 @@ const writePinFile = async (profile: ProfilePin | null): Promise<Result<void, st
   } catch (e) {
     // The temp file may never have been created; the write error below is the one that matters.
     await unlink(tmp).catch(() => undefined);
-    return err(`could not save profile selection to ${target}: ${e instanceof Error ? e.message : String(e)}`);
+    return err(`could not save ${what} to ${target}: ${e instanceof Error ? e.message : String(e)}`);
   }
 };
 
-export const writePin = (pin: ProfilePin): Promise<Result<void, string>> => writePinFile(pin);
+// Each setting is written with the other one read back first, so changing one never resets the other.
+const writeProfile = async (profile: ProfilePin | null): Promise<Result<void, string>> =>
+  writeSettings({ ...(await readSettings()), profile }, "profile selection");
 
-export const clearPin = (): Promise<Result<void, string>> => writePinFile(null);
+export const writePin = (pin: ProfilePin): Promise<Result<void, string>> => writeProfile(pin);
+
+export const clearPin = (): Promise<Result<void, string>> => writeProfile(null);
+
+export const writeBackgroundMode = async (background: boolean): Promise<Result<void, string>> =>
+  writeSettings({ ...(await readSettings()), background }, "the background mode setting");

@@ -3,7 +3,8 @@ import { type BrowserClient, type BrowserClientOptions, createBrowserClient } fr
 import { getBrowserSystemPrompt } from "./prompt";
 import { registerSetupCommand } from "./setup";
 import { registerProfileCommand } from "./profile/command";
-import { type ProfilePin, readPin } from "./profile/store";
+import { registerBackgroundCommand } from "./background";
+import { type ProfilePin, readBackgroundMode, readPin } from "./profile/store";
 import { type BrowserState, createStatePersister, restoreState } from "./state";
 import { ALL_TOOLS, type RegistryError, createToolRegistry } from "./registry";
 import { cleanupTempDirs } from "./util/truncate";
@@ -57,12 +58,14 @@ export type ExtensionDeps = {
   readonly createTransport?: (namespace: string) => CdpTransport;
   readonly createClient?: (opts: BrowserClientOptions) => BrowserClient;
   readonly readPin?: () => Promise<ProfilePin | null>;
+  readonly readBackgroundMode?: () => Promise<boolean>;
 };
 
 export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) => void) => (pi: ExtensionAPI): void => {
   const createTransport = deps.createTransport ?? ((namespace: string): CdpTransport => createDaemonTransport(namespace));
   const createClient = deps.createClient ?? createBrowserClient;
   const loadPin = deps.readPin ?? readPin;
+  const loadBackgroundMode = deps.readBackgroundMode ?? readBackgroundMode;
 
   // Flags are only readable once pi has parsed them, which is after registration and before the
   // first session event; reading at load time always yielded undefined (#browser-namespace).
@@ -85,11 +88,8 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
     type: "boolean",
     default: false,
   });
-  pi.registerFlag("browser-never-activate", {
-    description: "Never bring the browser, its windows or its tabs to the front; tools that need that are refused",
-    type: "boolean",
-    default: false,
-  });
+
+  registerBackgroundCommand(pi, deps.readBackgroundMode ? { readBackgroundMode: deps.readBackgroundMode } : {});
 
   pi.registerCommand("browser-status", {
     description: "Show browser connection status and current page",
@@ -105,7 +105,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
         `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
-      if (neverActivate()) lines.push("Policy: never-activate (the browser is never brought to the front; clicks and drags are refused)");
+      lines.push(`Background mode: ${neverActivate() ? "on (the browser is never brought to the front; clicks and drags are refused)" : "off"} — change with /browser-background`);
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
       if (s.alive) {
         const info = await client.pageInfo();
@@ -149,7 +149,8 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
     state = restored;
     persister.markPersisted(restored);
     setDebugClicks(asBoolean(pi.getFlag("browser-debug-clicks")) ?? false);
-    setNeverActivate(asBoolean(pi.getFlag("browser-never-activate")) ?? false);
+    // Re-read every session start, like the pin: another pi session may have changed it.
+    setNeverActivate(await loadBackgroundMode());
 
     // Re-read the on-disk profile pin every session start: another pi session may have changed it since this client was created.
     const profilePin = await loadPin();

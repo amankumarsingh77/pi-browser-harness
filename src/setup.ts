@@ -73,7 +73,7 @@ const openClosedBrowser = async (
     return err(NO_BROWSER);
   } else if (neverActivate()) {
     // Nobody is here to ask, and starting a browser puts its window in front of whatever the user is doing.
-    return err(`${NO_BROWSER}\n\nThe never-activate policy is on, so ${browser.family} was not opened for you. Open it yourself, then run /browser-setup.`);
+    return err(`${NO_BROWSER}\n\nBackground mode is on, so ${browser.family} was not opened for you. Open it yourself, then run /browser-setup.`);
   }
 
   const launched = await (deps.launchBrowser ?? launchBrowser)({
