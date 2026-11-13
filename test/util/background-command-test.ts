@@ -84,7 +84,7 @@ describe("/browser-background", () => {
     assert.equal(await readBackgroundMode(), true);
     assert.equal(ctx.notices.length, 1);
     assert.match(ctx.notices[0]?.message ?? "", /^Background mode: on/);
-    assert.match(ctx.notices[0]?.message ?? "", /browser_click and browser_drag_and_drop are refused/);
+    assert.match(ctx.notices[0]?.message ?? "", /Every tool works as it does with the mode off/);
   });
 
   test("'off' saves and applies the default again", async () => {
@@ -98,11 +98,11 @@ describe("/browser-background", () => {
   });
 
   test("with no argument and a UI the user picks from a list that marks the current choice", async () => {
-    const ctx = fakeCtx({ selections: ["  On: never bring the browser to the front"] });
+    const ctx = fakeCtx({ selections: ["  On: keep the browser in the background unless a tool needs it on screen"] });
     await command().handler("", ctx.ctx);
     assert.deepEqual(ctx.prompts.map((p) => p.title), ["Background mode"]);
     assert.deepEqual(ctx.prompts[0]?.options, [
-      "  On: never bring the browser to the front",
+      "  On: keep the browser in the background unless a tool needs it on screen",
       "✓ Off: the browser comes forward when the agent uses it (default)",
     ]);
     assert.equal(neverActivate(), true);

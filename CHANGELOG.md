@@ -2,6 +2,17 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- **Background mode no longer makes anything fail.** With a profile pinned, connecting failed with "opening a window in … launches the browser in the foreground, and background mode is on", and `browser_click`, `browser_drag_and_drop`, a scroll of a hidden tab and a second tab in a pinned profile were refused. Background mode now never changes what a tool does: it keeps the browser in the background wherever that costs nothing, and when a tool needs the page on screen it brings it forward exactly as it would with the mode off. Connecting, and opening a browser that is closed, behave as they do with the mode off.
+- **A tab in a pinned profile opens in the background when it can.** When the pinned profile's window was the last one used, the tab is created without raising anything, and it is checked to have landed in that profile.
+
+### Removed
+
+- **The `policy` error kind**, added in 0.18.0. Nothing is refused any more, so nothing produces it.
+
 ## 0.19.0 — 2026-11-13
 
 ### Changed

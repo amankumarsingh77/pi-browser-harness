@@ -323,13 +323,12 @@ describe("performSetup with a closed local browser", () => {
     assert.match(r.data, /^Opened Brave\./);
   });
 
-  test("in background mode a browser is never opened unasked, even with a pin", async () => {
+  test("background mode does not change setup: with a pin and no UI the browser is still opened", async () => {
     const c = await setupClient({ pin: BRAVE_PIN });
     const { deps, launches } = closed({ installed: [CHROME, BRAVE] });
     const r = await underNeverActivate(() => performSetup(c.client, fakeCtx({ hasUI: false }).ctx, deps));
-    assert.equal(r.success, false);
-    assert.match(r.error, /Background mode is on, so Brave was not opened for you/);
-    assert.deepEqual(launches, []);
+    assert.ok(r.success);
+    assert.deepEqual(launches, [{ exePath: BRAVE.exePath, profileDir: "Profile 2" }]);
   });
 
   test("in background mode a user who says yes still gets the browser opened", async () => {

@@ -257,7 +257,6 @@ export const createBrowserClient = (opts: BrowserClientOptions): BrowserClient =
       case "discovery_failed":
       case "invalid_response":
       case "remote_error":
-      case "policy":
         return ok(undefined);
     }
   };

@@ -39,8 +39,8 @@ export const scrollTool = defineBrowserTool({
     const cy = args.y ?? Math.round(info.data.height / 2);
     const dx = args.deltaX ?? 0;
     const dy = args.deltaY ?? 300;
-    // A hidden tab drops Input events: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling. Under the
-    // background mode the tab is left where it is; `foreground: "rendered"` has already refused a hidden one.
+    // A hidden tab drops Input events: mouseWheel hangs and synthesizeScrollGesture returns ok without scrolling. In
+    // background mode `foreground: "rendered"` has already brought a hidden tab forward, and a visible one is left alone.
     if (!neverActivate()) {
       const front = await cdpCall(client, "Page.bringToFront", {});
       if (!front.success) return front;

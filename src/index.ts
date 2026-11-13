@@ -105,7 +105,7 @@ export const createExtension = (deps: ExtensionDeps = {}): ((pi: ExtensionAPI) =
         `Profile: ${pin ? pin.label : "not selected (uses whichever window is focused) — run /browser-profile"}`,
         `Session: ${s.sessionId ?? "none"}`,
       ];
-      lines.push(`Background mode: ${neverActivate() ? "on (the browser is never brought to the front; clicks and drags are refused)" : "off"} — change with /browser-background`);
+      lines.push(`Background mode: ${neverActivate() ? "on (the browser stays in the background unless a tool needs it on screen)" : "off"} — change with /browser-background`);
       if (s.remoteBrowserId) lines.push(`Browser ID: ${s.remoteBrowserId}`);
       if (s.alive) {
         const info = await client.pageInfo();

@@ -13,7 +13,7 @@ import { type Component, Text } from "@mariozechner/pi-tui";
 import { daemonSocketMayExist } from "../daemon/spawn";
 import type { BrowserClient } from "../client";
 import { type Result, err, ok } from "./result";
-import { type ToolForeground, explainTimeoutUnderPolicy, foregroundRefusal } from "./foreground";
+import { type ToolForeground, showTabIfHidden } from "./foreground";
 
 // Details are stored by pi as JSON and handed back on replay, so a renderer only ever reads them.
 export type DeepReadonly<T> = T extends ReadonlyArray<infer U>
@@ -57,8 +57,6 @@ export type ToolErrKind =
   | "invalid_state"
   | "invalid_args"
   | "io_error"
-  // Refused by an opt-in policy (background mode), not by the browser: retrying the same call cannot succeed.
-  | "policy"
   | "internal";
 
 export type ToolErr = {
@@ -97,7 +95,8 @@ export type BrowserToolDefinition<S extends TSchema, D extends TSchema = Untyped
   readonly renderResult?: (result: AgentToolResult<DetailsOf<D>>, expanded: boolean, theme: Theme) => Component;
   readonly concurrency: ToolConcurrency;
   readonly ensureAlive?: boolean;
-  // What the tool needs from the screen; only consulted under background mode. See ./foreground.ts.
+  // Set when the tool needs the tab on screen. In background mode a hidden tab is brought forward before the
+  // handler runs; otherwise it has no effect. See ./foreground.ts.
   readonly foreground?: ToolForeground;
 };
 
@@ -186,10 +185,16 @@ const runHandler = async <S extends TSchema, D extends TSchema>(
       return err({ kind: "invalid_state", message: "Tool execution aborted before entering serialized lane" });
     }
   }
-  const refusal = await foregroundRefusal(def.name, def.foreground, client).catch(() => undefined);
-  if (refusal) {
-    release?.();
-    return err(refusal);
+  if (def.foreground !== undefined) {
+    const shown = await showTabIfHidden(client);
+    if (!shown.success) {
+      release?.();
+      return err({
+        kind: shown.error.kind === "timeout" ? "timeout" : "cdp_error",
+        message: shown.error.message,
+        details: { method: "Page.bringToFront" },
+      });
+    }
   }
   const finish = await callObserver?.({ name: def.name, concurrency: def.concurrency, args, client }).catch(() => undefined);
   try {
@@ -200,8 +205,7 @@ const runHandler = async <S extends TSchema, D extends TSchema>(
       extensionCtx,
     });
     const note = await finish?.(result.success ? { ok: true } : { ok: false, error: result.error.message }).catch(() => undefined);
-    if (!result.success) return err(await explainTimeoutUnderPolicy(result.error, client).catch(() => result.error));
-    return note !== undefined ? ok({ ...result.data, text: `${result.data.text}\n\n${note}` }) : result;
+    return result.success && note !== undefined ? ok({ ...result.data, text: `${result.data.text}\n\n${note}` }) : result;
   } catch (e) {
     // A throw is a bug in the handler, not a tool outcome; it still has to reach the model as an error.
     const message = e instanceof Error ? e.message : String(e);

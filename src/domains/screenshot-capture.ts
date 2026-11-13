@@ -5,7 +5,8 @@ import type { ToolErr } from "../util/tool";
 import { screenshotPath } from "../util/paths";
 import { loadSharp } from "../util/sharp-shim";
 import { safeJs } from "../util/js-template";
-import { cdpCall, evalJs } from "./cdp-call";
+import { cdpCall, evalJs, fromClient } from "./cdp-call";
+import { showTabIfHidden } from "../util/foreground";
 import { writeFileResult } from "./io";
 
 export type CaptureArgs = {
@@ -21,6 +22,9 @@ export const captureBase = async (
   const format = args.format ?? "png";
   const quality = args.quality ?? 80;
   const path = screenshotPath(client.namespace, format);
+  // Chrome does not paint a tab that was never shown, and a capture of one never returns.
+  const shown = fromClient(await showTabIfHidden(client), "Page.bringToFront");
+  if (!shown.success) return shown;
   const r = await cdpCall(client, "Page.captureScreenshot", {
     format,
     captureBeyondViewport: args.fullPage ?? false,

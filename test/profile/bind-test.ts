@@ -201,17 +201,22 @@ describe("seedProfileWindow", () => {
     assert.equal(s.cleanups(), 1);
   });
 
-  test("under background mode no profile window is launched, and the user is told to open it", async () => {
-    const s = await seeded();
+  test("background mode does not change seeding: the profile window is launched as usual", async () => {
+    const s = await seeded({
+      canned: {
+        "Target.getTargets": [
+          ok({ targetInfos: [page("t1", "https://example.test/")] }),
+          ok({ targetInfos: [page("t1", "https://example.test/"), page("seed", SENTINEL, "ctx-9")] }),
+        ],
+        "Target.attachToTarget": [ok({ sessionId: "s1" }), ok({ sessionId: "s-seed" })],
+        "Browser.getWindowForTarget": [ok({ windowId: 7 }), ok({ windowId: 42 })],
+      },
+    });
     const r = await underNeverActivate(() => seedProfileWindow(s.client, pin, s.deps));
-    assert.equal(r.success, false);
-    assert.equal(r.error.kind, "policy");
-    assert.match(r.error.message, /launches the browser in the foreground, and background mode is on/);
-    assert.match(r.error.message, /no other profile was used instead/);
-    assert.match(r.error.message, /browser profile menu → Profile 1/);
-    assert.deepEqual(s.launches, []);
-    assert.deepEqual(s.detects, []);
-    assert.equal(s.fake.calls.length, 0);
+    assert.ok(r.success, r.success ? "" : r.error.message);
+    assert.equal(r.data, "seed");
+    assert.deepEqual(s.launches, [{ exePath: EXE, profileDir: "Profile 1" }]);
+    assert.deepEqual(s.contexts, ["ctx-9"]);
   });
 
   test("no browser executable is a discovery failure with the manual fallback", async () => {

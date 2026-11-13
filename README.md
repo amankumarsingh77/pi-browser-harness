@@ -537,30 +537,22 @@ that machine's disk; the agent works in whichever window is focused.
 ### Working in the background
 
 By default the harness brings its window forward when it opens one, switches tabs or scrolls, which
-takes focus from whatever you are doing. Run `/browser-background` and pick **On**, and it never
-does. The choice is saved with your profile selection and applies to every later session until you
-turn it off; `/browser-background on` and `/browser-background off` set it without the list.
-`/browser-status` shows the current setting. Background mode is off by default.
+takes focus from whatever you are doing. Run `/browser-background` and pick **On**, and it stays in
+the background wherever it can. The choice is saved with your profile selection and applies to every
+later session until you turn it off; `/browser-background on` and `/browser-background off` set it
+without the list. `/browser-status` shows the current setting. Background mode is off by default.
 
-With background mode on:
+Background mode never changes what a tool does or whether it works. It only changes whether the
+browser comes forward for it:
 
-| What the agent does | What happens |
+| What the agent does | With background mode on |
 |---|---|
 | Opens the harness window or a tab (`browser_new_tab`, `browser_open_urls`, `browser_read_page`) | Created in the background. |
 | `browser_switch_tab` | The harness talks to that tab from then on; the tab is not shown. |
-| Reads a page: `browser_snapshot`, `browser_read_page`, `browser_execute_js`, `browser_navigate`, `browser_type`, `browser_press_key`, `browser_fill` | Works on a background tab. |
-| `browser_scroll` | Works on a tab its window is showing. On a tab behind another it is refused, because Chrome drops trusted wheel input there. |
-| `browser_click`, `browser_drag_and_drop` | Always refused: a real mouse press makes Chrome raise its window. |
-| Opens a window in a pinned profile, or a second tab in one | Refused: both need the browser in front. The harness does not use another profile instead. |
-| `/browser-setup` with no browser running and no one to ask | The browser is not opened. With a UI you are still asked, and yes opens it. |
-
-A refused tool sends nothing to the page and fails with a `policy` error that names the alternative
-(usually `browser_execute_js`, which is script, not trusted input) and how to turn background mode off.
-A screenshot of a background tab that was never shown can time out; the error then says so.
-
-Background mode covers the harness's own tools. A `browser_run_script` script or a raw
-`browser_execute_js` call that asks Chrome to activate something is not checked. A tool another
-extension contributes is covered once it declares `foreground: "raises"` or `foreground: "rendered"`.
+| Reads a page: `browser_snapshot`, `browser_read_page`, `browser_execute_js`, `browser_navigate`, `browser_type`, `browser_press_key`, `browser_fill` | Stays in the background. |
+| `browser_scroll`, `browser_click`, `browser_drag_and_drop`, a screenshot | Stays in the background when the tab is already the one its window shows. A tab behind another is brought forward first, because Chrome drops trusted pointer input and does not paint there. A real mouse press also makes Chrome raise its window. |
+| Connects with a pinned profile (`/browser-setup`) | The profile's window is opened as usual, which brings the browser forward once. |
+| Opens another tab in a pinned profile | In the background when that profile's window was the last one used. Otherwise through the same route as with the mode off, which brings that window forward. The harness never uses another profile to stay in the background. |
 
 These behaviours were measured on Chrome 153 on Linux (X11). They have not been checked on macOS or
 Windows.
@@ -579,7 +571,6 @@ Windows.
 | Actions all hang | A JS dialog is blocking. `browser_page_info` reports it; `browser_handle_dialog` clears it. |
 | No `[eN]` ref for your target | The element wasn't exposed as interactive. Fall back to a CSS `selector`, or `browser_execute_js` with `getBoundingClientRect()`. |
 | Connected but the wrong browser responds | A stale `DevToolsActivePort` file. Quit every Chromium-family browser, reopen one, then `/browser-setup`. |
-| `failed (policy)` | Background mode refused a tool that needs the browser in front. Follow the alternative in the message, or run `/browser-background off`. See [Working in the background](#working-in-the-background). |
 | Agent acts as the wrong account | No profile is pinned, so tabs open in whichever profile has focus. Run `/browser-profile` and pick one. |
 | `couldn't open a window in "…" automatically` | The profile window couldn't be opened for you. Open that profile from the browser's profile menu, then retry — the harness never falls back to a different profile silently. |
 

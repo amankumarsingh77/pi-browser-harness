@@ -334,15 +334,48 @@ describe("openHarnessTab", () => {
     assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", openerId: "t1", background: true }]);
   });
 
-  test("in background mode a tab in a pinned profile is refused, not opened in another profile", async () => {
+  test("in background mode a tab in a pinned profile still opens through window.open when that profile is not the browser's default", async () => {
     const h = await spawningClient(true);
     const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
-    assert.equal(r.success, false);
-    assert.equal(r.error.kind, "policy");
-    assert.match(r.error.message, /raises the browser window, and background mode is on/);
-    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 0, "window.open was never called");
-    assert.equal(createCalls(h.fake).length, 0, "no fallback createTarget into a different profile");
-    assert.equal(h.fake.ownership.has("spawned"), false);
+    assert.deepEqual(r, ok("spawned"));
+    assert.equal(h.fake.callsTo("Target.getBrowserContexts").length, 1);
+    assert.equal(createCalls(h.fake).length, 0, "createTarget would land in another profile");
+    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 1);
+    assert.equal(h.fake.ownership.has("spawned"), true);
+  });
+
+  test("in background mode a tab in a pinned profile opens in the background when that profile is the browser's default", async () => {
+    const h = await harness(
+      {
+        "Target.getBrowserContexts": ok({ defaultBrowserContextId: "ctx" }),
+        "Target.createTarget": ok({ targetId: "child" }),
+        ...targets({ targetId: "t1", browserContextId: "ctx" }, { targetId: "child", browserContextId: "ctx" }),
+      },
+      { profilePin: pin, profileContextId: "ctx" },
+    );
+    const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
+    assert.deepEqual(r, ok("child"));
+    assert.deepEqual(createCalls(h.fake).map((c) => c.params), [{ url: "about:blank", openerId: "t1", background: true }]);
+    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 0, "window.open was not needed");
+    assert.equal(h.fake.ownership.has("child"), true);
+  });
+
+  test("a background tab that landed in another profile is closed, never kept", async () => {
+    const h = await harness(
+      {
+        "Target.getBrowserContexts": ok({ defaultBrowserContextId: "ctx" }),
+        "Target.createTarget": ok({ targetId: "stray" }),
+        "Target.closeTarget": ok({ success: true }),
+        "Runtime.evaluate": ok({ result: { type: "boolean", value: false } }),
+        ...targets({ targetId: "t1", browserContextId: "ctx" }, { targetId: "stray", browserContextId: "other" }),
+      },
+      { profilePin: pin, profileContextId: "ctx" },
+    );
+    const r = await underNeverActivate(() => openHarnessTab(h.client, "t1"));
+    assert.deepEqual(h.fake.callsTo("Target.closeTarget").map((c) => c.params), [{ targetId: "stray" }]);
+    assert.notDeepEqual(r, ok("stray"), "the stray tab is not handed back as the new tab");
+    assert.equal(h.fake.callsTo("Runtime.evaluate").length, 1, "it fell back to window.open");
+    assert.equal(r.success, false, "the fake blocks window.open, so the fallback's own error is what comes back");
   });
 
   test("with a profile context, a blocked window.open is reported as invalid_response and nothing is owned", async () => {

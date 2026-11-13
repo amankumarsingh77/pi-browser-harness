@@ -24,6 +24,7 @@ import { type Result, ok } from "../util/result";
 import { type DetailsOf, defineBrowserTool, type ToolErr, type ToolOk } from "../util/tool";
 import { applyTruncation } from "../util/truncate";
 import { screenshotPath } from "../util/paths";
+import { showTabIfHidden } from "../util/foreground";
 
 const SnapshotArgs = Type.Object({
   includeScreenshot: Type.Optional(
@@ -104,6 +105,8 @@ const BOX_CONCURRENCY = 8;
 
 // Best-effort: a capture or write failure just drops the screenshot from the result.
 const captureJpeg = async (client: BrowserClient): Promise<string | undefined> => {
+  // A capture of a tab that was never shown does not return; in background mode it is brought forward first.
+  if (!(await showTabIfHidden(client)).success) return undefined;
   const shot = await cdpCall(client, "Page.captureScreenshot", { format: "jpeg", quality: 80 });
   if (!shot.success) return undefined;
   const path = screenshotPath(client.namespace, "jpeg");

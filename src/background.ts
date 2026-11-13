@@ -8,12 +8,13 @@ export type BackgroundCommandDeps = {
   readonly writeBackgroundMode?: (on: boolean) => Promise<Result<void, string>>;
 };
 
-const ON_LABEL = "On: never bring the browser to the front";
+const ON_LABEL = "On: keep the browser in the background unless a tool needs it on screen";
 const OFF_LABEL = "Off: the browser comes forward when the agent uses it (default)";
 
 const ON_NOTICE =
-  "Background mode: on ✓\nThe browser is never brought to the front. Reading, navigating and typing work in the background; " +
-  "browser_click and browser_drag_and_drop are refused, and browser_scroll works only on a tab its window is showing.\n" +
+  "Background mode: on ✓\nThe browser stays in the background while the agent reads, navigates and types. " +
+  "It still comes forward when a tool needs the page on screen (a click, a drag, a scroll or a screenshot of a hidden tab), " +
+  "and when the selected profile's window is first opened. Every tool works as it does with the mode off.\n" +
   "Saved. It stays on until you turn it off.";
 const OFF_NOTICE = "Background mode: off ✓\nThe browser comes forward when the agent uses it. Saved.";
 

@@ -12,7 +12,5 @@ export const neverActivate = (): boolean => enabled;
 
 export const BACKGROUND_COMMAND = "browser-background";
 
-export const POLICY_OFF_HINT = `turn background mode off with /${BACKGROUND_COMMAND}`;
-
 // Spread into Target.createTarget params. Without `background`, Chrome focuses what it creates.
 export const createInBackground = (): { readonly background?: true } => (neverActivate() ? { background: true } : {});

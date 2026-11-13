@@ -191,6 +191,10 @@ export const COMMANDS = {
     Type.Object({ success: Type.Optional(Type.Boolean()) }),
   ),
   "Target.activateTarget": cmd(Type.Object({ targetId: Type.String() }), Empty),
+  "Target.getBrowserContexts": cmd(
+    Type.Object({}),
+    Type.Object({ defaultBrowserContextId: Type.Optional(Type.String()) }),
+  ),
   "Target.getTargetInfo": cmd(
     Type.Object({ targetId: Type.Optional(Type.String()) }),
     Type.Object({ targetInfo: TargetInfo }),
