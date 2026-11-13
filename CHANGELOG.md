@@ -2,6 +2,17 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.19.0 — 2026-11-13
+
+### Changed
+
+- **Background mode is now a setting inside pi: `/browser-background`.** Run it and pick On or Off, or pass `on` / `off`. The choice is saved next to the profile selection in `browser-harness.json`, applies at once and to every later session, and shows in `/browser-status`. It is still off by default. What background mode does is unchanged from 0.18.0.
+- **Refusals now say "background mode" and point at the command.** A tool refused in background mode tells you to run `/browser-background` to turn it off.
+
+### Removed
+
+- **The `--browser-never-activate` flag and the `BH_NEVER_ACTIVATE` variable**, added in 0.18.0. Neither is read any more; use `/browser-background on` instead.
+
 ## 0.18.0 — 2026-11-13
 
 ### Added
