@@ -2,6 +2,14 @@
 
 All notable changes to pi-browser-harness will be documented in this file.
 
+## 0.19.2 — 2026-11-14
+
+### Fixed
+
+- **Aborting `browser_run_script` stops the script.** A timeout or cancel used to stop only the wait: the script kept running and kept driving the tab, so a scraping loop the agent thought was cancelled navigated on in the background while new runs started, and one tab's renderer could grow past 5 GB. Now the script's `daemon` is cut off when the run ends: every later browser call throws, a call in flight at the abort rejects, and a navigate loop stops at its next call. Release handles it was given (such as a `mutationMutex()` release) keep working, so cleanup in a `finally` still runs.
+- **One `browser_run_script` at a time per browser session.** Scripts share the session's current tab, so two loops could fight over it. A second run while one is going is refused with `invalid_state`, saying how long the first has been running.
+- **A cancel that lands while the script file is being read is honoured.** It used to be missed, and the run waited out its whole timeout; now it returns at once without running the script.
+
 ## 0.19.1 — 2026-11-13
 
 ### Fixed
