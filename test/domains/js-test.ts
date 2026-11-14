@@ -294,4 +294,117 @@ describe("browser_run_script", () => {
     assert.equal(r.error.kind, "internal");
     assert.match(r.error.message, /script aborted/);
   });
+
+  // A loop like the scraper that ran away: navigate, wait, extract, with the extraction errors swallowed.
+  const navigateLoop = [
+    "for (;;) {",
+    "  await daemon.session().call('Page.navigate', { url: 'https://example.test/' });",
+    "  await new Promise((r) => setTimeout(r, 10));",
+    "  try { await daemon.evaluateJs('1'); } catch {}",
+    "}",
+  ].join("\n");
+  const settle = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+
+  test("after a timeout the script can no longer drive the browser", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(1) });
+    const path = await script("runaway.js", navigateLoop);
+    const r = await runScriptTool.handler({ path, timeoutMs: 100 }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    const navsAtAbort = fake.callsTo("Page.navigate").length;
+    const evalsAtAbort = fake.evaluated.length;
+    assert.ok(navsAtAbort > 0, "the loop ran before the timeout");
+    await settle(150);
+    assert.equal(fake.callsTo("Page.navigate").length, navsAtAbort, "no navigation after the abort");
+    assert.equal(fake.evaluated.length, evalsAtAbort, "no evaluation after the abort");
+  });
+
+  test("after the caller aborts the script can no longer drive the browser", async () => {
+    const fake = await createFakeClient({ evaluate: () => ok(1) });
+    const ac = new AbortController();
+    const path = await script("runaway2.js", navigateLoop);
+    const pending = runScriptTool.handler({ path, timeoutMs: 60_000 }, scriptCtx(fake.client, undefined, ac.signal));
+    await settle(60);
+    ac.abort();
+    await pending;
+    const navsAtAbort = fake.callsTo("Page.navigate").length;
+    await settle(150);
+    assert.equal(fake.callsTo("Page.navigate").length, navsAtAbort);
+  });
+
+  test("a browser call still in flight at the abort rejects instead of handing its result to the script", async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const fake = await createFakeClient();
+    const slow: BrowserClient = { ...fake.client, evaluateJs: async () => { await gate; return ok("late"); } };
+    const path = await script("inflight.js", [
+      "let got = 'nothing';",
+      "try { got = await daemon.evaluateJs('x'); } catch (e) { got = 'threw: ' + e.message; }",
+      "params.out.got = got;",
+      "return { content: [{ type: 'text', text: 'done' }] };",
+    ].join("\n"));
+    const out: Record<string, unknown> = {};
+    const r = await runScriptTool.handler({ path, timeoutMs: 100, params: { out } }, handlerContext(slow));
+    assert.equal(r.success, false);
+    release();
+    await settle(20);
+    assert.match(String(out["got"]), /^threw: .*script aborted/);
+  });
+
+  test("a second script on the same tab is refused while the first is running", async () => {
+    const fake = await createFakeClient();
+    const ac = new AbortController();
+    const first = runScriptTool.handler(
+      { path: await script("hold.js", "await new Promise(() => {}); return { content: [] };"), timeoutMs: 60_000 },
+      scriptCtx(fake.client, undefined, ac.signal),
+    );
+    const second = await runScriptTool.handler(
+      { path: await script("quick.js", "return { content: [{ type: 'text', text: 'ran' }] };") },
+      handlerContext(fake.client),
+    );
+    assert.equal(second.success, false);
+    assert.equal(second.error.kind, "invalid_state");
+    assert.match(second.error.message, /already running on this tab/);
+    ac.abort();
+    await first;
+  });
+
+  test("once the first script ends, a new one on the same tab runs", async () => {
+    const fake = await createFakeClient();
+    const ac = new AbortController();
+    const first = runScriptTool.handler(
+      { path: await script("hold2.js", "await new Promise(() => {}); return { content: [] };"), timeoutMs: 60_000 },
+      scriptCtx(fake.client, undefined, ac.signal),
+    );
+    ac.abort();
+    await first;
+    const next = await runScriptTool.handler(
+      { path: await script("quick2.js", "return { content: [{ type: 'text', text: 'ran' }] };") },
+      handlerContext(fake.client),
+    );
+    assert.equal(next.success, true);
+    assert.equal(next.data.text, "ran");
+  });
+
+  test("scripts on different tabs run side by side", async () => {
+    const a = await createFakeClient();
+    const b = await createFakeClient({
+      canned: {
+        "Target.getTargets": ok({ targetInfos: [{ targetId: "t2", type: "page", title: "Other", url: "https://other.test/" }] }),
+        "Target.attachToTarget": ok({ sessionId: "s2" }),
+      },
+      ownedTargetIds: ["t2"],
+    });
+    const ac = new AbortController();
+    const first = runScriptTool.handler(
+      { path: await script("hold3.js", "await new Promise(() => {}); return { content: [] };"), timeoutMs: 60_000 },
+      scriptCtx(a.client, undefined, ac.signal),
+    );
+    const other = await runScriptTool.handler(
+      { path: await script("quick3.js", "return { content: [{ type: 'text', text: 'ran' }] };") },
+      handlerContext(b.client),
+    );
+    assert.equal(other.success, true);
+    ac.abort();
+    await first;
+  });
 });

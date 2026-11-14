@@ -355,6 +355,10 @@ Scripts must live under the OS temp dir, the cwd, or `BH_SCRIPT_DIR`, and every 
 mandatory timeout (60s default, 600s max). They land on disk first, so they're reviewable and
 re-runnable.
 
+When a run times out or is cancelled, its `daemon` is cut off: every later browser call throws, so a
+navigate loop stops at its next call instead of running on in the background. Only one script runs per
+tab at a time; a second `browser_run_script` on a busy tab is refused until the first ends.
+
 ### Contributing tools from another pi extension
 
 Another extension can add its own `browser_*` tools to this harness. Contributed tools share the
