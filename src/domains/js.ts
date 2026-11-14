@@ -3,15 +3,16 @@ import { resolve, isAbsolute } from "node:path";
 import { isPathWithin } from "../util/paths";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { Markdown } from "@mariozechner/pi-tui";
 import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
 import { type Result, err, ok } from "../util/result";
 import { formatBytes } from "../util/truncate";
-import { type DetailsOf, defineBrowserTool, isJsonObject, type ToolErr, type ToolOk } from "../util/tool";
+import { type DetailsOf, defineBrowserTool, type HandlerContext, isJsonObject, type ToolErr, type ToolOk } from "../util/tool";
 import { evalJs } from "./cdp-call";
 import { applyTruncation } from "../util/truncate";
 import { isRecord } from "../util/guards";
+import { revocable } from "../util/revocable";
 
 const COMPACT_PREVIEW_BYTES = 120;
 
@@ -160,6 +161,134 @@ type ContentItem = { readonly type: "text"; readonly text: string };
 const isContentItem = (v: unknown): v is ContentItem =>
   isRecord(v) && v["type"] === "text" && typeof v["text"] === "string";
 
+const ABORTED_MESSAGE = "script aborted (timeout or cancellation)";
+
+// One script at a time per browser client. A client's scripts share its current tab (daemon.session().call
+// goes wherever the client points, and switchTab/newTab move it for every caller), so per-client is what
+// actually keeps two loops off the same tab. Two loops on one tab fight over it and, left running, pile up
+// page memory in its renderer. Held for as long as the tool call runs; a run that ends by abort releases it
+// at once, because its browser handle is revoked and whatever the script still does can no longer reach a tab.
+const runningScripts = new WeakMap<object, number>();
+
+// The run itself; the tool's handler wraps it in the one-script-per-tab slot.
+const executeScript = async (
+  args: Static<typeof RunScriptArgs>,
+  { client, signal, onUpdate, extensionCtx }: HandlerContext,
+): Promise<Result<ToolOk, ToolErr>> => {
+  if (!isAbsolute(args.path)) {
+    return err({ kind: "invalid_args", message: "Script path must be absolute" });
+  }
+  if (!isPathAllowed(args.path)) {
+    return err({
+      kind: "invalid_args",
+      message: `Script path outside allowed directories (allowed: ${allowedRoots().join(", ")})`,
+    });
+  }
+  let source: string;
+  try {
+    source = await readFile(args.path, "utf8");
+  } catch (e) {
+    return err({
+      kind: "io_error",
+      message: `Failed to read script: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+  if (source.length === 0) return err({ kind: "invalid_args", message: "Script is empty" });
+  if (source.length > MAX_SOURCE_BYTES) {
+    return err({ kind: "invalid_args", message: `Script exceeds ${MAX_SOURCE_BYTES}B size cap` });
+  }
+
+  let executeFn: (...a: ReadonlyArray<unknown>) => Promise<unknown>;
+  try {
+    executeFn = new AsyncFunction(
+      "params", "daemon", "require", "signal", "onUpdate", "ctx",
+      "console", "fetch", "JSON", "Buffer", "setTimeout", "clearTimeout",
+      `"use strict";\n${source}`,
+    );
+  } catch (e) {
+    return err({
+      kind: "invalid_args",
+      message: `Syntax error: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+
+  // Reading and compiling the script are awaited above, so a cancellation can land before any listener exists.
+  if (signal?.aborted === true) {
+    return err({ kind: "internal", message: `Script execution failed: ${ABORTED_MESSAGE} before the script started` });
+  }
+
+  const timeoutMs = args.timeoutMs ?? 60_000;
+  const ac = new AbortController();
+  const onAbort = (): void => { ac.abort(); };
+  if (signal !== undefined) signal.addEventListener("abort", onAbort, { once: true });
+  const timeoutTimer = setTimeout(onAbort, timeoutMs);
+  // Aborting only stops waiting for the script; the script itself keeps running. Revoking its browser
+  // handle is what makes the abort real: the next daemon call throws and a navigate loop ends there.
+  let ended = false;
+  const daemon = revocable(client, () => ended || ac.signal.aborted, () => new Error(`${ABORTED_MESSAGE}: the browser is no longer available to this script`));
+
+  try {
+    const scriptPromise = executeFn(
+      args.params ?? {},
+      daemon,
+      requireFromHere,
+      ac.signal,
+      (u: unknown) => {
+        if (!isRecord(u)) return;
+        const content = u["content"];
+        if (!Array.isArray(content) || content.length === 0) return;
+        const first: unknown = content[0];
+        if (!isRecord(first)) return;
+        const txt = first["text"];
+        if (typeof txt !== "string") return;
+        try {
+          onUpdate({ text: txt });
+        } catch {
+          // Progress is best-effort; a renderer failure must not abort the script.
+        }
+      },
+      extensionCtx,
+      console, fetch, JSON, Buffer, setTimeout, clearTimeout,
+    );
+    // An aborted script settles later, usually by throwing the revocation error; nobody awaits it then.
+    scriptPromise.catch(() => undefined);
+    const abortPromise = new Promise<never>((_, reject) => {
+      ac.signal.addEventListener("abort", () => { reject(new Error(ABORTED_MESSAGE)); }, { once: true });
+    });
+    const result = await Promise.race([scriptPromise, abortPromise]);
+    clearTimeout(timeoutTimer);
+    if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+
+    if (!isRecord(result)) {
+      return err({ kind: "invalid_state", message: `Script must return an object; got ${JSON.stringify(result)}` });
+    }
+    const content = result["content"];
+    if (!Array.isArray(content)) {
+      return err({ kind: "invalid_state", message: "Script return value must have a content array" });
+    }
+    if (!content.every(isContentItem)) {
+      return err({ kind: "invalid_state", message: "Script content array must contain { type: 'text', text: string } items" });
+    }
+    const textOut = content.map((c) => c.text).join("\n");
+    const details = result["details"];
+    if (details === undefined) return ok({ text: textOut });
+    if (!isJsonObject(details)) {
+      return err({ kind: "invalid_state", message: "Script details must be a plain JSON object (no Map, function or undefined values)" });
+    }
+    return ok({ text: textOut, details });
+  } catch (e) {
+    clearTimeout(timeoutTimer);
+    if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+    return err({
+      kind: "internal",
+      message: `Script execution failed: ${e instanceof Error ? e.message : String(e)}`,
+    });
+  } finally {
+    // Whatever the script left behind (a timer, a stray promise) loses the browser with the run.
+    ended = true;
+  }
+};
+
 export const runScriptTool = defineBrowserTool({
   name: "browser_run_script",
   label: "Browser Run Script",
@@ -170,107 +299,26 @@ export const runScriptTool = defineBrowserTool({
     "Write the script with the write tool first; pass its absolute path. Use the OS temp directory rather than hardcoding /tmp.",
     "Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON, Buffer, setTimeout, clearTimeout.",
     "Script MUST return { content: [{ type: 'text', text: '...' }], details?: {...} }. Throw on errors.",
+    "When the run times out or is cancelled, `daemon` is cut off: every later browser call throws, so a loop stops at its next call. Don't wrap daemon calls in a catch-all that keeps looping; check `signal.aborted` in long loops.",
+    "Only one script runs at a time per browser session (scripts share its current tab); a second call while one runs is refused. Long scrapes that navigate many pages should stay under the timeout and save progress so a rerun resumes.",
   ],
   parameters: RunScriptArgs,
   concurrency: "parallel",
-  async handler(args, { client, signal, onUpdate, extensionCtx }): Promise<Result<ToolOk, ToolErr>> {
-    if (!isAbsolute(args.path)) {
-      return err({ kind: "invalid_args", message: "Script path must be absolute" });
-    }
-    if (!isPathAllowed(args.path)) {
+  async handler(args, ctx): Promise<Result<ToolOk, ToolErr>> {
+    // Taken before anything is awaited, so two calls racing in cannot both see the client free.
+    const key = ctx.client;
+    const startedAt = runningScripts.get(key);
+    if (startedAt !== undefined) {
       return err({
-        kind: "invalid_args",
-        message: `Script path outside allowed directories (allowed: ${allowedRoots().join(", ")})`,
+        kind: "invalid_state",
+        message: `Another browser_run_script is already running in this browser session (started ${String(Math.round((Date.now() - startedAt) / 1000))}s ago). Scripts share the session's current tab, so only one runs at a time: wait for it to finish, or fold this work into that script.`,
       });
     }
-    let source: string;
+    runningScripts.set(key, Date.now());
     try {
-      source = await readFile(args.path, "utf8");
-    } catch (e) {
-      return err({
-        kind: "io_error",
-        message: `Failed to read script: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    }
-    if (source.length === 0) return err({ kind: "invalid_args", message: "Script is empty" });
-    if (source.length > MAX_SOURCE_BYTES) {
-      return err({ kind: "invalid_args", message: `Script exceeds ${MAX_SOURCE_BYTES}B size cap` });
-    }
-
-    let executeFn: (...a: ReadonlyArray<unknown>) => Promise<unknown>;
-    try {
-      executeFn = new AsyncFunction(
-        "params", "daemon", "require", "signal", "onUpdate", "ctx",
-        "console", "fetch", "JSON", "Buffer", "setTimeout", "clearTimeout",
-        `"use strict";\n${source}`,
-      );
-    } catch (e) {
-      return err({
-        kind: "invalid_args",
-        message: `Syntax error: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    }
-
-    const timeoutMs = args.timeoutMs ?? 60_000;
-    const ac = new AbortController();
-    const onAbort = (): void => { ac.abort(); };
-    if (signal !== undefined) signal.addEventListener("abort", onAbort, { once: true });
-    const timeoutTimer = setTimeout(onAbort, timeoutMs);
-
-    try {
-      const scriptPromise = executeFn(
-        args.params ?? {},
-        client,
-        requireFromHere,
-        ac.signal,
-        (u: unknown) => {
-          if (!isRecord(u)) return;
-          const content = u["content"];
-          if (!Array.isArray(content) || content.length === 0) return;
-          const first: unknown = content[0];
-          if (!isRecord(first)) return;
-          const txt = first["text"];
-          if (typeof txt !== "string") return;
-          try {
-            onUpdate({ text: txt });
-          } catch {
-            // Progress is best-effort; a renderer failure must not abort the script.
-          }
-        },
-        extensionCtx,
-        console, fetch, JSON, Buffer, setTimeout, clearTimeout,
-      );
-      const abortPromise = new Promise<never>((_, reject) => {
-        ac.signal.addEventListener("abort", () => { reject(new Error("script aborted (timeout or cancellation)")); }, { once: true });
-      });
-      const result = await Promise.race([scriptPromise, abortPromise]);
-      clearTimeout(timeoutTimer);
-      if (signal !== undefined) signal.removeEventListener("abort", onAbort);
-
-      if (!isRecord(result)) {
-        return err({ kind: "invalid_state", message: `Script must return an object; got ${JSON.stringify(result)}` });
-      }
-      const content = result["content"];
-      if (!Array.isArray(content)) {
-        return err({ kind: "invalid_state", message: "Script return value must have a content array" });
-      }
-      if (!content.every(isContentItem)) {
-        return err({ kind: "invalid_state", message: "Script content array must contain { type: 'text', text: string } items" });
-      }
-      const textOut = content.map((c) => c.text).join("\n");
-      const details = result["details"];
-      if (details === undefined) return ok({ text: textOut });
-      if (!isJsonObject(details)) {
-        return err({ kind: "invalid_state", message: "Script details must be a plain JSON object (no Map, function or undefined values)" });
-      }
-      return ok({ text: textOut, details });
-    } catch (e) {
-      clearTimeout(timeoutTimer);
-      if (signal !== undefined) signal.removeEventListener("abort", onAbort);
-      return err({
-        kind: "internal",
-        message: `Script execution failed: ${e instanceof Error ? e.message : String(e)}`,
-      });
+      return await executeScript(args, ctx);
+    } finally {
+      runningScripts.delete(key);
     }
   },
 });
