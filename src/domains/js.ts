@@ -163,14 +163,12 @@ const isContentItem = (v: unknown): v is ContentItem =>
 
 const ABORTED_MESSAGE = "script aborted (timeout or cancellation)";
 
-// One script per tab: two loops navigating the same tab fight over it and, left running, pile up page
-// memory in its renderer. Keyed by client namespace and target, held for as long as the tool call runs.
-// A run that ends by abort releases its slot at once: its browser handle is revoked, so whatever the
-// script still does can no longer reach the tab.
-const runningScripts = new Map<string, number>();
-
-const tabKey = (client: { readonly namespace: string; current(): { readonly targetId: string } | null }): string =>
-  `${client.namespace}\u0000${client.current()?.targetId ?? ""}`;
+// One script at a time per browser client. A client's scripts share its current tab (daemon.session().call
+// goes wherever the client points, and switchTab/newTab move it for every caller), so per-client is what
+// actually keeps two loops off the same tab. Two loops on one tab fight over it and, left running, pile up
+// page memory in its renderer. Held for as long as the tool call runs; a run that ends by abort releases it
+// at once, because its browser handle is revoked and whatever the script still does can no longer reach a tab.
+const runningScripts = new WeakMap<object, number>();
 
 // The run itself; the tool's handler wraps it in the one-script-per-tab slot.
 const executeScript = async (
@@ -302,19 +300,18 @@ export const runScriptTool = defineBrowserTool({
     "Script bindings: params, daemon, require, signal, onUpdate, ctx, console, fetch, JSON, Buffer, setTimeout, clearTimeout.",
     "Script MUST return { content: [{ type: 'text', text: '...' }], details?: {...} }. Throw on errors.",
     "When the run times out or is cancelled, `daemon` is cut off: every later browser call throws, so a loop stops at its next call. Don't wrap daemon calls in a catch-all that keeps looping; check `signal.aborted` in long loops.",
-    "Only one script runs per tab at a time; a second call on a busy tab is refused. Long scrapes that navigate many pages should stay under the timeout and save progress so a rerun resumes.",
+    "Only one script runs at a time per browser session (scripts share its current tab); a second call while one runs is refused. Long scrapes that navigate many pages should stay under the timeout and save progress so a rerun resumes.",
   ],
   parameters: RunScriptArgs,
   concurrency: "parallel",
   async handler(args, ctx): Promise<Result<ToolOk, ToolErr>> {
-    // Taken before anything is awaited, so two calls racing in cannot both see the tab free.
-    const key = tabKey(ctx.client);
+    // Taken before anything is awaited, so two calls racing in cannot both see the client free.
+    const key = ctx.client;
     const startedAt = runningScripts.get(key);
     if (startedAt !== undefined) {
-      const tab = ctx.client.current()?.targetId ?? "(none)";
       return err({
         kind: "invalid_state",
-        message: `Another browser_run_script is already running on this tab (${tab}, started ${String(Math.round((Date.now() - startedAt) / 1000))}s ago). Wait for it to finish, or run this script in a different tab.`,
+        message: `Another browser_run_script is already running in this browser session (started ${String(Math.round((Date.now() - startedAt) / 1000))}s ago). Scripts share the session's current tab, so only one runs at a time: wait for it to finish, or fold this work into that script.`,
       });
     }
     runningScripts.set(key, Date.now());

@@ -350,7 +350,7 @@ describe("browser_run_script", () => {
     assert.match(String(out["got"]), /^threw: .*script aborted/);
   });
 
-  test("a second script on the same tab is refused while the first is running", async () => {
+  test("a second script on the same browser client is refused while the first is running", async () => {
     const fake = await createFakeClient();
     const ac = new AbortController();
     const first = runScriptTool.handler(
@@ -363,12 +363,12 @@ describe("browser_run_script", () => {
     );
     assert.equal(second.success, false);
     assert.equal(second.error.kind, "invalid_state");
-    assert.match(second.error.message, /already running on this tab/);
+    assert.match(second.error.message, /already running in this browser session/);
     ac.abort();
     await first;
   });
 
-  test("once the first script ends, a new one on the same tab runs", async () => {
+  test("once the first script ends, a new one on the same client runs", async () => {
     const fake = await createFakeClient();
     const ac = new AbortController();
     const first = runScriptTool.handler(
@@ -385,15 +385,36 @@ describe("browser_run_script", () => {
     assert.equal(next.data.text, "ran");
   });
 
-  test("scripts on different tabs run side by side", async () => {
-    const a = await createFakeClient();
-    const b = await createFakeClient({
+  test("a script that switches tabs still holds the slot, so a second run on that tab is refused", async () => {
+    const fake = await createFakeClient({
       canned: {
-        "Target.getTargets": ok({ targetInfos: [{ targetId: "t2", type: "page", title: "Other", url: "https://other.test/" }] }),
-        "Target.attachToTarget": ok({ sessionId: "s2" }),
+        "Target.getTargets": ok({ targetInfos: [
+          { targetId: "t1", type: "page", title: "One", url: "https://one.test/" },
+          { targetId: "t2", type: "page", title: "Two", url: "https://two.test/" },
+        ] }),
       },
-      ownedTargetIds: ["t2"],
+      ownedTargetIds: ["t1", "t2"],
     });
+    const ac = new AbortController();
+    const first = runScriptTool.handler(
+      { path: await script("switcher.js", "await daemon.session().switchTo('t2'); await new Promise(() => {}); return { content: [] };"), timeoutMs: 60_000 },
+      scriptCtx(fake.client, undefined, ac.signal),
+    );
+    await settle(30);
+    assert.equal(fake.client.current()?.targetId, "t2", "the script moved the client to t2");
+    const second = await runScriptTool.handler(
+      { path: await script("quick4.js", "return { content: [{ type: 'text', text: 'ran' }] };") },
+      handlerContext(fake.client),
+    );
+    assert.equal(second.success, false);
+    assert.equal(second.error.kind, "invalid_state");
+    ac.abort();
+    await first;
+  });
+
+  test("scripts on different browser clients run side by side", async () => {
+    const a = await createFakeClient();
+    const b = await createFakeClient();
     const ac = new AbortController();
     const first = runScriptTool.handler(
       { path: await script("hold3.js", "await new Promise(() => {}); return { content: [] };"), timeoutMs: 60_000 },
@@ -406,5 +427,42 @@ describe("browser_run_script", () => {
     assert.equal(other.success, true);
     ac.abort();
     await first;
+  });
+
+  test("a script aborted while holding the mutation mutex can still release it", async () => {
+    const fake = await createFakeClient();
+    const path = await script("mutex.js", [
+      "const release = await daemon.mutationMutex().acquire();",
+      "try { await new Promise((r) => setTimeout(r, 200)); } finally { release(); }",
+      "return { content: [] };",
+    ].join("\n"));
+    const r = await runScriptTool.handler({ path, timeoutMs: 100 }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /script aborted/);
+    await settle(200);
+    const release = await Promise.race([
+      fake.client.mutationMutex().acquire(),
+      settle(500).then(() => null),
+    ]);
+    assert.notEqual(release, null, "the mutex was released by the aborted script");
+    if (release !== null) release();
+  });
+
+  test("a release handle that arrives after the abort is still usable", async () => {
+    const fake = await createFakeClient();
+    const holder = await fake.client.mutationMutex().acquire();
+    const path = await script("mutex2.js", [
+      "const release = await daemon.mutationMutex().acquire();",
+      "release();",
+      "return { content: [] };",
+    ].join("\n"));
+    const r = await runScriptTool.handler({ path, timeoutMs: 100 }, handlerContext(fake.client));
+    assert.equal(r.success, false);
+    assert.match(r.error.message, /script aborted/);
+    holder();
+    await settle(30);
+    const again = await Promise.race([fake.client.mutationMutex().acquire(), settle(500).then(() => null)]);
+    assert.notEqual(again, null, "the late-granted lock was released, not stranded");
+    if (again !== null) again();
   });
 });

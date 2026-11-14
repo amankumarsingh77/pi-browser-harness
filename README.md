@@ -356,8 +356,10 @@ mandatory timeout (60s default, 600s max). They land on disk first, so they're r
 re-runnable.
 
 When a run times out or is cancelled, its `daemon` is cut off: every later browser call throws, so a
-navigate loop stops at its next call instead of running on in the background. Only one script runs per
-tab at a time; a second `browser_run_script` on a busy tab is refused until the first ends.
+navigate loop stops at its next call instead of running on in the background. Release handles it was
+given (such as a `mutationMutex()` release) keep working, so cleanup in a `finally` still runs. Scripts
+share the session's current tab, so only one runs at a time; a second `browser_run_script` is refused
+until the first ends.
 
 ### Contributing tools from another pi extension
 
